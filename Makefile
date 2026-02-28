@@ -45,8 +45,10 @@ lint:
 # ==================== Deploy (Mantle Sepolia) ====================
 
 deploy-sepolia:
+	@echo "Deploying to Mantle Sepolia..."
 	forge script script/Deploy.s.sol:DeployScript \
 		--rpc-url mantle_sepolia \
+		--private-key $(PRIVATE_KEY) \
 		--broadcast \
 		--verify \
 		--verifier etherscan \
@@ -57,6 +59,7 @@ deploy-sepolia:
 deploy-mainnet:
 	forge script script/Deploy.s.sol:DeployScript \
 		--rpc-url mainnet \
+		--private-key $(PRIVATE_KEY) \
 		--broadcast \
 		--verify \
 		--verifier etherscan \
@@ -67,6 +70,7 @@ deploy-mainnet:
 upgrade-sepolia:
 	forge script script/Upgrade.s.sol:UpgradeScript \
 		--rpc-url mantle_sepolia \
+		--private-key $(PRIVATE_KEY) \
 		--broadcast \
 		--verify \
 		--verifier etherscan \
