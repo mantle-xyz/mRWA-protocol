@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import {IAdapterExecutor} from "./interfaces/IAdapterExecutor.sol";
+import {IStrategyAdapter} from "./interfaces/IStrategyAdapter.sol";
+import {AdapterCall} from "./libraries/AdapterCodec.sol";
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {IStrategyAdapter} from "./interfaces/IStrategyAdapter.sol";
-import {IAdapterExecutor} from "./interfaces/IAdapterExecutor.sol";
-import {AdapterCall} from "./libraries/AdapterCodec.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 abstract contract BaseAdapter is IStrategyAdapter, IAdapterExecutor, AccessControl, ReentrancyGuard {
     using SafeERC20 for IERC20;
