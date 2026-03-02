@@ -47,7 +47,7 @@ contract AaveV3Adapter is BaseAdapter {
         return amountUSDC;
     }
 
-    function redeemSync(uint256 amountUSDC, address receiver)
+    function withdrawSync(uint256 amountUSDC, address receiver)
         external
         override
         onlyController
@@ -57,11 +57,7 @@ contract AaveV3Adapter is BaseAdapter {
         actualUSDC = POOL.withdraw(address(USDC), amountUSDC, receiver);
     }
 
-    function requestRedeem(uint256, address) external pure override returns (bytes32) {
-        revert Unsupported();
-    }
-
-    function claimRedeem(bytes32, address) external pure override returns (uint256) {
+    function requestRedeemAsync(uint256, address) external pure override returns (bytes32) {
         revert Unsupported();
     }
 
