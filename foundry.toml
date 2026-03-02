@@ -4,15 +4,12 @@ out = "out"
 libs = ["lib"]
 solc = "0.8.24"
 
-remappings = [
-    "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
-    "@openzeppelin/contracts-upgradeable/=lib/openzeppelin-contracts-upgradeable/contracts/",
-]
-
 [fmt]
 line_length = 120
 tab_width = 4
 bracket_spacing = false
+int_types = "long"
+sort_imports = true
 
 etherscan_api_key = "${ETHERSCAN_API_KEY}"
 
