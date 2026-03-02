@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {IAdapterExecutor} from "./interfaces/IAdapterExecutor.sol";
-import {IStrategyAdapter} from "./interfaces/IStrategyAdapter.sol";
-import {AdapterCall} from "./libraries/AdapterCodec.sol";
+import {IAdapterExecutor} from "../../interfaces/adapters/IAdapterExecutor.sol";
+import {IStrategyAdapter} from "../../interfaces/adapters/IStrategyAdapter.sol";
+import {AdapterCall} from "../../libs/AdapterCodec.sol";
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -33,17 +33,23 @@ abstract contract BaseAdapter is IStrategyAdapter, IAdapterExecutor, AccessContr
     error Unsupported();
 
     modifier onlyController() {
-        if (!hasRole(CONTROLLER_ROLE, msg.sender)) revert NotController();
+        if (!hasRole(CONTROLLER_ROLE, msg.sender)) {
+            revert NotController();
+        }
         _;
     }
 
     modifier onlyOperator() {
-        if (!hasRole(OPERATOR_ROLE, msg.sender)) revert NotOperator();
+        if (!hasRole(OPERATOR_ROLE, msg.sender)) {
+            revert NotOperator();
+        }
         _;
     }
 
     modifier whenNotPaused() {
-        if (paused) revert PausedError();
+        if (paused) {
+            revert PausedError();
+        }
         _;
     }
 
@@ -71,9 +77,13 @@ abstract contract BaseAdapter is IStrategyAdapter, IAdapterExecutor, AccessContr
     }
 
     function _checkCall(AdapterCall memory c) internal {
-        if (c.deadline != 0 && block.timestamp > c.deadline) revert DeadlineExceeded();
+        if (c.deadline != 0 && block.timestamp > c.deadline) {
+            revert DeadlineExceeded();
+        }
         if (c.salt != bytes32(0)) {
-            if (usedSalt[c.salt]) revert SaltUsed(c.salt);
+            if (usedSalt[c.salt]) {
+                revert SaltUsed(c.salt);
+            }
             usedSalt[c.salt] = true;
         }
     }
