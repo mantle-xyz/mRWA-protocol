@@ -40,12 +40,9 @@ interface ISanctionsOracle {
     //                        READ FUNCTIONS
     // ─────────────────────────────────────────────────────────────
 
-    /// @notice Primary check consumed by Vault (matches the name in IMantleYieldVault).
+    /// @notice Primary check consumed by Vault — O(1) single SLOAD.
     /// @param account Address to query.
-    /// @return `true` if the address is currently blacklisted / sanctioned.
-    function isBlacklisted(address account) external view returns (bool);
-
-    /// @notice Alias — same semantics as `isBlacklisted`.
+    /// @return `true` if the address is currently sanctioned.
     function isSanctioned(address account) external view returns (bool);
 
     /// @notice Number of addresses that are currently sanctioned.
