@@ -55,7 +55,8 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
         uint256 id;
         address owner;
         uint256 shares;
-        uint256 assets;
+        uint256 assets;         // Expected payout (calculated at requestRedeem time, immutable)
+        uint256 settledAssets;  // Actual payout (set by markRequestsReady, 0 until settled)
         uint256 timestamp;
         RequestStatus status;
     }
@@ -97,6 +98,8 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     error Vault__ZeroExchangeRate();
     error Vault__ExchangeRateChangeExceedsLimit(uint256 oldRate, uint256 newRate, uint256 maxDeltaBps);
     error Vault__InvalidInFlightState(uint256 inFlightId, InFlightStatus currentStatus);
+    error Vault__LengthMismatch(uint256 idsLength, uint256 amountsLength);
+    error Vault__SettledExceedsRequest(uint256 requestId, uint256 settled, uint256 requested);
 
     // =============================================================
     // Events (vault-specific; RedeemRequest is inherited from IERC7540Redeem)
@@ -129,6 +132,8 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     event SanctionsOracleUpdated(address indexed oldOracle, address indexed newOracle);
     event ControllerUpdated(address indexed oldController, address indexed newController);
     event AccountantUpdated(address indexed oldAccountant, address indexed newAccountant);
+    event TreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
+    event RequestSettlementAdjusted(uint256 indexed requestId, uint256 originalAssets, uint256 settledAssets);
     event TokenRescued(address indexed token, address indexed to, uint256 amount);
 
     // =============================================================
@@ -156,6 +161,7 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     function FEE_BASIS() external view returns (uint256);
     function MAX_RATE_CHANGE_BPS() external view returns (uint256);
 
+    function treasury() external view returns (address);
     function controller() external view returns (address);
     function accountant() external view returns (address);
     function sanctionsOracle() external view returns (ISanctionsOracle);
@@ -176,7 +182,15 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     function requests(uint256 requestId)
         external
         view
-        returns (uint256 id, address owner, uint256 shares, uint256 assets, uint256 timestamp, RequestStatus status);
+        returns (
+            uint256 id,
+            address owner,
+            uint256 shares,
+            uint256 assets,
+            uint256 settledAssets,
+            uint256 timestamp,
+            RequestStatus status
+        );
 
     function inFlightRecords(uint256 inFlightId)
         external
@@ -220,7 +234,7 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     function removeAdapter(address adapter) external;
     function approveToAdapter(address adapter, address token, uint256 amount) external;
     function updateRequestBatch(uint256[] calldata ids, RequestStatus newStatus) external;
-    function markRequestsReady(uint256[] calldata ids) external;
+    function markRequestsReady(uint256[] calldata ids, uint256[] calldata settledAssets) external;
     function createInFlight(address adapter, address asset, uint256 tokenAmount, uint256 usdcAmount, bool isInvest)
         external
         returns (uint256 inFlightId);
@@ -235,13 +249,14 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     function setSanctionsOracle(address newOracle) external;
     function setController(address newController) external;
     function setAccountant(address newAccountant) external;
+    function setTreasury(address newTreasury) external;
 
     // =============================================================
     // Accountant Only
     // =============================================================
 
     function updateExchangeRate(uint256 newRate) external;
-    function mintFeeShares(address treasury, uint256 shares) external;
+    function mintFeeShares(uint256 shares) external;
 
     // =============================================================
     // Emergency Management
