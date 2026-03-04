@@ -18,7 +18,8 @@ interface IERC7540Redeem {
 
 /**
  * @title IMantleYieldVault
- * @notice Full interface for the ERC-4626 + ERC-7540 async redemption + UUPS upgradeable RWA vault.
+ * @notice Full interface for the ERC-4626 + ERC-7540 async redemption RWA vault.
+ *         Deployed via VaultFactory (BeaconProxy), upgradeable via UpgradeableBeacon.
  *         Inherits IERC4626 for full ERC-4626 compatibility and IERC7540Redeem for async redemptions.
  */
 interface IMantleYieldVault is IERC4626, IERC7540Redeem {
@@ -44,6 +45,22 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     // Structs
     // =============================================================
 
+    struct InitParams {
+        IERC20 asset;
+        string name;
+        string symbol;
+        address admin;
+        address sanctionsOracle;
+        address controller;
+        address accountant;
+        address treasury;
+        uint256 maxRedemptionFeeBps;
+        uint256 maxRateChangeBps;
+        uint256 redemptionFeeBps;
+        uint256 minRedeemAmount;
+        bool syncRedeemDisabled;
+    }
+
     struct RedemptionRequest {
         uint256 id;
         address owner;
@@ -57,7 +74,7 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     struct InFlightRecord {
         uint256 id;
         address adapter;
-        address asset;
+        address token;
         uint256 tokenAmount;
         uint256 usdcAmount;
         uint256 settledAmount;
@@ -88,6 +105,7 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     error Vault__OnlyController();
     error Vault__OnlyAccountant();
     error Vault__ZeroAddress();
+    error Vault__SyncRedeemDisabled();
     error Vault__ZeroExchangeRate();
     error Vault__ExchangeRateChangeExceedsLimit(uint256 oldRate, uint256 newRate, uint256 maxDeltaBps);
     error Vault__InvalidInFlightState(uint256 inFlightId, InFlightStatus currentStatus);
@@ -109,7 +127,7 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     event InFlightCreated(
         uint256 indexed inFlightId,
         address indexed adapter,
-        address asset,
+        address token,
         uint256 tokenAmount,
         uint256 usdcAmount,
         bool isInvest
@@ -128,31 +146,24 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     event TreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
     event RequestSettlementAdjusted(uint256 indexed requestId, uint256 originalAssets, uint256 settledAssets);
     event TokenRescued(address indexed token, address indexed to, uint256 amount);
+    event MaxRedemptionFeeUpdated(uint256 oldMaxBps, uint256 newMaxBps);
+    event MaxRateChangeBpsUpdated(uint256 oldMaxBps, uint256 newMaxBps);
+    event SyncRedeemDisabledUpdated(bool disabled);
 
     // =============================================================
     // Initialization
     // =============================================================
 
-    function initialize(
-        IERC20 _asset,
-        string memory _name,
-        string memory _symbol,
-        address _admin,
-        address _sanctionsOracle,
-        address _controller,
-        address _accountant,
-        uint256 _redemptionFeeBps,
-        uint256 _minRedeemAmount
-    ) external;
+    function initialize(InitParams calldata params) external;
 
     // =============================================================
     // State Getters
     // =============================================================
 
     function PAUSER_ROLE() external view returns (bytes32);
-    function MAX_REDEMPTION_FEE() external view returns (uint256);
     function FEE_BASIS() external view returns (uint256);
-    function MAX_RATE_CHANGE_BPS() external view returns (uint256);
+    function maxRedemptionFeeBps() external view returns (uint256);
+    function maxRateChangeBps() external view returns (uint256);
 
     function treasury() external view returns (address);
     function controller() external view returns (address);
@@ -161,6 +172,7 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     function exchangeRate() external view returns (uint256);
     function redemptionFeeBps() external view returns (uint256);
     function minRedeemAmount() external view returns (uint256);
+    function syncRedeemDisabled() external view returns (bool);
     function totalLockedLiabilities() external view returns (uint256);
     function claimableReserves() external view returns (uint256);
 
@@ -191,7 +203,7 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
         returns (
             uint256 id,
             address adapter,
-            address asset,
+            address token,
             uint256 tokenAmount,
             uint256 usdcAmount,
             uint256 settledAmount,
@@ -228,7 +240,7 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     function approveToAdapter(address adapter, address token, uint256 amount) external;
     function updateRequestBatch(uint256[] calldata ids, RequestStatus newStatus) external;
     function markRequestsReady(uint256[] calldata ids, uint256[] calldata settledAssets) external;
-    function createInFlight(address adapter, address asset, uint256 tokenAmount, uint256 usdcAmount, bool isInvest)
+    function createInFlight(address adapter, address token, uint256 tokenAmount, uint256 usdcAmount, bool isInvest)
         external
         returns (uint256 inFlightId);
     function confirmInFlight(uint256 inFlightId, uint256 actualAmount) external;
@@ -238,7 +250,10 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     // =============================================================
 
     function setRedemptionFee(uint256 newFeeBps) external;
+    function setMaxRedemptionFee(uint256 newMaxBps) external;
+    function setMaxRateChangeBps(uint256 newMaxBps) external;
     function setMinRedeemAmount(uint256 newAmount) external;
+    function setSyncRedeemDisabled(bool disabled) external;
     function setSanctionsOracle(address newOracle) external;
     function setController(address newController) external;
     function setAccountant(address newAccountant) external;
