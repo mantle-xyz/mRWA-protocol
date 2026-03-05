@@ -72,8 +72,8 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
         uint256 id;
         address owner;
         uint256 shares;
-        uint256 assets;         // Expected payout (calculated at requestRedeem time, immutable)
-        uint256 settledAssets;  // Actual payout (set by markRequestsReady, 0 until settled)
+        uint256 estimatedAssets; // Estimated payout at requestRedeem time (reference only, may differ from settlement)
+        uint256 settledAssets;   // Actual payout (set by markRequestsReady, 0 until settled)
         uint256 timestamp;
         RequestStatus status;
     }
@@ -117,7 +117,6 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     error Vault__ExchangeRateChangeExceedsLimit(uint256 oldRate, uint256 newRate, uint256 maxDeltaBps);
     error Vault__InvalidInFlightState(uint256 inFlightId, InFlightStatus currentStatus);
     error Vault__LengthMismatch(uint256 idsLength, uint256 amountsLength);
-    error Vault__SettledExceedsRequest(uint256 requestId, uint256 settled, uint256 requested);
 
     // =============================================================
     // Events (vault-specific; RedeemRequest is inherited from IERC7540Redeem)
@@ -125,6 +124,7 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
 
     event RedemptionClaimed(address indexed account, address indexed receiver, uint256 shares, uint256 assets);
     event ExchangeRateUpdated(uint256 oldRate, uint256 newRate);
+    event ExchangeRateChangeExceedsLimit(uint256 oldRate, uint256 newRate, uint256 maxDeltaBps);
     event RedemptionFeeUpdated(uint256 oldFeeBps, uint256 newFeeBps);
     event MinRedeemAmountUpdated(uint256 oldAmount, uint256 newAmount);
     event AdapterRegistered(address indexed adapter);
@@ -156,6 +156,7 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     event MaxRedemptionFeeUpdated(uint256 oldMaxBps, uint256 newMaxBps);
     event MaxRateChangeBpsUpdated(uint256 oldMaxBps, uint256 newMaxBps);
     event SyncRedeemDisabledUpdated(bool disabled);
+    event FeeChangedWithLockedShares(uint256 totalLockedShares, uint256 oldFeeBps, uint256 newFeeBps);
 
     // =============================================================
     // Initialization
@@ -180,7 +181,7 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     function redemptionFeeBps() external view returns (uint256);
     function minRedeemAmount() external view returns (uint256);
     function syncRedeemDisabled() external view returns (bool);
-    function totalLockedLiabilities() external view returns (uint256);
+    function totalLockedShares() external view returns (uint256);
     function claimableReserves() external view returns (uint256);
 
     function totalInvestInFlight() external view returns (uint256);
@@ -198,7 +199,7 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
             uint256 id,
             address owner,
             uint256 shares,
-            uint256 assets,
+            uint256 estimatedAssets,
             uint256 settledAssets,
             uint256 timestamp,
             RequestStatus status
