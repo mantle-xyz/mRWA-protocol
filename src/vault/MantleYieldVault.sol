@@ -55,6 +55,7 @@ contract MantleYieldVault is
     uint256 public maxRateChangeBps;
     uint256 public redemptionFeeBps;
     uint256 public minRedeemAmount;
+    uint256 public minDepositAmount;
     bool public syncRedeemDisabled;
 
     uint256 public totalLockedShares;
@@ -157,6 +158,7 @@ contract MantleYieldVault is
         maxRateChangeBps = p.maxRateChangeBps;
         redemptionFeeBps = p.redemptionFeeBps;
         minRedeemAmount = p.minRedeemAmount;
+        minDepositAmount = p.minDepositAmount;
         syncRedeemDisabled = p.syncRedeemDisabled;
         exchangeRate = 1e18;
         nextRequestId = 1;
@@ -567,6 +569,12 @@ contract MantleYieldVault is
         emit MinRedeemAmountUpdated(oldAmount, newAmount);
     }
 
+    function setMinDepositAmount(uint256 newAmount) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        uint256 oldAmount = minDepositAmount;
+        minDepositAmount = newAmount;
+        emit MinDepositAmountUpdated(oldAmount, newAmount);
+    }
+
     function setSanctionsOracle(address newOracle) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (newOracle == address(0)) revert Vault__ZeroAddress();
         address old = address(sanctionsOracle);
@@ -636,6 +644,7 @@ contract MantleYieldVault is
         checkSanctions(receiver)
         returns (uint256)
     {
+        if (assets < minDepositAmount) revert Vault__BelowMinDeposit(assets, minDepositAmount);
         return super.deposit(assets, receiver);
     }
 
@@ -648,6 +657,8 @@ contract MantleYieldVault is
         checkSanctions(receiver)
         returns (uint256)
     {
+        uint256 assets = previewMint(shares);
+        if (assets < minDepositAmount) revert Vault__BelowMinDeposit(assets, minDepositAmount);
         return super.mint(shares, receiver);
     }
 
