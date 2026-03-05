@@ -58,6 +58,7 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
         uint256 maxRateChangeBps;
         uint256 redemptionFeeBps;
         uint256 minRedeemAmount;
+        uint256 minDepositAmount;
         bool syncRedeemDisabled;
     }
 
@@ -98,6 +99,7 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     error Vault__ZeroAmount();
     error Vault__FeeTooHigh(uint256 feeBps, uint256 maxBps);
     error Vault__BelowMinRedeem(uint256 assets, uint256 minimum);
+    error Vault__BelowMinDeposit(uint256 assets, uint256 minimum);
     error Vault__StatusTransitionForbidden(RequestStatus target);
     error Vault__AdapterAlreadyRegistered(address adapter);
     error Vault__AdapterNotRegistered(address adapter);
@@ -120,6 +122,7 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     event ExchangeRateChangeExceedsLimit(uint256 oldRate, uint256 newRate, uint256 maxDeltaBps);
     event RedemptionFeeUpdated(uint256 oldFeeBps, uint256 newFeeBps);
     event MinRedeemAmountUpdated(uint256 oldAmount, uint256 newAmount);
+    event MinDepositAmountUpdated(uint256 oldAmount, uint256 newAmount);
     event AdapterRegistered(address indexed adapter);
     event AdapterRemoved(address indexed adapter);
     event AdapterApproved(address indexed adapter, address indexed token, uint256 amount);
@@ -173,6 +176,7 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     function exchangeRate() external view returns (uint256);
     function redemptionFeeBps() external view returns (uint256);
     function minRedeemAmount() external view returns (uint256);
+    function minDepositAmount() external view returns (uint256);
     function syncRedeemDisabled() external view returns (bool);
     function totalLockedShares() external view returns (uint256);
     function claimableReserves() external view returns (uint256);
@@ -254,6 +258,7 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     function setMaxRedemptionFee(uint256 newMaxBps) external;
     function setMaxRateChangeBps(uint256 newMaxBps) external;
     function setMinRedeemAmount(uint256 newAmount) external;
+    function setMinDepositAmount(uint256 newAmount) external;
     function setSyncRedeemDisabled(bool disabled) external;
     function setSanctionsOracle(address newOracle) external;
     function setController(address newController) external;
