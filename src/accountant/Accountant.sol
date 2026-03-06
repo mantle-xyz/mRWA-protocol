@@ -44,20 +44,20 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
     ///      slot 3: totalSharesLastSettle(32)
     struct AccountantStorage {
         // ── slot 0 ──
-        IMantleYieldVault vault; // 20B
+        IMantleYieldVault vault;
         uint32 maxAllowedDeviation; // bps (e.g. 100 = 1%)
         uint32 managementFeeRate; // bps (e.g. 100 = 1%)
         
         // ── slot 1 ──
-        address treasury; // 20B
+        address treasury;
         uint32 maxComputeAge; // seconds (e.g. 5 minutes)
         uint32 minUpdateInterval; // seconds (e.g. 20 hours)
   
         // ── slot 2 ──
         uint64 lastComputeTimestamp;
         uint64 lastExchangeRate;
-        uint64 lastFeeSettleTimestamp;
         uint64 lastUpdateTimestamp;
+        uint64 lastFeeSettleTimestamp;
         // ── slot 3 ──
         uint256 totalSharesLastSettle;
     }
