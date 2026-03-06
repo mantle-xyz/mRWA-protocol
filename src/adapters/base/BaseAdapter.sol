@@ -88,7 +88,7 @@ abstract contract BaseAdapter is IStrategyAdapter, IAdapterExecutor, AccessContr
         }
     }
 
-    /// @notice 紧急把某 token 全部 sweep 到 receiver（仅 admin）
+    /// @notice Emergency sweep: transfer all of a token to receiver (admin only)
     function sweep(address token, address receiver) external onlyRole(DEFAULT_ADMIN_ROLE) {
         uint256 bal = IERC20(token).balanceOf(address(this));
         IERC20(token).safeTransfer(receiver, bal);
