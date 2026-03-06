@@ -7,10 +7,8 @@ import {BaseAdapter} from "../base/BaseAdapter.sol";
 import {SubRedCodec} from "./libs/SubRedCodec.sol";
 import {IERC20, SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
-/**
- * @notice Digift SubRed adapter (async-first) for subscribe/redeem orchestration.
- * @dev Controller allocates funds via Vault.approveToAdapter; bot finalizes async lifecycle via execute(payload).
- */
+/// @notice Async-first adapter for Digift SubRed subscribe/redeem flow.
+/// @dev Controller drives unified adapter methods; operator bot executes protocol-specific actions.
 contract SubRedManagementAdapter is BaseAdapter {
     using SafeERC20 for IERC20;
 
@@ -20,7 +18,9 @@ contract SubRedManagementAdapter is BaseAdapter {
     uint64 public subscribeDeadlineWindow = 1 hours;
     uint256 public redeemNonce;
 
+    /// @notice Requested redeem amount waiting for finalize.
     mapping(bytes32 => uint256) public pendingRedeemUSDC;
+    /// @notice Finalized redeem amount claimable by controller.
     mapping(bytes32 => uint256) public claimableRedeemUSDC;
 
     event RedeemRequested(bytes32 indexed requestId, uint256 amountUSDC, address receiver);
@@ -33,6 +33,16 @@ contract SubRedManagementAdapter is BaseAdapter {
     error UnknownAction(uint8 action);
     error NoClaimable(bytes32 requestId);
 
+    /**
+     * @notice Initialize Digift SubRed adapter.
+     * @param usdc Base asset used for subscribe/redeem settlement.
+     * @param vault_ Vault that owns strategy funds.
+     * @param subRedManagement Digift SubRedManagement contract.
+     * @param stToken Target security token (e.g. iSNR).
+     * @param admin Adapter admin role address.
+     * @param controller StrategyController role address.
+     * @param operator Operator role address for execute(payload).
+     */
     constructor(
         address usdc,
         address vault_,
@@ -49,34 +59,64 @@ contract SubRedManagementAdapter is BaseAdapter {
         ST_TOKEN = stToken;
     }
 
+    /**
+     * @notice Strategy display name.
+     */
     function name() external pure override returns (string memory) {
         return "SubRedManagementAdapter";
     }
 
+    /**
+     * @notice Return current strategy value in USDC units.
+     * @dev Conservative value; only idle USDC held by adapter.
+     */
     function totalValue() external view override returns (uint256) {
         return USDC.balanceOf(address(this));
     }
 
+    /**
+     * @notice Update subscribe deadline window used by deposit().
+     * @param newWindow New deadline window in seconds.
+     * @dev Only callable by DEFAULT_ADMIN_ROLE.
+     */
     function setSubscribeDeadlineWindow(uint64 newWindow) external onlyRole(DEFAULT_ADMIN_ROLE) {
         subscribeDeadlineWindow = newWindow;
         emit SubscribeDeadlineWindowUpdated(newWindow);
     }
 
-    function deposit(uint256 amountUSDC, address) external override onlyController whenNotPaused returns (uint256) {
+    /**
+     * @notice Pull funds from Vault and submit subscribe.
+     * @param amountUSDC USDC amount to subscribe.
+     * @param receiver Receiver parameter reserved by IStrategyAdapter.
+     * @return Subscribed amount.
+     * @dev Only callable by controller when not paused.
+     */
+    function deposit(uint256 amountUSDC, address receiver) external override onlyController whenNotPaused returns (uint256) {
         if (amountUSDC == 0) {
             revert InvalidAmount();
         }
-        // Pull from vault using temporary allowance opened by controller.
+        receiver;
+        // Pull USDC from Vault using temporary allowance set by StrategyController.
         USDC.safeTransferFrom(VAULT, address(this), amountUSDC);
         _subscribe(amountUSDC, uint64(block.timestamp + subscribeDeadlineWindow));
         return amountUSDC;
     }
 
-    function redeemSync(uint256, address) external pure override returns (uint256) {
+    /**
+     * @notice Digift flow is async; sync redeem is not supported.
+     */
+    function withdrawSync(uint256, address) external pure override returns (uint256) {
         revert Unsupported();
     }
 
-    function requestRedeem(uint256 amountUSDC, address receiver)
+    /**
+     * @notice Register an async redeem request.
+     * @param amountUSDC Requested redeem amount.
+     * @param receiver Final receiver used to derive deterministic requestId.
+     * @return requestId Unique request key.
+     * @dev Only callable by controller when not paused.
+     */
+    function requestRedeemAsync(uint256 amountUSDC, address receiver)
         external
         override
         onlyController
@@ -86,22 +126,25 @@ contract SubRedManagementAdapter is BaseAdapter {
         if (amountUSDC == 0 || receiver == address(0)) {
             revert InvalidAmount();
         }
+        // requestId is the async lifecycle key: request -> finalize -> claim.
         uint256 nonce = ++redeemNonce;
         requestId = keccak256(abi.encode(address(this), receiver, amountUSDC, nonce, block.chainid));
         pendingRedeemUSDC[requestId] = amountUSDC;
         emit RedeemRequested(requestId, amountUSDC, receiver);
     }
 
-    function claimRedeem(bytes32 requestId, address receiver)
-        external
-        override
-        onlyController
-        whenNotPaused
-        returns (uint256 actualUSDC)
-    {
+    /**
+     * @notice Transfer finalized redeem proceeds to receiver.
+     * @param requestId Redeem request identifier.
+     * @param receiver Destination address for claimed USDC.
+     * @return actualUSDC Claimed USDC amount.
+     * @dev Only callable by controller when not paused.
+     */
+    function claimRedeem(bytes32 requestId, address receiver) external onlyController whenNotPaused returns (uint256 actualUSDC) {
         if (receiver == address(0)) {
             revert InvalidAddress();
         }
+        // Only finalized amounts can be claimed.
         actualUSDC = claimableRedeemUSDC[requestId];
         if (actualUSDC == 0) {
             revert NoClaimable(requestId);
@@ -110,6 +153,12 @@ contract SubRedManagementAdapter is BaseAdapter {
         USDC.safeTransfer(receiver, actualUSDC);
     }
 
+    /**
+     * @notice Execute Digift-specific operator action.
+     * @param payload AdapterCall envelope with action payload.
+     * @return execId Deterministic execution id.
+     * @dev Only callable by OPERATOR_ROLE when not paused.
+     */
     function execute(bytes calldata payload)
         external
         override
@@ -118,9 +167,11 @@ contract SubRedManagementAdapter is BaseAdapter {
         nonReentrant
         returns (bytes32 execId)
     {
+        // Validate shared envelope (deadline + optional replay salt).
         AdapterCall memory c = AdapterCodec.decodeCall(payload);
         _checkCall(c);
 
+        // Route Digift-specific actions.
         (uint8 action, bytes memory actionData) = SubRedCodec.decodeAction(c.data);
         bytes32 meta;
 
@@ -142,6 +193,7 @@ contract SubRedManagementAdapter is BaseAdapter {
                 revert InvalidAmount();
             }
 
+            // Move finalized amount from pending bucket to claimable bucket.
             pendingRedeemUSDC[a.requestId] = pending - a.receivedUSDC;
             claimableRedeemUSDC[a.requestId] += a.receivedUSDC;
 
@@ -155,21 +207,35 @@ contract SubRedManagementAdapter is BaseAdapter {
         emit Execute(execId, action, meta);
     }
 
+    /**
+     * @notice Pause adapter and revoke SubRed allowance.
+     * @dev Only callable by controller.
+     */
     function panic() external override onlyController {
         paused = true;
         emit Paused(true);
         USDC.forceApprove(address(SUB_RED), 0);
     }
 
+    /**
+     * @notice Internal helper to call SubRed subscribe.
+     * @param amountUSDC Amount to subscribe.
+     * @param deadline Digift subscribe deadline.
+     */
     function _subscribe(uint256 amountUSDC, uint64 deadline) internal {
         if (amountUSDC == 0) {
             revert InvalidAmount();
         }
+        // Minimum-privilege approval: approve exact amount then reset.
         USDC.forceApprove(address(SUB_RED), amountUSDC);
         SUB_RED.subscribe(ST_TOKEN, address(USDC), amountUSDC, deadline);
         USDC.forceApprove(address(SUB_RED), 0);
     }
 
+    /**
+     * @notice Internal helper to settle subscriber batch on SubRedManagement.
+     * @param a Decoded settle action payload.
+     */
     function _settleSubscriber(SubRedCodec.SettleSubscriberAction memory a) internal {
         uint256 len = a.investorList.length;
         if (
@@ -179,6 +245,7 @@ contract SubRedManagementAdapter is BaseAdapter {
             revert InvalidArrayLength();
         }
 
+        // Settle distribution/refund through SubRedManagement; does not mint by itself.
         SUB_RED.settleSubscriber(ST_TOKEN, a.investorList, a.quantityList, a.currencyTokenList, a.amountList, a.feeList);
     }
 }

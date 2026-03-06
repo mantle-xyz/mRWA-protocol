@@ -16,3 +16,4 @@ etherscan_api_key = "${ETHERSCAN_API_KEY}"
 
 [rpc_endpoints]
 mantle_sepolia = "https://rpc.sepolia.mantle.xyz"
+mantle = "https://rpc.mantle.xyz"

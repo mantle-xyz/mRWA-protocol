@@ -2,19 +2,21 @@
 pragma solidity ^0.8.24;
 
 import {IStrategyAdapter} from "../interfaces/adapters/IStrategyAdapter.sol";
-import {IMantleYieldVault} from "../interfaces/vault/IMantleYieldVault.sol";
-import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+import {IControllerVault} from "../interfaces/vault/IControllerVault.sol";
+import {InFlightStatus, RequestStatus} from "../interfaces/vault/types/VaultTypes.sol";
+import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import {Initializable} from "@openzeppelin/contracts/proxy/utils/Initializable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
-contract StrategyController is AccessControl, ReentrancyGuard {
+contract StrategyController is Initializable, AccessControlUpgradeable, ReentrancyGuard {
     bytes32 public constant EXECUTOR_ROLE = keccak256("EXECUTOR_ROLE");
+    bytes32 public constant OPERATOR_MANAGER_ROLE = keccak256("OPERATOR_MANAGER_ROLE");
 
     uint256 public constant BPS_DENOMINATOR = 10_000;
-    uint8 public constant REDEEM_STATUS_PROCESSING = 2;
 
-    IERC20 public immutable asset;
-    IMantleYieldVault public immutable vault;
+    IERC20 public asset;
+    IControllerVault public vault;
 
     uint16 public bufferTargetBps;
     uint16 public rebalanceThresholdBps;
@@ -35,6 +37,9 @@ contract StrategyController is AccessControl, ReentrancyGuard {
     mapping(bytes32 => bool) public processingBatchDone;
     mapping(bytes32 => bool) public readyBatchDone;
 
+    uint256[] public pendingRedeemInFlightIds;
+    uint256 public nextPendingRedeemIndex;
+
     event StrategyRegistered(
         address indexed adapter, uint16 targetWeightBps, uint16 priority, bool isAsync, bool isActive
     );
@@ -54,8 +59,7 @@ contract StrategyController is AccessControl, ReentrancyGuard {
     event InvestSkipped(address indexed adapter, uint256 amountUSDC);
     event DivestExecuted(address indexed adapter, uint256 requestedUSDC, uint256 receivedUSDC);
     event DivestSkipped(address indexed adapter, uint256 requestedUSDC);
-    event AsyncRedeemRequested(address indexed adapter, uint256 amountUSDC);
-    event AsyncRedeemRequestFailed(address indexed adapter, uint256 amountUSDC);
+    event AsyncRedeemRequested(address indexed adapter, uint256 amountUSDC, uint256 inFlightId);
     event DivestIncomplete(uint256 remainingUSDC);
     event RedeemBatchProcessing(uint256 indexed batchSize, uint256 batchTotalUSDC, uint256 shortfallUSDC);
     event RedeemBatchReady(uint256 indexed batchSize, uint256 requiredUSDC, uint256 clearedInFlightUSDC);
@@ -71,15 +75,24 @@ contract StrategyController is AccessControl, ReentrancyGuard {
     error BatchAlreadyProcessed(bytes32 batchKey);
     error BatchNotProcessed(bytes32 batchKey);
     error BatchAlreadyReady(bytes32 batchKey);
+    error IdsNotSorted();
+    error InvalidRequestState(uint256 id, RequestStatus status);
+    error InFlightInsufficient(uint256 remaining);
+    error InFlightAmountMismatch(uint256 provided, uint256 expected);
 
-    constructor(
+    constructor() {
+        _disableInitializers();
+    }
+
+    function initialize(
         address vault_,
         address admin,
+        address operator,
         address executor,
         uint16 bufferTargetBps_,
         uint16 rebalanceThresholdBps_,
         uint64 rebalanceCooldown_
-    ) {
+    ) external initializer {
         if (vault_ == address(0) || admin == address(0) || executor == address(0)) {
             revert InvalidAddress();
         }
@@ -87,7 +100,9 @@ contract StrategyController is AccessControl, ReentrancyGuard {
             revert InvalidBps();
         }
 
-        vault = IMantleYieldVault(vault_);
+        __AccessControl_init();
+
+        vault = IControllerVault(vault_);
         asset = IERC20(vault.asset());
         if (address(asset) == address(0)) {
             revert InvalidAddress();
@@ -97,6 +112,7 @@ contract StrategyController is AccessControl, ReentrancyGuard {
         rebalanceCooldown = rebalanceCooldown_;
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
+        _grantRole(OPERATOR_MANAGER_ROLE, operator);
         _grantRole(EXECUTOR_ROLE, executor);
     }
 
@@ -106,7 +122,7 @@ contract StrategyController is AccessControl, ReentrancyGuard {
 
     function setRiskParams(uint16 bufferTargetBps_, uint16 rebalanceThresholdBps_, uint64 rebalanceCooldown_)
         external
-        onlyRole(DEFAULT_ADMIN_ROLE)
+        onlyRole(OPERATOR_MANAGER_ROLE)
     {
         if (bufferTargetBps_ > BPS_DENOMINATOR || rebalanceThresholdBps_ > BPS_DENOMINATOR) {
             revert InvalidBps();
@@ -123,15 +139,12 @@ contract StrategyController is AccessControl, ReentrancyGuard {
         bool isAsync,
         bool isActive,
         address receiptReceiver
-    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        if (adapter == address(0)) {
+    ) external onlyRole(OPERATOR_MANAGER_ROLE) {
+        if (adapter == address(0) || receiptReceiver == address(0)) {
             revert InvalidAddress();
         }
         if (targetWeightBps > BPS_DENOMINATOR) {
             revert InvalidBps();
-        }
-        if (receiptReceiver == address(0)) {
-            revert InvalidAddress();
         }
         if (strategyInfo[adapter].exists) {
             revert InvalidStrategy(adapter);
@@ -156,7 +169,7 @@ contract StrategyController is AccessControl, ReentrancyGuard {
         bool isAsync,
         bool isActive,
         address receiptReceiver
-    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    ) external onlyRole(OPERATOR_MANAGER_ROLE) {
         if (targetWeightBps > BPS_DENOMINATOR) {
             revert InvalidBps();
         }
@@ -177,7 +190,7 @@ contract StrategyController is AccessControl, ReentrancyGuard {
         emit StrategyUpdated(adapter, targetWeightBps, priority, isAsync, isActive);
     }
 
-    function setStrategyOrder(address[] calldata orderedStrategies) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function setStrategyOrder(address[] calldata orderedStrategies) external onlyRole(OPERATOR_MANAGER_ROLE) {
         uint256 len = orderedStrategies.length;
         delete strategyOrder;
 
@@ -236,13 +249,15 @@ contract StrategyController is AccessControl, ReentrancyGuard {
         onlyRole(EXECUTOR_ROLE)
         nonReentrant
     {
+        _validateSortedIds(ids);
+
         bytes32 batchKey = _batchKey(ids);
         if (processingBatchDone[batchKey]) {
             revert BatchAlreadyProcessed(batchKey);
         }
         processingBatchDone[batchKey] = true;
 
-        vault.updateRequestBatch(ids, REDEEM_STATUS_PROCESSING);
+        vault.updateRequestBatch(ids, RequestStatus.PROCESSING);
 
         uint256 freeCash = _freeCash();
         uint256 shortfall;
@@ -259,6 +274,8 @@ contract StrategyController is AccessControl, ReentrancyGuard {
         onlyRole(EXECUTOR_ROLE)
         nonReentrant
     {
+        _validateSortedIds(ids);
+
         bytes32 batchKey = _batchKey(ids);
         if (!processingBatchDone[batchKey]) {
             revert BatchNotProcessed(batchKey);
@@ -268,10 +285,10 @@ contract StrategyController is AccessControl, ReentrancyGuard {
         }
 
         if (clearedInFlightAmount > 0) {
-            vault.removeInFlight(clearedInFlightAmount);
+            _confirmRedeemInFlight(clearedInFlightAmount);
         }
 
-        uint256 required = vault.totalLockedLiabilitiesFor(ids);
+        uint256 required = _batchRequiredAssets(ids);
         uint256 available = asset.balanceOf(address(vault));
         if (available < required) {
             revert InsufficientCashForReady(required, available);
@@ -297,7 +314,7 @@ contract StrategyController is AccessControl, ReentrancyGuard {
         totalCash = asset.balanceOf(address(vault));
         locked = vault.totalLockedLiabilities();
         freeCash = totalCash > locked ? totalCash - locked : 0;
-        netAssets = totalCash + _totalStrategyValue() + vault.totalInFlightAssets();
+        netAssets = totalCash + _totalStrategyValue() + vault.totalInvestInFlight() + vault.totalRedeemInFlight();
         targetCash = (netAssets * bufferTargetBps) / BPS_DENOMINATOR;
         threshold = (netAssets * rebalanceThresholdBps) / BPS_DENOMINATOR;
     }
@@ -331,13 +348,13 @@ contract StrategyController is AccessControl, ReentrancyGuard {
                 continue;
             }
 
-            vault.approveToAdapter(adapter, alloc);
+            vault.approveToAdapter(adapter, address(asset), alloc);
             try IStrategyAdapter(adapter).deposit(alloc, info.receiptReceiver) returns (uint256 sharesOrPos) {
                 emit InvestExecuted(adapter, alloc, sharesOrPos);
             } catch {
                 emit InvestSkipped(adapter, alloc);
             }
-            vault.approveToAdapter(adapter, 0);
+            vault.approveToAdapter(adapter, address(asset), 0);
         }
     }
 
@@ -356,24 +373,26 @@ contract StrategyController is AccessControl, ReentrancyGuard {
                 continue;
             }
 
-            uint256 value = IStrategyAdapter(adapter).totalValue();
+            uint256 value;
+            try IStrategyAdapter(adapter).totalValue() returns (uint256 v) {
+                value = v;
+            } catch {
+                continue;
+            }
             if (value == 0) {
                 continue;
             }
 
             uint256 toWithdraw = remaining < value ? remaining : value;
             if (info.isAsync) {
-                try IStrategyAdapter(adapter).requestRedeem(toWithdraw, address(vault)) returns (bytes32) {
-                    vault.addInFlight(toWithdraw);
-                    emit AsyncRedeemRequested(adapter, toWithdraw);
-                    remaining -= toWithdraw;
-                } catch {
-                    emit AsyncRedeemRequestFailed(adapter, toWithdraw);
-                }
+                uint256 inFlightId = vault.createInFlight(adapter, address(asset), 0, toWithdraw, false);
+                pendingRedeemInFlightIds.push(inFlightId);
+                emit AsyncRedeemRequested(adapter, toWithdraw, inFlightId);
+                remaining -= toWithdraw;
                 continue;
             }
 
-            try IStrategyAdapter(adapter).redeemSync(toWithdraw, address(vault)) returns (uint256 received) {
+            try IStrategyAdapter(adapter).withdrawSync(toWithdraw, address(vault)) returns (uint256 received) {
                 emit DivestExecuted(adapter, toWithdraw, received);
                 if (received >= remaining) {
                     remaining = 0;
@@ -387,6 +406,53 @@ contract StrategyController is AccessControl, ReentrancyGuard {
 
         if (remaining > 0) {
             emit DivestIncomplete(remaining);
+        }
+    }
+
+    function _confirmRedeemInFlight(uint256 clearedInFlightAmount) internal {
+        uint256 remaining = clearedInFlightAmount;
+        uint256 index = nextPendingRedeemIndex;
+
+        while (remaining > 0) {
+            if (index >= pendingRedeemInFlightIds.length) {
+                revert InFlightInsufficient(remaining);
+            }
+
+            uint256 inFlightId = pendingRedeemInFlightIds[index];
+            (,,,, uint256 usdcAmount,, bool isInvest,, InFlightStatus status) = vault.inFlightRecords(inFlightId);
+
+            if (isInvest || status != InFlightStatus.PENDING) {
+                index++;
+                continue;
+            }
+
+            if (remaining < usdcAmount) {
+                revert InFlightAmountMismatch(remaining, usdcAmount);
+            }
+
+            vault.confirmInFlight(inFlightId, usdcAmount);
+            remaining -= usdcAmount;
+            index++;
+        }
+
+        nextPendingRedeemIndex = index;
+    }
+
+    function _batchRequiredAssets(uint256[] calldata ids) internal view returns (uint256 required) {
+        for (uint256 i = 0; i < ids.length; i++) {
+            (,,, uint256 assets_,, RequestStatus status) = vault.requests(ids[i]);
+            if (status != RequestStatus.PROCESSING && status != RequestStatus.READY) {
+                revert InvalidRequestState(ids[i], status);
+            }
+            required += assets_;
+        }
+    }
+
+    function _validateSortedIds(uint256[] calldata ids) internal pure {
+        for (uint256 i = 1; i < ids.length; i++) {
+            if (ids[i] <= ids[i - 1]) {
+                revert IdsNotSorted();
+            }
         }
     }
 

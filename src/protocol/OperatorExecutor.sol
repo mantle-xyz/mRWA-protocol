@@ -2,15 +2,16 @@
 pragma solidity ^0.8.24;
 
 import {IStrategyController} from "../interfaces/strategy/IStrategyController.sol";
-import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
-import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
+import {EIP712Upgradeable} from "@openzeppelin/contracts-upgradeable/utils/cryptography/EIP712Upgradeable.sol";
+import {Initializable} from "@openzeppelin/contracts/proxy/utils/Initializable.sol";
 
 /**
  * @notice Operator gateway with EIP-712 signed command execution.
  * @dev Grant this contract EXECUTOR_ROLE on StrategyController after deployment.
  */
-contract OperatorExecutor is AccessControl, EIP712 {
+contract OperatorExecutor is Initializable, AccessControlUpgradeable, EIP712Upgradeable {
     using ECDSA for bytes32;
 
     bytes32 public constant SIGNER_ROLE = keccak256("SIGNER_ROLE");
@@ -22,7 +23,7 @@ contract OperatorExecutor is AccessControl, EIP712 {
     uint8 public constant ACTION_PROCESS_REDEEM_BATCH = 1;
     uint8 public constant ACTION_ALLOCATE_ASSETS_BATCH = 2;
 
-    IStrategyController public immutable controller;
+    IStrategyController public controller;
 
     mapping(address => uint256) public nonces;
 
@@ -44,10 +45,18 @@ contract OperatorExecutor is AccessControl, EIP712 {
     error InvalidNonce(address signer, uint256 expected, uint256 provided);
     error InvalidAction(uint8 action);
 
-    constructor(address controller_, address admin, address initialSigner) EIP712("OperatorExecutor", "1") {
+    constructor() {
+        _disableInitializers();
+    }
+
+    function initialize(address controller_, address admin, address initialSigner) external initializer {
         if (controller_ == address(0) || admin == address(0) || initialSigner == address(0)) {
             revert InvalidAddress();
         }
+
+        __AccessControl_init();
+        __EIP712_init("OperatorExecutor", "1");
+
         controller = IStrategyController(controller_);
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
