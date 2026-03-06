@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import {IMantleYieldVault} from "../interfaces/vault/IMantleYieldVault.sol";
 import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import {IMantleYieldVault} from "./interfaces/IMantleYieldVault.sol";
+import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 
 /// @title Accountant
 /// @notice Risk gateway and fee settlement engine for MantleYieldVault.
@@ -12,6 +13,8 @@ import {IMantleYieldVault} from "./interfaces/IMantleYieldVault.sol";
 ///         enforces on-chain circuit breakers (deviation + cooldown), computes management fees,
 ///         and atomically applies the new exchange rate to the Vault.
 contract Accountant is AccessControlUpgradeable, PausableUpgradeable, ReentrancyGuard {
+    using SafeCast for uint256;
+
     // =============================================================
     //                        CONSTANTS
     // =============================================================
@@ -30,26 +33,52 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
 
     // =============================================================
-    //                      STATE VARIABLES
+    //                  ERC-7201 NAMESPACED STORAGE
     // =============================================================
 
-    IMantleYieldVault public vault;
+    /// @custom:storage-location erc7201:mrwa.storage.Accountant
+    /// @dev Struct is tightly packed into 4 storage slots:
+    ///      slot 0: vault(20) + maxAllowedDeviation(4) + managementFeeRate(4) + minUpdateInterval(4)
+    ///      slot 1: treasury(20) + maxComputeAge(4) + lastUpdateTimestamp(8)
+    ///      slot 2: lastComputeTimestamp(8) + lastExchangeRate(8) + lastFeeSettleTimestamp(8)
+    ///      slot 3: totalSharesLastSettle(32)
+    struct AccountantStorage {
+        // ── slot 0 ──
+        IMantleYieldVault vault; // 20B
+        uint32 maxAllowedDeviation; // bps (e.g. 100 = 1%)
+        uint32 managementFeeRate; // bps (e.g. 100 = 1%)
+        
+        // ── slot 1 ──
+        address treasury; // 20B
+        uint32 maxComputeAge; // seconds (e.g. 5 minutes)
+        uint32 minUpdateInterval; // seconds (e.g. 20 hours)
+  
+        // ── slot 2 ──
+        uint64 lastComputeTimestamp;
+        uint64 lastExchangeRate;
+        uint64 lastFeeSettleTimestamp;
+        uint64 lastUpdateTimestamp;
+        // ── slot 3 ──
+        uint256 totalSharesLastSettle;
+    }
 
-    address public treasury;
-    uint256 public maxAllowedDeviation; // bps (e.g. 100 = 1%)
-    uint256 public managementFeeRate; // bps (e.g. 50 = 0.5%)
-    uint256 public minUpdateInterval; // seconds (e.g. 20 hours)
-    uint256 public lastExchangeRate;
-    uint256 public lastUpdateTimestamp;
-    uint256 public lastComputeTimestamp;
-    uint256 public maxComputeAge; // seconds – reject rates computed too far in the past
+    /// @dev ERC-7201 storage location derived from the namespace "mrwa.storage.Accountant".
+    ///      Formula: keccak256(abi.encode(uint256(keccak256("mrwa.storage.Accountant")) - 1)) & ~bytes32(uint256(0xff))
+    bytes32 private constant ACCOUNTANT_STORAGE_LOCATION =
+        0x6c92d3e3e5b85f72ef5aed0666c2a5bff81ca952e7397a04503941b502a0e700;
+
+    function _getAccountantStorage() private pure returns (AccountantStorage storage $) {
+        assembly {
+            $.slot := ACCOUNTANT_STORAGE_LOCATION
+        }
+    }
 
     // =============================================================
     //                          EVENTS
     // =============================================================
 
     event ExchangeRateUpdated(uint256 oldRate, uint256 newRate, uint256 timestamp);
-    event FeesDistributed(address indexed treasury, uint256 feeAssets, uint256 sharesMinted);
+    event FeesDistributed(address indexed treasury, uint256 sharesMinted);
     event TreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
     event RiskParamsUpdated(uint256 maxDeviation, uint256 minInterval);
     event ManagementFeeRateUpdated(uint256 oldRate, uint256 newRate);
@@ -67,8 +96,6 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
     error InvalidRate();
     error InvalidFeeRate(uint256 rate);
     error InvalidDeviation(uint256 deviation);
-    error ZeroAum();
-    error TransactionExpired(uint256 deadline, uint256 currentTimestamp);
     error StaleComputeTimestamp(uint256 provided, uint256 lastCompute);
     error FutureComputeTimestamp(uint256 provided, uint256 blockTimestamp);
     error ComputeTimestampTooOld(uint256 provided, uint256 blockTimestamp, uint256 maxAge);
@@ -99,15 +126,17 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
         __AccessControl_init();
         __Pausable_init();
 
-        vault = IMantleYieldVault(vault_);
-        treasury = treasury_;
-        managementFeeRate = managementFeeRate_;
-        lastExchangeRate = initialRate;
-        lastUpdateTimestamp = block.timestamp;
-
-        maxAllowedDeviation = 100; // 1% default
-        minUpdateInterval = 20 hours;
-        maxComputeAge = 5 minutes;
+        AccountantStorage storage s = _getAccountantStorage();
+        s.vault = IMantleYieldVault(vault_);
+        s.treasury = treasury_;
+        s.managementFeeRate = managementFeeRate_.toUint32();
+        s.lastExchangeRate = initialRate.toUint64();
+        s.lastUpdateTimestamp = block.timestamp.toUint64();
+        s.lastFeeSettleTimestamp = block.timestamp.toUint64();
+        s.totalSharesLastSettle = IMantleYieldVault(vault_).totalSupply();
+        s.maxAllowedDeviation = 100; // 1% default
+        s.minUpdateInterval = 20 hours;
+        s.maxComputeAge = 5 minutes;
 
         _setRoleAdmin(PAUSER_ROLE, DEFAULT_ADMIN_ROLE);
         _setRoleAdmin(EXECUTOR_ROLE, DEFAULT_ADMIN_ROLE);
@@ -117,92 +146,132 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
     }
 
     // =============================================================
+    //                       VIEW FUNCTIONS
+    // =============================================================
+
+    function vault() external view returns (IMantleYieldVault) {
+        return _getAccountantStorage().vault;
+    }
+
+    function treasury() external view returns (address) {
+        return _getAccountantStorage().treasury;
+    }
+
+    function maxAllowedDeviation() external view returns (uint256) {
+        return _getAccountantStorage().maxAllowedDeviation;
+    }
+
+    function managementFeeRate() external view returns (uint256) {
+        return _getAccountantStorage().managementFeeRate;
+    }
+
+    function minUpdateInterval() external view returns (uint256) {
+        return _getAccountantStorage().minUpdateInterval;
+    }
+
+    function lastExchangeRate() external view returns (uint256) {
+        return _getAccountantStorage().lastExchangeRate;
+    }
+
+    function lastUpdateTimestamp() external view returns (uint256) {
+        return _getAccountantStorage().lastUpdateTimestamp;
+    }
+
+    function lastFeeSettleTimestamp() external view returns (uint256) {
+        return _getAccountantStorage().lastFeeSettleTimestamp;
+    }
+
+    function totalSharesLastSettle() external view returns (uint256) {
+        return _getAccountantStorage().totalSharesLastSettle;
+    }
+
+    function lastComputeTimestamp() external view returns (uint256) {
+        return _getAccountantStorage().lastComputeTimestamp;
+    }
+
+    function maxComputeAge() external view returns (uint256) {
+        return _getAccountantStorage().maxComputeAge;
+    }
+
+    // =============================================================
     //                   EXECUTOR FUNCTIONS
     // =============================================================
 
-    /// @notice Atomic NAV update: validate circuit breakers, settle management fee, push new rate.
+    /// @notice Push a new exchange rate after validating circuit breakers.
     /// @param newRate The new exchange rate (18-decimal precision)
-    /// @param aumSnapshot Total assets snapshot (USDC 6-decimal) used as fee-calculation base
     /// @param computeTimestamp Off-chain computation timestamp; must be strictly newer than the previous one
-    function updateExchangeRate(uint256 newRate, uint256 aumSnapshot, uint256 computeTimestamp)
+    function updateExchangeRate(uint256 newRate, uint256 computeTimestamp)
         external
         onlyRole(EXECUTOR_ROLE)
         whenNotPaused
         nonReentrant
     {
         if (newRate == 0) revert InvalidRate();
-        if (aumSnapshot == 0) revert ZeroAum();
-        _checkComputeTimestamp(computeTimestamp);
-        _checkDeviation(newRate);
 
-        uint256 cachedTimestamp = lastUpdateTimestamp;
-        uint256 cooldownEnd = cachedTimestamp + minUpdateInterval;
+        AccountantStorage storage s = _getAccountantStorage();
+        _checkComputeTimestamp(s, computeTimestamp);
+        _checkDeviation(s, newRate);
+
+        uint256 cooldownEnd = uint256(s.lastUpdateTimestamp) + s.minUpdateInterval;
         if (block.timestamp < cooldownEnd) {
             revert CooldownNotElapsed(cooldownEnd - block.timestamp);
         }
 
-        // --- Fee settlement (mint-before-rate-update) ---
-        uint256 timeElapsed = block.timestamp - cachedTimestamp;
-        uint256 feeInAssets = (aumSnapshot * managementFeeRate * timeElapsed) / (MAX_BPS * 365 days);
+        uint256 oldRate = s.lastExchangeRate;
+        s.vault.updateExchangeRate(newRate);
 
-        if (feeInAssets > 0) {
-            uint256 sharesToMint = (feeInAssets * RATE_PRECISION) / newRate;
-
-            if (sharesToMint > 0) {
-                vault.mintFeeShares(treasury, sharesToMint);
-                emit FeesDistributed(treasury, feeInAssets, sharesToMint);
-            }
-        }
-
-        // --- Apply new exchange rate ---
-        uint256 oldRate = lastExchangeRate;
-        vault.updateExchangeRate(newRate);
-
-        lastExchangeRate = newRate;
-        lastUpdateTimestamp = block.timestamp;
-        lastComputeTimestamp = computeTimestamp;
+        s.lastExchangeRate = newRate.toUint64();
+        s.lastUpdateTimestamp = block.timestamp.toUint64();
+        s.lastComputeTimestamp = computeTimestamp.toUint64();
 
         emit ExchangeRateUpdated(oldRate, newRate, block.timestamp);
+    }
+
+    /// @notice Settle accrued management fees by minting vault shares to the treasury.
+    ///         Uses min(currentSupply, lastSettleSupply) as the fee base to prevent
+    ///         overcharging when share supply changes drastically between settlements.
+    function settleManagementFee()
+        external
+        onlyRole(EXECUTOR_ROLE)
+        whenNotPaused
+        nonReentrant
+    {
+        AccountantStorage storage s = _getAccountantStorage();
+
+        uint256 timeElapsed = block.timestamp - s.lastFeeSettleTimestamp;
+        if (timeElapsed == 0) return;
+
+        uint256 currentTotalShares = s.vault.totalSupply();
+        uint256 shareBase =
+            currentTotalShares < s.totalSharesLastSettle ? currentTotalShares : s.totalSharesLastSettle;
+        uint256 sharesToMint = (shareBase * s.managementFeeRate * timeElapsed) / (MAX_BPS * 365 days);
+
+        s.lastFeeSettleTimestamp = block.timestamp.toUint64();
+        s.totalSharesLastSettle = currentTotalShares;
+
+        if (sharesToMint > 0) {
+            s.vault.mintFeeShares(s.treasury, sharesToMint);
+            emit FeesDistributed(s.treasury, sharesToMint);
+        }
     }
 
     // =============================================================
     //                    ADMIN FUNCTIONS
     // =============================================================
 
-    /// @notice Emergency override: bypass deviation check, auto-pause the system.
-    /// @param computeTimestamp Off-chain computation timestamp; must be strictly newer than the previous one
-    function emergencyUpdateExchangeRate(uint256 newRate, uint256 computeTimestamp)
-        external
-        onlyRole(DEFAULT_ADMIN_ROLE)
-        nonReentrant
-    {
-        if (newRate == 0) revert InvalidRate();
-        _checkComputeTimestamp(computeTimestamp);
-
-        uint256 oldRate = lastExchangeRate;
-
-        vault.updateExchangeRate(newRate);
-
-        lastExchangeRate = newRate;
-        lastUpdateTimestamp = block.timestamp;
-        lastComputeTimestamp = computeTimestamp;
-
-        _pause();
-
-        emit EmergencyRateUpdated(oldRate, newRate, block.timestamp);
-    }
-
     function setVault(address newVault) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (newVault == address(0)) revert ZeroAddress();
-        address oldVault = address(vault);
-        vault = IMantleYieldVault(newVault);
+        AccountantStorage storage s = _getAccountantStorage();
+        address oldVault = address(s.vault);
+        s.vault = IMantleYieldVault(newVault);
         emit VaultUpdated(oldVault, newVault);
     }
 
     function setTreasury(address newTreasury) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (newTreasury == address(0)) revert ZeroAddress();
-        address oldTreasury = treasury;
-        treasury = newTreasury;
+        AccountantStorage storage s = _getAccountantStorage();
+        address oldTreasury = s.treasury;
+        s.treasury = newTreasury;
         emit TreasuryUpdated(oldTreasury, newTreasury);
     }
 
@@ -210,22 +279,25 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
         if (newMaxDeviation == 0 || newMaxDeviation > MAX_DEVIATION_CEILING) {
             revert InvalidDeviation(newMaxDeviation);
         }
-        maxAllowedDeviation = newMaxDeviation;
-        minUpdateInterval = newMinInterval;
+        AccountantStorage storage s = _getAccountantStorage();
+        s.maxAllowedDeviation = newMaxDeviation.toUint32();
+        s.minUpdateInterval = newMinInterval.toUint32();
         emit RiskParamsUpdated(newMaxDeviation, newMinInterval);
     }
 
     function setMaxComputeAge(uint256 newAge) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (newAge == 0 || newAge > MAX_COMPUTE_AGE_CEILING) revert InvalidComputeAge(newAge);
-        uint256 oldAge = maxComputeAge;
-        maxComputeAge = newAge;
+        AccountantStorage storage s = _getAccountantStorage();
+        uint256 oldAge = s.maxComputeAge;
+        s.maxComputeAge = newAge.toUint32();
         emit MaxComputeAgeUpdated(oldAge, newAge);
     }
 
     function setManagementFeeRate(uint256 newRate) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (newRate > MAX_MANAGEMENT_FEE_BPS) revert InvalidFeeRate(newRate);
-        uint256 oldRate = managementFeeRate;
-        managementFeeRate = newRate;
+        AccountantStorage storage s = _getAccountantStorage();
+        uint256 oldRate = s.managementFeeRate;
+        s.managementFeeRate = newRate.toUint32();
         emit ManagementFeeRateUpdated(oldRate, newRate);
     }
 
@@ -242,25 +314,25 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
     // =============================================================
 
     /// @dev Reverts if computeTimestamp is stale, in the future, or too old.
-    function _checkComputeTimestamp(uint256 computeTimestamp) internal view {
-        if (computeTimestamp <= lastComputeTimestamp) {
-            revert StaleComputeTimestamp(computeTimestamp, lastComputeTimestamp);
+    function _checkComputeTimestamp(AccountantStorage storage s, uint256 computeTimestamp) internal view {
+        if (computeTimestamp <= s.lastComputeTimestamp) {
+            revert StaleComputeTimestamp(computeTimestamp, s.lastComputeTimestamp);
         }
         if (computeTimestamp > block.timestamp) {
             revert FutureComputeTimestamp(computeTimestamp, block.timestamp);
         }
-        if (block.timestamp - computeTimestamp > maxComputeAge) {
-            revert ComputeTimestampTooOld(computeTimestamp, block.timestamp, maxComputeAge);
+        if (block.timestamp - computeTimestamp > s.maxComputeAge) {
+            revert ComputeTimestampTooOld(computeTimestamp, block.timestamp, s.maxComputeAge);
         }
     }
 
     /// @dev Reverts if the rate change exceeds maxAllowedDeviation (in bps).
-    function _checkDeviation(uint256 newRate) internal view {
-        uint256 cached = lastExchangeRate;
+    function _checkDeviation(AccountantStorage storage s, uint256 newRate) internal view {
+        uint256 cached = s.lastExchangeRate;
         uint256 delta = newRate > cached ? newRate - cached : cached - newRate;
         uint256 deviationBps = (delta * MAX_BPS) / cached;
-        if (deviationBps > maxAllowedDeviation) {
-            revert DeviationExceeded(deviationBps, maxAllowedDeviation);
+        if (deviationBps > s.maxAllowedDeviation) {
+            revert DeviationExceeded(deviationBps, s.maxAllowedDeviation);
         }
     }
 }

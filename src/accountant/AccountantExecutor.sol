@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
-import {IAccountant} from "./interfaces/IAccountant.sol";
+import {IAccountant} from "../interfaces/accountant/IAccountant.sol";
 
 /// @title AccountantExecutor
 /// @notice Authorized relay for Accountant.updateExchangeRate.
@@ -25,7 +25,8 @@ contract AccountantExecutor is AccessControlUpgradeable {
     //                          EVENTS
     // =============================================================
 
-    event RateUpdateExecuted(address indexed executor, uint256 newRate, uint256 aumSnapshot, uint256 computeTimestamp);
+    event RateUpdateExecuted(address indexed executor, uint256 newRate, uint256 computeTimestamp);
+    event ManagementFeeSettled(address indexed executor);
 
     // =============================================================
     //                       CUSTOM ERRORS
@@ -59,13 +60,21 @@ contract AccountantExecutor is AccessControlUpgradeable {
 
     /// @notice Trigger an exchange rate update on the Accountant.
     /// @param newRate The new exchange rate to push
-    /// @param aumSnapshot The AUM snapshot for fee calculation
     /// @param computeTimestamp Off-chain computation timestamp for staleness check
-    function executeUpdateRate(uint256 newRate, uint256 aumSnapshot, uint256 computeTimestamp)
+    function executeUpdateRate(uint256 newRate, uint256 computeTimestamp)
         external
         onlyRole(BOT_ROLE)
     {
-        accountant.updateExchangeRate(newRate, aumSnapshot, computeTimestamp);
-        emit RateUpdateExecuted(msg.sender, newRate, aumSnapshot, computeTimestamp);
+        accountant.updateExchangeRate(newRate, computeTimestamp);
+        emit RateUpdateExecuted(msg.sender, newRate, computeTimestamp);
+    }
+
+    /// @notice Trigger management fee settlement on the Accountant.
+    function executeSettleManagementFee()
+        external
+        onlyRole(BOT_ROLE)
+    {
+        accountant.settleManagementFee();
+        emit ManagementFeeSettled(msg.sender);
     }
 }
