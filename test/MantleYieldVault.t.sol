@@ -7,7 +7,11 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {MantleYieldVault} from "../src/vault/MantleYieldVault.sol";
 import {VaultFactory} from "../src/vault/VaultFactory.sol";
+<<<<<<< adam/accountant
+import {IMantleYieldVault, ISanctionsOracle, IERC7540Redeem} from "../src/vault/interfaces/IMantleYieldVault.sol";
+=======
 import {IMantleYieldVault, ISanctionsOracle, IERC7540Redeem} from "../src/interfaces/vault/IMantleYieldVault.sol";
+>>>>>>> develop
 import {IStrategyAdapter} from "../src/adapters/interfaces/IStrategyAdapter.sol";
 
 // =============================================================
@@ -27,6 +31,17 @@ contract MockUSDC is ERC20 {
 }
 
 contract MockSanctionsOracle is ISanctionsOracle {
+<<<<<<< adam/accountant
+    mapping(address => bool) public blacklisted;
+
+    function isBlacklisted(address account) external view override returns (bool) {
+        return blacklisted[account];
+    }
+
+    function setBlacklisted(address account, bool status) external {
+        blacklisted[account] = status;
+    }
+=======
     mapping(address => bool) public sanctioned;
 
     function isSanctioned(address account) external view override returns (bool) {
@@ -43,6 +58,7 @@ contract MockSanctionsOracle is ISanctionsOracle {
     function MAX_BATCH_SIZE() external pure override returns (uint256) { return 100; }
     function updateSanctionStatus(address, bool) external override {}
     function updateSanctionStatusBatch(address[] calldata, bool) external override {}
+>>>>>>> develop
 }
 
 contract MockStrategyAdapter is IStrategyAdapter {
@@ -126,7 +142,11 @@ abstract contract VaultTestBase is Test {
         vm.prank(admin);
         vault.grantRole(pauserRole, pauser);
 
+<<<<<<< adam/accountant
+        oracle.setBlacklisted(sanctionedUser, true);
+=======
         oracle.setSanctioned(sanctionedUser, true);
+>>>>>>> develop
 
         usdc.mint(alice, INITIAL_DEPOSIT);
         vm.startPrank(alice);
@@ -922,7 +942,11 @@ contract TotalAssetsTest is VaultTestBase {
 
 contract SanctionsTest is VaultTestBase {
     function test_transferBlockedForSanctionedFrom() public {
+<<<<<<< adam/accountant
+        oracle.setBlacklisted(alice, true);
+=======
         oracle.setSanctioned(alice, true);
+>>>>>>> develop
 
         vm.prank(alice);
         vm.expectRevert(abi.encodeWithSelector(IMantleYieldVault.Vault__Sanctioned.selector, alice));
