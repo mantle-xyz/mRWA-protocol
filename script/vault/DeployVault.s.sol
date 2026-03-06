@@ -5,7 +5,11 @@ import {Script, console} from "forge-std/Script.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {MantleYieldVault} from "../../src/vault/MantleYieldVault.sol";
 import {VaultFactory} from "../../src/vault/VaultFactory.sol";
+<<<<<<< adam/accountant
 import {IMantleYieldVault} from "../../src/vault/interfaces/IMantleYieldVault.sol";
+=======
+import {IMantleYieldVault} from "../../src/interfaces/vault/IMantleYieldVault.sol";
+>>>>>>> develop
 
 /**
  * @title DeployVault
