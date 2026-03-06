@@ -718,9 +718,4 @@ contract MantleYieldVault is
         emit TokenRescued(token, to, amount);
     }
 
-    // =============================================================
-    // Upgrade Storage Gap
-    // =============================================================
-
-    uint256[50] private __gap;
 }
