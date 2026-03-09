@@ -27,47 +27,22 @@ contract MockUSDC is ERC20 {
 }
 
 contract MockSanctionsOracle is ISanctionsOracle {
-    mapping(address => bool) public blacklisted;
-    uint256 public totalSanctionedCount;
-    uint256 public lastUpdateTimestamp;
-    uint256 public batchNonce;
-    uint256 public constant MAX_BATCH_SIZE = 200;
+    mapping(address => bool) public sanctioned;
 
     function isSanctioned(address account) external view override returns (bool) {
-        return blacklisted[account];
+        return sanctioned[account];
     }
 
-    function setBlacklisted(address account, bool status) public {
-        bool prev = blacklisted[account];
-        blacklisted[account] = status;
-        if (prev != status) {
-            if (status) {
-                totalSanctionedCount++;
-            } else {
-                totalSanctionedCount--;
-            }
-            lastUpdateTimestamp = block.timestamp;
-        }
+    function setSanctioned(address account, bool status) external {
+        sanctioned[account] = status;
     }
 
-    function updateSanctionStatus(address account, bool sanctioned) external override {
-        setBlacklisted(account, sanctioned);
-        emit SanctionStatusUpdated(account, sanctioned);
-        emit BatchSanctionUpdated(batchNonce++, 1, 1, sanctioned);
-    }
-
-    function updateSanctionStatusBatch(address[] calldata accounts, bool sanctioned) external override {
-        uint256 changed;
-        for (uint256 i = 0; i < accounts.length; i++) {
-            bool prev = blacklisted[accounts[i]];
-            if (prev != sanctioned) {
-                setBlacklisted(accounts[i], sanctioned);
-                emit SanctionStatusUpdated(accounts[i], sanctioned);
-                changed++;
-            }
-        }
-        emit BatchSanctionUpdated(batchNonce++, accounts.length, changed, sanctioned);
-    }
+    function totalSanctionedCount() external pure override returns (uint256) { return 0; }
+    function lastUpdateTimestamp() external pure override returns (uint256) { return 0; }
+    function batchNonce() external pure override returns (uint256) { return 0; }
+    function MAX_BATCH_SIZE() external pure override returns (uint256) { return 100; }
+    function updateSanctionStatus(address, bool) external override {}
+    function updateSanctionStatusBatch(address[] calldata, bool) external override {}
 }
 
 contract MockStrategyAdapter is IStrategyAdapter {
