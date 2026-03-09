@@ -3,9 +3,10 @@ pragma solidity ^0.8.24;
 
 import {IStrategyController} from "../interfaces/strategy/IStrategyController.sol";
 import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
-import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+
 import {EIP712Upgradeable} from "@openzeppelin/contracts-upgradeable/utils/cryptography/EIP712Upgradeable.sol";
 import {Initializable} from "@openzeppelin/contracts/proxy/utils/Initializable.sol";
+import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
 /**
  * @notice Operator gateway with EIP-712 signed command execution.
@@ -106,7 +107,8 @@ contract OperatorExecutor is Initializable, AccessControlUpgradeable, EIP712Upgr
             (uint256[] memory ids, uint256[] memory inFlightIds) = abi.decode(command.data, (uint256[], uint256[]));
             controller.allocateAssetsBatch(ids, inFlightIds);
         } else if (command.action == ACTION_CLAIM_ADAPTER_ASSETS) {
-            (address adapter, uint256 posAmount, uint256 assetAmount) = abi.decode(command.data, (address, uint256, uint256));
+            (address adapter, uint256 posAmount, uint256 assetAmount) =
+                abi.decode(command.data, (address, uint256, uint256));
             controller.claimAdapterAssets(adapter, posAmount, assetAmount);
         } else {
             revert InvalidAction(command.action);

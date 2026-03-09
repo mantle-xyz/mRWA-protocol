@@ -62,7 +62,9 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     event DivestIncomplete(uint256 remainingAsset);
     event RedeemBatchProcessing(uint256 indexed batchSize, uint256 batchTotalAsset, uint256 shortfallAsset);
     event RedeemBatchReady(uint256 indexed batchSize, uint256 requiredAsset, uint256 clearedInFlightAsset);
-    event AdapterAssetsClaimed(address indexed adapter, address indexed posToken, uint256 posClaimed, uint256 assetClaimed);
+    event AdapterAssetsClaimed(
+        address indexed adapter, address indexed posToken, uint256 posClaimed, uint256 assetClaimed
+    );
 
     error InvalidAddress();
     error InvalidBps();
@@ -257,7 +259,11 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
 
     /// @notice Batch set adapter pause state via controller.
     /// @dev Controller must hold PAUSER_ROLE on each target adapter.
-    function setAdaptersPaused(address[] calldata adapters, bool paused_) external onlyRole(STRATEGY_MANAGER_ROLE) nonReentrant {
+    function setAdaptersPaused(address[] calldata adapters, bool paused_)
+        external
+        onlyRole(STRATEGY_MANAGER_ROLE)
+        nonReentrant
+    {
         uint256 len = adapters.length;
         for (uint256 i = 0; i < len; i++) {
             address adapter = adapters[i];
@@ -417,8 +423,8 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     // =============================================================
 
     function _invest(uint256 excessCash) internal {
-        uint256 totalAssets =
-            asset.balanceOf(address(vault)) + _totalStrategyValue() + vault.totalInvestInFlight() + vault.totalRedeemInFlight();
+        uint256 totalAssets = asset.balanceOf(address(vault)) + _totalStrategyValue() + vault.totalInvestInFlight()
+            + vault.totalRedeemInFlight();
         uint256 requested = excessCash;
         uint256 remaining = excessCash;
         uint256 len = strategyOrder.length;

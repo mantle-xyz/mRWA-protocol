@@ -38,10 +38,22 @@ contract MockSanctionsOracle is ISanctionsOracle {
         sanctioned[account] = status;
     }
 
-    function totalSanctionedCount() external pure override returns (uint256) { return 0; }
-    function lastUpdateTimestamp() external pure override returns (uint256) { return 0; }
-    function batchNonce() external pure override returns (uint256) { return 0; }
-    function MAX_BATCH_SIZE() external pure override returns (uint256) { return 100; }
+    function totalSanctionedCount() external pure override returns (uint256) {
+        return 0;
+    }
+
+    function lastUpdateTimestamp() external pure override returns (uint256) {
+        return 0;
+    }
+
+    function batchNonce() external pure override returns (uint256) {
+        return 0;
+    }
+
+    function MAX_BATCH_SIZE() external pure override returns (uint256) {
+        return 100;
+    }
+
     function updateSanctionStatus(address, bool) external override {}
     function updateSanctionStatusBatch(address[] calldata, bool) external override {}
 }

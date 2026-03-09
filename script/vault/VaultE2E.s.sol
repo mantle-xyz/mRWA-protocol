@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {Script, console} from "forge-std/Script.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {IStrategyAdapter} from "../../src/interfaces/adapters/IStrategyAdapter.sol";
+import {ISanctionsOracle} from "../../src/interfaces/oracle/ISanctionsOracle.sol";
+import {IMantleYieldVault} from "../../src/interfaces/vault/IMantleYieldVault.sol";
 import {MantleYieldVault} from "../../src/vault/MantleYieldVault.sol";
 import {VaultFactory} from "../../src/vault/VaultFactory.sol";
-import {IMantleYieldVault} from "../../src/interfaces/vault/IMantleYieldVault.sol";
-import {ISanctionsOracle} from "../../src/interfaces/oracle/ISanctionsOracle.sol";
-import {IStrategyAdapter} from "../../src/interfaces/adapters/IStrategyAdapter.sol";
+import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {Script, console} from "forge-std/Script.sol";
 
 // =============================================================
 // Mocks (same as test file, reusable)
@@ -37,10 +37,22 @@ contract MockSanctionsOracle is ISanctionsOracle {
         sanctioned[account] = status;
     }
 
-    function totalSanctionedCount() external pure override returns (uint256) { return 0; }
-    function lastUpdateTimestamp() external pure override returns (uint256) { return 0; }
-    function batchNonce() external pure override returns (uint256) { return 0; }
-    function MAX_BATCH_SIZE() external pure override returns (uint256) { return 100; }
+    function totalSanctionedCount() external pure override returns (uint256) {
+        return 0;
+    }
+
+    function lastUpdateTimestamp() external pure override returns (uint256) {
+        return 0;
+    }
+
+    function batchNonce() external pure override returns (uint256) {
+        return 0;
+    }
+
+    function MAX_BATCH_SIZE() external pure override returns (uint256) {
+        return 100;
+    }
+
     function updateSanctionStatus(address, bool) external override {}
     function updateSanctionStatusBatch(address[] calldata, bool) external override {}
 }
@@ -91,7 +103,6 @@ contract MockStrategyAdapter is IStrategyAdapter {
     }
 
     function setPaused(bool) external pure override {}
-
 }
 
 // =============================================================
@@ -289,7 +300,8 @@ contract VaultE2E is Script {
         uint256 reqId = vault.requestRedeem(redeemShares);
         console.log("[async] Step 1 - requestRedeem: id =", reqId);
 
-        (,, uint256 reqShares, uint256 reqAssets, uint256 settled,, IMantleYieldVault.RequestStatus status) = vault.requests(reqId);
+        (,, uint256 reqShares, uint256 reqAssets, uint256 settled,, IMantleYieldVault.RequestStatus status) =
+            vault.requests(reqId);
         require(status == IMantleYieldVault.RequestStatus.PENDING, "not PENDING");
         require(reqShares == redeemShares, "req shares mismatch");
         require(settled == 0, "settled should be 0");
@@ -341,7 +353,7 @@ contract VaultE2E is Script {
         vm.broadcast(aliceKey);
         uint256 reqId = vault.requestRedeem(redeemShares);
 
-        (,,, uint256 estAssets,,, ) = vault.requests(reqId);
+        (,,, uint256 estAssets,,,) = vault.requests(reqId);
         uint256 friction = 5e6;
         uint256 actualSettled = estAssets - friction;
 
@@ -372,7 +384,7 @@ contract VaultE2E is Script {
         require(claimed == actualSettled, "claimed != actualSettled");
         require(vault.totalLockedShares() == lockedBefore, "lockedShares not back to original");
 
-        (,,, uint256 storedEstAssets, uint256 storedSettled,, ) = vault.requests(reqId);
+        (,,, uint256 storedEstAssets, uint256 storedSettled,,) = vault.requests(reqId);
         require(storedEstAssets == estAssets, "estimatedAssets should be unchanged");
         require(storedSettled == actualSettled, "settledAssets wrong");
 

@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {Test} from "forge-std/Test.sol";
-import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import {SubRedManagementAdapter} from "../src/adapters/digift/SubRedManagementAdapter.sol";
+import {ISubRedManagement} from "../src/interfaces/adapters/digift/ISubRedManagement.sol";
 import {IControllerVault} from "../src/interfaces/vault/IControllerVault.sol";
 import {InFlightStatus, RequestStatus} from "../src/interfaces/vault/types/VaultTypes.sol";
 import {StrategyController} from "../src/protocol/StrategyController.sol";
-import {SubRedManagementAdapter} from "../src/adapters/digift/SubRedManagementAdapter.sol";
-import {ISubRedManagement} from "../src/interfaces/adapters/digift/ISubRedManagement.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {Test} from "forge-std/Test.sol";
 
 contract MockUSDCFlow is ERC20 {
     constructor() ERC20("MockUSDC", "mUSDC") {}
@@ -154,15 +154,7 @@ contract MockVaultFlow is IControllerVault {
         external
         view
         override
-        returns (
-            uint256,
-            address,
-            uint256,
-            uint256,
-            uint256,
-            uint256,
-            RequestStatus
-        )
+        returns (uint256, address, uint256, uint256, uint256, uint256, RequestStatus)
     {
         uint256 assets = liabilities[requestId];
         RequestStatus status = requestStatus[requestId];
@@ -218,10 +210,9 @@ contract StrategyFlowTest is Test {
         usdc = new MockUSDCFlow();
         vault = new MockVaultFlow(address(usdc));
         StrategyController implementation = new StrategyController();
-        bytes memory initData =
-            abi.encodeCall(
-                StrategyController.initialize, (address(vault), address(this), address(this), address(this), 0, 0, 0)
-            );
+        bytes memory initData = abi.encodeCall(
+            StrategyController.initialize, (address(vault), address(this), address(this), address(this), 0, 0, 0)
+        );
         controller = StrategyController(address(new ERC1967Proxy(address(implementation), initData)));
 
         subRedISNR = new MockSubRedManagementFlow();

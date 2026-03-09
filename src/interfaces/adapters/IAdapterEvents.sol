@@ -19,5 +19,4 @@ interface IAdapterEvents {
     event AdapterRedeemRequested(
         address indexed adapter, address indexed caller, uint256 amount, address indexed receiver, bytes32 requestId
     );
-
 }

@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {Test} from "forge-std/Test.sol";
-import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-import {OperatorExecutor} from "../src/protocol/OperatorExecutor.sol";
 import {IStrategyController} from "../src/interfaces/strategy/IStrategyController.sol";
+import {OperatorExecutor} from "../src/protocol/OperatorExecutor.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import {Test} from "forge-std/Test.sol";
 
 contract MockStrategyController is IStrategyController {
     uint256 public rebalanceCount;
@@ -120,7 +120,9 @@ contract OperatorExecutorTest is Test {
             OperatorExecutor.Command({action: 0, data: "", nonce: 0, deadline: uint64(block.timestamp - 1)});
         bytes memory sig = _sign(cmd, signerPk);
 
-        vm.expectRevert(abi.encodeWithSelector(OperatorExecutor.DeadlineExpired.selector, cmd.deadline, block.timestamp));
+        vm.expectRevert(
+            abi.encodeWithSelector(OperatorExecutor.DeadlineExpired.selector, cmd.deadline, block.timestamp)
+        );
         executor.execute(cmd, sig);
     }
 
@@ -134,7 +136,8 @@ contract OperatorExecutorTest is Test {
     }
 
     function _sign(OperatorExecutor.Command memory cmd, uint256 pk) internal view returns (bytes memory) {
-        bytes32 structHash = keccak256(abi.encode(COMMAND_TYPEHASH, cmd.action, keccak256(cmd.data), cmd.nonce, cmd.deadline));
+        bytes32 structHash =
+            keccak256(abi.encode(COMMAND_TYPEHASH, cmd.action, keccak256(cmd.data), cmd.nonce, cmd.deadline));
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", _domainSeparator(), structHash));
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(pk, digest);
         return abi.encodePacked(r, s, v);
