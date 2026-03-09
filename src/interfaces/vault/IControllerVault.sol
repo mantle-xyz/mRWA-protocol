@@ -11,7 +11,7 @@ interface IControllerVault {
 
     function approveToAdapter(address adapter, address token, uint256 amount) external;
     function updateRequestBatch(uint256[] calldata ids, RequestStatus newStatus) external;
-    function markRequestsReady(uint256[] calldata ids) external;
+    function markRequestsReady(uint256[] calldata ids, uint256[] calldata settledAssets) external;
 
     function createInFlight(address adapter, address asset, uint256 tokenAmount, uint256 usdcAmount, bool isInvest)
         external
@@ -21,7 +21,15 @@ interface IControllerVault {
     function requests(uint256 requestId)
         external
         view
-        returns (uint256 id, address owner, uint256 shares, uint256 assets, uint256 timestamp, RequestStatus status);
+        returns (
+            uint256 id,
+            address owner,
+            uint256 shares,
+            uint256 estimatedAssets,
+            uint256 settledAssets,
+            uint256 timestamp,
+            RequestStatus status
+        );
 
     function inFlightRecords(uint256 inFlightId)
         external

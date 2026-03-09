@@ -15,13 +15,21 @@ contract MockStrategyController is IStrategyController {
         rebalanceCount++;
     }
 
-    function processRedeemBatch(uint256[] calldata ids, uint256 batchTotalUSDC) external override {
-        lastProcessHash = keccak256(abi.encode(ids, batchTotalUSDC));
+    function processRedeemBatch(uint256[] calldata ids, uint256 batchTotalAsset) external override {
+        lastProcessHash = keccak256(abi.encode(ids, batchTotalAsset));
     }
 
-    function allocateAssetsBatch(uint256[] calldata ids, uint256 clearedInFlightAmount) external override {
-        lastAllocateHash = keccak256(abi.encode(ids, clearedInFlightAmount));
+    function allocateAssetsBatch(uint256[] calldata ids, uint256[] calldata inFlightIds) external override {
+        lastAllocateHash = keccak256(abi.encode(ids, inFlightIds));
     }
+
+    function claimAdapterAssets(address adapter, uint256 posAmount, uint256 assetAmount) external override {
+        lastAllocateHash = keccak256(abi.encode(adapter, posAmount, assetAmount));
+    }
+
+    function setAdapterPaused(address, bool) external override {}
+
+    function setAdaptersPaused(address[] calldata, bool) external override {}
 }
 
 contract OperatorExecutorTest is Test {
@@ -78,10 +86,13 @@ contract OperatorExecutorTest is Test {
     function test_ExecuteAllocateBatch_Routes() public {
         uint256[] memory ids = new uint256[](1);
         ids[0] = 9;
+        uint256[] memory inFlightIds = new uint256[](2);
+        inFlightIds[0] = 11;
+        inFlightIds[1] = 12;
 
         OperatorExecutor.Command memory cmd = OperatorExecutor.Command({
             action: 2,
-            data: abi.encode(ids, uint256(123)),
+            data: abi.encode(ids, inFlightIds),
             nonce: 0,
             deadline: uint64(block.timestamp + 1 hours)
         });
@@ -89,7 +100,7 @@ contract OperatorExecutorTest is Test {
         bytes memory sig = _sign(cmd, signerPk);
         executor.execute(cmd, sig);
 
-        assertEq(controller.lastAllocateHash(), keccak256(abi.encode(ids, uint256(123))));
+        assertEq(controller.lastAllocateHash(), keccak256(abi.encode(ids, inFlightIds)));
     }
 
     function test_RevertWhen_ReplayNonce() public {

@@ -11,7 +11,7 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 
 contract StrategyController is Initializable, AccessControlUpgradeable, ReentrancyGuard {
     bytes32 public constant EXECUTOR_ROLE = keccak256("EXECUTOR_ROLE");
-    bytes32 public constant OPERATOR_MANAGER_ROLE = keccak256("OPERATOR_MANAGER_ROLE");
+    bytes32 public constant STRATEGY_MANAGER_ROLE = keccak256("STRATEGY_MANAGER_ROLE");
 
     uint256 public constant BPS_DENOMINATOR = 10_000;
 
@@ -37,9 +37,6 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     mapping(bytes32 => bool) public processingBatchDone;
     mapping(bytes32 => bool) public readyBatchDone;
 
-    uint256[] public pendingRedeemInFlightIds;
-    uint256 public nextPendingRedeemIndex;
-
     event StrategyRegistered(
         address indexed adapter, uint16 targetWeightBps, uint16 priority, bool isAsync, bool isActive
     );
@@ -47,6 +44,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         address indexed adapter, uint16 targetWeightBps, uint16 priority, bool isAsync, bool isActive
     );
     event StrategyOrderUpdated(address[] orderedStrategies);
+    event AdapterPauseUpdated(address indexed adapter, bool paused);
     event RebalanceEvaluated(
         uint256 totalCash,
         uint256 lockedLiabilities,
@@ -55,19 +53,23 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         uint256 targetCash,
         uint256 threshold
     );
-    event InvestExecuted(address indexed adapter, uint256 amountUSDC, uint256 sharesOrPos);
-    event InvestSkipped(address indexed adapter, uint256 amountUSDC);
-    event DivestExecuted(address indexed adapter, uint256 requestedUSDC, uint256 receivedUSDC);
-    event DivestSkipped(address indexed adapter, uint256 requestedUSDC);
-    event AsyncRedeemRequested(address indexed adapter, uint256 amountUSDC, uint256 inFlightId);
-    event DivestIncomplete(uint256 remainingUSDC);
-    event RedeemBatchProcessing(uint256 indexed batchSize, uint256 batchTotalUSDC, uint256 shortfallUSDC);
-    event RedeemBatchReady(uint256 indexed batchSize, uint256 requiredUSDC, uint256 clearedInFlightUSDC);
+    event InvestExecuted(address indexed adapter, uint256 amountAsset, uint256 sharesOrPos);
+    event InvestSkipped(address indexed adapter, uint256 amountAsset);
+    event RebalanceInvest(uint256 requestedAsset, uint256 investedAsset, uint256 remainingAsset);
+    event DivestExecuted(address indexed adapter, uint256 requestedAsset, uint256 receivedAsset);
+    event DivestSkipped(address indexed adapter, uint256 requestedAsset);
+    event AsyncRedeemRequested(address indexed adapter, uint256 amountAsset, uint256 inFlightId);
+    event DivestIncomplete(uint256 remainingAsset);
+    event RedeemBatchProcessing(uint256 indexed batchSize, uint256 batchTotalAsset, uint256 shortfallAsset);
+    event RedeemBatchReady(uint256 indexed batchSize, uint256 requiredAsset, uint256 clearedInFlightAsset);
+    event AdapterAssetsClaimed(address indexed adapter, address indexed posToken, uint256 posClaimed, uint256 assetClaimed);
 
     error InvalidAddress();
     error InvalidBps();
+    error InvalidExecutorContract(address executor);
     error CooldownNotElapsed();
     error InvalidStrategy(address adapter);
+    error InvalidPriorityOrder(address adapter);
     error StrategyInactive(address adapter);
     error WeightsMustBe10000(uint256 actualTotalWeight);
     error InsufficientCashForReady(uint256 required, uint256 available);
@@ -77,24 +79,33 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     error BatchAlreadyReady(bytes32 batchKey);
     error IdsNotSorted();
     error InvalidRequestState(uint256 id, RequestStatus status);
-    error InFlightInsufficient(uint256 remaining);
-    error InFlightAmountMismatch(uint256 provided, uint256 expected);
+    error InvalidRedeemInFlight(uint256 inFlightId);
 
     constructor() {
         _disableInitializers();
     }
 
+    // =============================================================
+    // Initialization
+    // =============================================================
+
     function initialize(
         address vault_,
         address admin,
-        address operator,
-        address executor,
+        address strategyManager,
+        address executorGateway,
         uint16 bufferTargetBps_,
         uint16 rebalanceThresholdBps_,
         uint64 rebalanceCooldown_
     ) external initializer {
-        if (vault_ == address(0) || admin == address(0) || executor == address(0)) {
+        if (
+            vault_ == address(0) || admin == address(0) || strategyManager == address(0)
+                || executorGateway == address(0)
+        ) {
             revert InvalidAddress();
+        }
+        if (executorGateway.code.length == 0) {
+            revert InvalidExecutorContract(executorGateway);
         }
         if (bufferTargetBps_ > BPS_DENOMINATOR || rebalanceThresholdBps_ > BPS_DENOMINATOR) {
             revert InvalidBps();
@@ -112,9 +123,13 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         rebalanceCooldown = rebalanceCooldown_;
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
-        _grantRole(OPERATOR_MANAGER_ROLE, operator);
-        _grantRole(EXECUTOR_ROLE, executor);
+        _grantRole(STRATEGY_MANAGER_ROLE, strategyManager);
+        _grantRole(EXECUTOR_ROLE, executorGateway);
     }
+
+    // =============================================================
+    // Parameter Management
+    // =============================================================
 
     function strategyOrderLength() external view returns (uint256) {
         return strategyOrder.length;
@@ -122,7 +137,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
 
     function setRiskParams(uint16 bufferTargetBps_, uint16 rebalanceThresholdBps_, uint64 rebalanceCooldown_)
         external
-        onlyRole(OPERATOR_MANAGER_ROLE)
+        onlyRole(STRATEGY_MANAGER_ROLE)
     {
         if (bufferTargetBps_ > BPS_DENOMINATOR || rebalanceThresholdBps_ > BPS_DENOMINATOR) {
             revert InvalidBps();
@@ -139,7 +154,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         bool isAsync,
         bool isActive,
         address receiptReceiver
-    ) external onlyRole(OPERATOR_MANAGER_ROLE) {
+    ) external onlyRole(STRATEGY_MANAGER_ROLE) {
         if (adapter == address(0) || receiptReceiver == address(0)) {
             revert InvalidAddress();
         }
@@ -169,7 +184,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         bool isAsync,
         bool isActive,
         address receiptReceiver
-    ) external onlyRole(OPERATOR_MANAGER_ROLE) {
+    ) external onlyRole(STRATEGY_MANAGER_ROLE) {
         if (targetWeightBps > BPS_DENOMINATOR) {
             revert InvalidBps();
         }
@@ -190,7 +205,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         emit StrategyUpdated(adapter, targetWeightBps, priority, isAsync, isActive);
     }
 
-    function setStrategyOrder(address[] calldata orderedStrategies) external onlyRole(OPERATOR_MANAGER_ROLE) {
+    function setStrategyOrder(address[] calldata orderedStrategies) external onlyRole(STRATEGY_MANAGER_ROLE) {
         uint256 len = orderedStrategies.length;
         delete strategyOrder;
 
@@ -212,7 +227,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
             }
 
             if (i > 0 && info.priority < lastPriority) {
-                revert InvalidStrategy(adapter);
+                revert InvalidPriorityOrder(adapter);
             }
             lastPriority = info.priority;
 
@@ -225,6 +240,38 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         }
         emit StrategyOrderUpdated(orderedStrategies);
     }
+
+    // =============================================================
+    // Emergency Controls
+    // =============================================================
+
+    /// @notice Set adapter pause state via controller.
+    /// @dev Controller must hold PAUSER_ROLE on target adapter.
+    function setAdapterPaused(address adapter, bool paused_) external onlyRole(STRATEGY_MANAGER_ROLE) nonReentrant {
+        if (!strategyInfo[adapter].exists) {
+            revert InvalidStrategy(adapter);
+        }
+        IStrategyAdapter(adapter).setPaused(paused_);
+        emit AdapterPauseUpdated(adapter, paused_);
+    }
+
+    /// @notice Batch set adapter pause state via controller.
+    /// @dev Controller must hold PAUSER_ROLE on each target adapter.
+    function setAdaptersPaused(address[] calldata adapters, bool paused_) external onlyRole(STRATEGY_MANAGER_ROLE) nonReentrant {
+        uint256 len = adapters.length;
+        for (uint256 i = 0; i < len; i++) {
+            address adapter = adapters[i];
+            if (!strategyInfo[adapter].exists) {
+                revert InvalidStrategy(adapter);
+            }
+            IStrategyAdapter(adapter).setPaused(paused_);
+            emit AdapterPauseUpdated(adapter, paused_);
+        }
+    }
+
+    // =============================================================
+    // Business Entry Points
+    // =============================================================
 
     function rebalance() external onlyRole(EXECUTOR_ROLE) nonReentrant {
         if (block.timestamp < uint256(lastRebalance) + uint256(rebalanceCooldown)) {
@@ -244,7 +291,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         lastRebalance = uint64(block.timestamp);
     }
 
-    function processRedeemBatch(uint256[] calldata ids, uint256 batchTotalUSDC)
+    function processRedeemBatch(uint256[] calldata ids, uint256 batchTotalAsset)
         external
         onlyRole(EXECUTOR_ROLE)
         nonReentrant
@@ -261,15 +308,19 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
 
         uint256 freeCash = _freeCash();
         uint256 shortfall;
-        if (freeCash < batchTotalUSDC) {
-            shortfall = batchTotalUSDC - freeCash;
+        if (freeCash < batchTotalAsset) {
+            shortfall = batchTotalAsset - freeCash;
             _divest(shortfall);
         }
 
-        emit RedeemBatchProcessing(ids.length, batchTotalUSDC, shortfall);
+        emit RedeemBatchProcessing(ids.length, batchTotalAsset, shortfall);
     }
 
-    function allocateAssetsBatch(uint256[] calldata ids, uint256 clearedInFlightAmount)
+    // =============================================================
+    // Business - Redemption Pipeline
+    // =============================================================
+
+    function allocateAssetsBatch(uint256[] calldata ids, uint256[] calldata inFlightIds)
         external
         onlyRole(EXECUTOR_ROLE)
         nonReentrant
@@ -284,20 +335,47 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
             revert BatchAlreadyReady(batchKey);
         }
 
-        if (clearedInFlightAmount > 0) {
-            _confirmRedeemInFlight(clearedInFlightAmount);
-        }
+        uint256 clearedInFlightAmount = _confirmRedeemInFlightIds(inFlightIds);
 
-        uint256 required = _batchRequiredAssets(ids);
+        (uint256 required, uint256[] memory settledAssets) = _batchRequiredAssets(ids);
         uint256 available = asset.balanceOf(address(vault));
         if (available < required) {
             revert InsufficientCashForReady(required, available);
         }
 
-        vault.markRequestsReady(ids);
+        vault.markRequestsReady(ids, settledAssets);
         readyBatchDone[batchKey] = true;
         emit RedeemBatchReady(ids.length, required, clearedInFlightAmount);
     }
+
+    /// @notice Pull settled assets from adapter back to Vault (operator-driven, event-listener flow).
+    function claimAdapterAssets(address adapter, uint256 posAmount, uint256 assetAmount)
+        external
+        onlyRole(EXECUTOR_ROLE)
+        nonReentrant
+    {
+        StrategyInfo memory info = strategyInfo[adapter];
+        if (!info.exists) {
+            revert InvalidStrategy(adapter);
+        }
+
+        address token = _posToken(adapter);
+        uint256 posClaimed;
+        uint256 assetClaimed;
+
+        if (token != address(0) && posAmount > 0) {
+            posClaimed = IStrategyAdapter(adapter).claimToVault(token, posAmount);
+        }
+        if (assetAmount > 0) {
+            assetClaimed = IStrategyAdapter(adapter).claimToVault(address(asset), assetAmount);
+        }
+
+        emit AdapterAssetsClaimed(adapter, token, posClaimed, assetClaimed);
+    }
+
+    // =============================================================
+    // Business Helpers
+    // =============================================================
 
     function _readRebalanceState()
         internal
@@ -334,32 +412,69 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         }
     }
 
+    // =============================================================
+    // Business - Rebalance Core
+    // =============================================================
+
     function _invest(uint256 excessCash) internal {
+        uint256 totalAssets =
+            asset.balanceOf(address(vault)) + _totalStrategyValue() + vault.totalInvestInFlight() + vault.totalRedeemInFlight();
+        uint256 requested = excessCash;
+        uint256 remaining = excessCash;
         uint256 len = strategyOrder.length;
+
         for (uint256 i = 0; i < len; i++) {
+            if (remaining == 0) {
+                break;
+            }
+
             address adapter = strategyOrder[i];
             StrategyInfo memory info = strategyInfo[adapter];
             if (!info.isActive) {
                 continue;
             }
 
-            uint256 alloc = (excessCash * info.targetWeightBps) / BPS_DENOMINATOR;
+            uint256 targetBalance = (totalAssets * info.targetWeightBps) / BPS_DENOMINATOR;
+            uint256 currentBalance;
+            try IStrategyAdapter(adapter).totalValue() returns (uint256 v) {
+                currentBalance = v;
+            } catch {
+                continue;
+            }
+
+            if (currentBalance >= targetBalance) {
+                continue;
+            }
+
+            uint256 shortfall = targetBalance - currentBalance;
+            uint256 alloc = shortfall < remaining ? shortfall : remaining;
             if (alloc == 0) {
                 continue;
             }
 
             vault.approveToAdapter(adapter, address(asset), alloc);
             try IStrategyAdapter(adapter).deposit(alloc, info.receiptReceiver) returns (uint256 sharesOrPos) {
+                if (info.isAsync) {
+                    uint256 posAmount = _estimatePosAmount(adapter, alloc, sharesOrPos);
+                    if (posAmount > 0) {
+                        address token = _posToken(adapter);
+                        vault.createInFlight(adapter, token, posAmount, alloc, true);
+                    }
+                }
+
                 emit InvestExecuted(adapter, alloc, sharesOrPos);
+                remaining -= alloc;
             } catch {
                 emit InvestSkipped(adapter, alloc);
             }
             vault.approveToAdapter(adapter, address(asset), 0);
         }
+
+        emit RebalanceInvest(requested, requested - remaining, remaining);
     }
 
-    function _divest(uint256 shortfallUSDC) internal {
-        uint256 remaining = shortfallUSDC;
+    function _divest(uint256 shortfall) internal {
+        uint256 remaining = shortfall;
         uint256 len = strategyOrder.length;
 
         for (uint256 i = 0; i < len; i++) {
@@ -383,24 +498,45 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
                 continue;
             }
 
-            uint256 toWithdraw = remaining < value ? remaining : value;
+            // Asset-denominated amount (e.g. USDC/USDT), not position-token amount.
+            uint256 toWithdrawAsset = remaining < value ? remaining : value;
             if (info.isAsync) {
-                uint256 inFlightId = vault.createInFlight(adapter, address(asset), 0, toWithdraw, false);
-                pendingRedeemInFlightIds.push(inFlightId);
-                emit AsyncRedeemRequested(adapter, toWithdraw, inFlightId);
-                remaining -= toWithdraw;
+                address token = _posToken(adapter);
+                if (token == address(0)) {
+                    emit DivestSkipped(adapter, toWithdrawAsset);
+                    continue;
+                }
+
+                // Convert asset amount into position-token amount for protocol redeem.
+                uint256 posAmount = _estimatePosAmount(adapter, toWithdrawAsset, toWithdrawAsset);
+                if (posAmount == 0) {
+                    posAmount = toWithdrawAsset;
+                }
+
+                vault.approveToAdapter(adapter, token, posAmount);
+                try IStrategyAdapter(adapter).requestRedeemAsync(toWithdrawAsset, address(vault)) {}
+                catch {
+                    vault.approveToAdapter(adapter, token, 0);
+                    emit DivestSkipped(adapter, toWithdrawAsset);
+                    continue;
+                }
+                vault.approveToAdapter(adapter, token, 0);
+
+                uint256 inFlightId = vault.createInFlight(adapter, token, posAmount, toWithdrawAsset, false);
+                emit AsyncRedeemRequested(adapter, toWithdrawAsset, inFlightId);
+                remaining -= toWithdrawAsset;
                 continue;
             }
 
-            try IStrategyAdapter(adapter).withdrawSync(toWithdraw, address(vault)) returns (uint256 received) {
-                emit DivestExecuted(adapter, toWithdraw, received);
+            try IStrategyAdapter(adapter).withdrawSync(toWithdrawAsset, address(vault)) returns (uint256 received) {
+                emit DivestExecuted(adapter, toWithdrawAsset, received);
                 if (received >= remaining) {
                     remaining = 0;
                 } else {
                     remaining -= received;
                 }
             } catch {
-                emit DivestSkipped(adapter, toWithdraw);
+                emit DivestSkipped(adapter, toWithdrawAsset);
             }
         }
 
@@ -409,42 +545,64 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         }
     }
 
-    function _confirmRedeemInFlight(uint256 clearedInFlightAmount) internal {
-        uint256 remaining = clearedInFlightAmount;
-        uint256 index = nextPendingRedeemIndex;
+    // =============================================================
+    // In-Flight Accounting Helpers
+    // =============================================================
 
-        while (remaining > 0) {
-            if (index >= pendingRedeemInFlightIds.length) {
-                revert InFlightInsufficient(remaining);
-            }
-
-            uint256 inFlightId = pendingRedeemInFlightIds[index];
+    function _confirmRedeemInFlightIds(uint256[] calldata inFlightIds) internal returns (uint256 clearedAmount) {
+        uint256 len = inFlightIds.length;
+        for (uint256 i = 0; i < len; i++) {
+            uint256 inFlightId = inFlightIds[i];
             (,,,, uint256 usdcAmount,, bool isInvest,, InFlightStatus status) = vault.inFlightRecords(inFlightId);
-
-            if (isInvest || status != InFlightStatus.PENDING) {
-                index++;
-                continue;
-            }
-
-            if (remaining < usdcAmount) {
-                revert InFlightAmountMismatch(remaining, usdcAmount);
+            if (isInvest || status != InFlightStatus.PENDING || usdcAmount == 0) {
+                revert InvalidRedeemInFlight(inFlightId);
             }
 
             vault.confirmInFlight(inFlightId, usdcAmount);
-            remaining -= usdcAmount;
-            index++;
+            clearedAmount += usdcAmount;
         }
-
-        nextPendingRedeemIndex = index;
     }
 
-    function _batchRequiredAssets(uint256[] calldata ids) internal view returns (uint256 required) {
+    function _estimatePosAmount(address adapter, uint256 assetAmount, uint256 fallbackAmount)
+        internal
+        view
+        returns (uint256 posAmount)
+    {
+        try IStrategyAdapter(adapter).estimatePosAmount(assetAmount) returns (uint256 est) {
+            posAmount = est;
+        } catch {
+            posAmount = fallbackAmount;
+        }
+    }
+
+    function _posToken(address adapter) internal view returns (address token) {
+        try IStrategyAdapter(adapter).posToken() returns (address t) {
+            token = t;
+        } catch {
+            token = address(0);
+        }
+    }
+
+    // =============================================================
+    // Batch Validation Helpers
+    // =============================================================
+
+    function _batchRequiredAssets(uint256[] calldata ids)
+        internal
+        view
+        returns (uint256 required, uint256[] memory settledAssets)
+    {
+        settledAssets = new uint256[](ids.length);
         for (uint256 i = 0; i < ids.length; i++) {
-            (,,, uint256 assets_,, RequestStatus status) = vault.requests(ids[i]);
+            (,,, uint256 estimatedAssets_, uint256 settledAssets_,, RequestStatus status) = vault.requests(ids[i]);
             if (status != RequestStatus.PROCESSING && status != RequestStatus.READY) {
                 revert InvalidRequestState(ids[i], status);
             }
-            required += assets_;
+
+            // Before READY, request.settledAssets is usually 0. Use estimatedAssets as default settlement.
+            uint256 effectiveSettled = settledAssets_ == 0 ? estimatedAssets_ : settledAssets_;
+            settledAssets[i] = effectiveSettled;
+            required += effectiveSettled;
         }
     }
 

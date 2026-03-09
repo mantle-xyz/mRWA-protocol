@@ -6,8 +6,9 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {MantleYieldVault} from "../../src/vault/MantleYieldVault.sol";
 import {VaultFactory} from "../../src/vault/VaultFactory.sol";
-import {IMantleYieldVault, ISanctionsOracle} from "../../src/vault/interfaces/IMantleYieldVault.sol";
-import {IStrategyAdapter} from "../../src/adapters/interfaces/IStrategyAdapter.sol";
+import {IMantleYieldVault} from "../../src/interfaces/vault/IMantleYieldVault.sol";
+import {ISanctionsOracle} from "../../src/interfaces/oracle/ISanctionsOracle.sol";
+import {IStrategyAdapter} from "../../src/interfaces/adapters/IStrategyAdapter.sol";
 
 // =============================================================
 // Mocks (same as test file, reusable)
@@ -27,13 +28,45 @@ contract MockUSDC is ERC20 {
 
 contract MockSanctionsOracle is ISanctionsOracle {
     mapping(address => bool) public blacklisted;
+    uint256 public totalSanctionedCount;
+    uint256 public lastUpdateTimestamp;
+    uint256 public batchNonce;
+    uint256 public constant MAX_BATCH_SIZE = 200;
 
-    function isBlacklisted(address account) external view override returns (bool) {
+    function isSanctioned(address account) external view override returns (bool) {
         return blacklisted[account];
     }
 
-    function setBlacklisted(address account, bool status) external {
+    function setBlacklisted(address account, bool status) public {
+        bool prev = blacklisted[account];
         blacklisted[account] = status;
+        if (prev != status) {
+            if (status) {
+                totalSanctionedCount++;
+            } else {
+                totalSanctionedCount--;
+            }
+            lastUpdateTimestamp = block.timestamp;
+        }
+    }
+
+    function updateSanctionStatus(address account, bool sanctioned) external override {
+        setBlacklisted(account, sanctioned);
+        emit SanctionStatusUpdated(account, sanctioned);
+        emit BatchSanctionUpdated(batchNonce++, 1, 1, sanctioned);
+    }
+
+    function updateSanctionStatusBatch(address[] calldata accounts, bool sanctioned) external override {
+        uint256 changed;
+        for (uint256 i = 0; i < accounts.length; i++) {
+            bool prev = blacklisted[accounts[i]];
+            if (prev != sanctioned) {
+                setBlacklisted(accounts[i], sanctioned);
+                emit SanctionStatusUpdated(accounts[i], sanctioned);
+                changed++;
+            }
+        }
+        emit BatchSanctionUpdated(batchNonce++, accounts.length, changed, sanctioned);
     }
 }
 
@@ -46,6 +79,14 @@ contract MockStrategyAdapter is IStrategyAdapter {
 
     function asset() external pure override returns (address) {
         return address(0);
+    }
+
+    function posToken() external pure override returns (address) {
+        return address(0);
+    }
+
+    function estimatePosAmount(uint256 assetAmount) external pure override returns (uint256) {
+        return assetAmount;
     }
 
     function vault() external pure override returns (address) {
@@ -68,11 +109,14 @@ contract MockStrategyAdapter is IStrategyAdapter {
         return 0;
     }
 
-    function requestRedeemAsync(uint256, address) external pure override returns (bytes32) {
-        return bytes32(0);
+    function requestRedeemAsync(uint256, address) external pure override {}
+
+    function claimToVault(address, uint256) external pure override returns (uint256) {
+        return 0;
     }
 
-    function panic() external override {}
+    function setPaused(bool) external pure override {}
+
 }
 
 // =============================================================

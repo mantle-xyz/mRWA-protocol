@@ -1,63 +1,57 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import {IDFeedPriceOracle} from "../../interfaces/adapters/digift/IDFeedPriceOracle.sol";
 import {ISubRedManagement} from "../../interfaces/adapters/digift/ISubRedManagement.sol";
-import {AdapterCall, AdapterCodec} from "../../libs/AdapterCodec.sol";
-import {BaseAdapter} from "../base/BaseAdapter.sol";
-import {SubRedCodec} from "./libs/SubRedCodec.sol";
+import {BaseAsync7540Adapter} from "../base/capabilities/BaseAsync7540Adapter.sol";
+
+import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {IERC20, SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 /// @notice Async-first adapter for Digift SubRed subscribe/redeem flow.
-/// @dev Controller drives unified adapter methods; operator bot executes protocol-specific actions.
-contract SubRedManagementAdapter is BaseAdapter {
+/// @dev Controller drives unified adapter methods.
+contract SubRedManagementAdapter is BaseAsync7540Adapter {
     using SafeERC20 for IERC20;
 
     ISubRedManagement public immutable SUB_RED;
     address public immutable ST_TOKEN;
+    /// @notice Optional DFeed price oracle for ST token (e.g. uMINT). If set, estimatePosAmount uses it; else 1:1.
+    address public immutable priceOracle;
 
-    uint64 public subscribeDeadlineWindow = 1 hours;
-    uint256 public redeemNonce;
+    uint64 public subscribeDeadlineWindow = 6 hours;
+    uint64 public redeemDeadlineWindow = 6 hours;
 
-    /// @notice Requested redeem amount waiting for finalize.
-    mapping(bytes32 => uint256) public pendingRedeemUSDC;
-    /// @notice Finalized redeem amount claimable by controller.
-    mapping(bytes32 => uint256) public claimableRedeemUSDC;
-
-    event RedeemRequested(bytes32 indexed requestId, uint256 amountUSDC, address receiver);
-    event RedeemFinalized(bytes32 indexed requestId, uint256 receivedUSDC);
     event SubscribeDeadlineWindowUpdated(uint64 newWindow);
-
-    error InvalidAddress();
-    error InvalidAmount();
-    error InvalidArrayLength();
-    error UnknownAction(uint8 action);
-    error NoClaimable(bytes32 requestId);
+    event RedeemDeadlineWindowUpdated(uint64 newWindow);
 
     /**
      * @notice Initialize Digift SubRed adapter.
-     * @param usdc Base asset used for subscribe/redeem settlement.
      * @param vault_ Vault that owns strategy funds.
      * @param subRedManagement Digift SubRedManagement contract.
-     * @param stToken Target security token (e.g. iSNR).
+     * @param stToken Target security token (e.g. iSNR, uMINT).
      * @param admin Adapter admin role address.
      * @param controller StrategyController role address.
-     * @param operator Operator role address for execute(payload).
+     * @param priceOracle_ Optional DFeedPriceOracle for ST token (e.g. 0xb5d9870e... for uMINT). Pass address(0) for 1:1 estimate.
      */
     constructor(
-        address usdc,
         address vault_,
         address subRedManagement,
         address stToken,
         address admin,
         address controller,
-        address operator
-    ) BaseAdapter(usdc, vault_, admin, controller, operator) {
+        address priceOracle_
+    ) BaseAsync7540Adapter(vault_, admin, controller) {
         if (subRedManagement == address(0) || stToken == address(0)) {
             revert InvalidAddress();
         }
         SUB_RED = ISubRedManagement(subRedManagement);
         ST_TOKEN = stToken;
+        priceOracle = priceOracle_;
     }
+
+    // =============================================================
+    // Adapter Views
+    // =============================================================
 
     /**
      * @notice Strategy display name.
@@ -66,13 +60,85 @@ contract SubRedManagementAdapter is BaseAdapter {
         return "SubRedManagementAdapter";
     }
 
+    function posToken() external view override returns (address) {
+        return ST_TOKEN;
+    }
+
     /**
-     * @notice Return current strategy value in USDC units.
-     * @dev Conservative value; only idle USDC held by adapter.
+     * @notice Estimate ST token amount (in ST raw units) for a given asset amount using DFeed price when oracle is set.
+     * @dev Formula: positionAmount = (amountAsset * 10**oracleDecimals * 10**stDecimals) / (getPrice() * 10**assetDecimals) (floor).
+     *      getPrice() is "asset per 1 ST" (e.g. USDC/USDT per 1 ST). Result is in ST token's smallest unit (e.g. 18 decimals).
+     *      Rounds down. If priceOracle is zero or getPrice() is 0, returns amountAsset scaled to ST raw (1:1 human).
+     */
+    function estimatePosAmount(uint256 amountAsset) external view override returns (uint256 positionAmount) {
+        uint8 assetDecimals = IERC20Metadata(address(ASSET)).decimals();
+        uint8 stDecimals = IERC20Metadata(ST_TOKEN).decimals();
+
+        if (priceOracle == address(0) || amountAsset == 0) {
+            // 1:1 in human terms: scale amountAsset to ST raw
+            return _scaleToStRaw(amountAsset, assetDecimals, stDecimals);
+        }
+        uint256 price = IDFeedPriceOracle(priceOracle).getPrice();
+        if (price == 0) {
+            return _scaleToStRaw(amountAsset, assetDecimals, stDecimals);
+        }
+        uint8 dec = IDFeedPriceOracle(priceOracle).decimals();
+        return (amountAsset * (10 ** dec) * (10 ** stDecimals)) / (price * (10 ** assetDecimals));
+    }
+
+    function _scaleToStRaw(uint256 amountAssetRaw, uint8 assetDecimals, uint8 stDecimals)
+        internal
+        pure
+        returns (uint256)
+    {
+        if (stDecimals >= assetDecimals) {
+            return amountAssetRaw * (10 ** (stDecimals - assetDecimals));
+        }
+        return amountAssetRaw / (10 ** (assetDecimals - stDecimals));
+    }
+
+    function _scaleToAssetRaw(uint256 amountStRaw, uint8 stDecimals, uint8 assetDecimals)
+        internal
+        pure
+        returns (uint256)
+    {
+        if (assetDecimals >= stDecimals) {
+            return amountStRaw * (10 ** (assetDecimals - stDecimals));
+        }
+        return amountStRaw / (10 ** (stDecimals - assetDecimals));
+    }
+
+    function _estimateAssetAmount(uint256 amountPosRaw, uint8 assetDecimals, uint8 stDecimals)
+        internal
+        view
+        returns (uint256)
+    {
+        if (priceOracle == address(0) || amountPosRaw == 0) {
+            return _scaleToAssetRaw(amountPosRaw, stDecimals, assetDecimals);
+        }
+        uint256 price = IDFeedPriceOracle(priceOracle).getPrice();
+        if (price == 0) {
+            return _scaleToAssetRaw(amountPosRaw, stDecimals, assetDecimals);
+        }
+        uint8 dec = IDFeedPriceOracle(priceOracle).decimals();
+        return (amountPosRaw * price * (10 ** assetDecimals)) / ((10 ** dec) * (10 ** stDecimals));
+    }
+
+    /**
+     * @notice Return current strategy value in vault asset units (e.g. USDC/USDT).
+     * @dev Value = adapter idle asset + vault-held position token value (converted by oracle if configured).
      */
     function totalValue() external view override returns (uint256) {
-        return USDC.balanceOf(address(this));
+        uint8 assetDecimals = IERC20Metadata(address(ASSET)).decimals();
+        uint8 stDecimals = IERC20Metadata(ST_TOKEN).decimals();
+        uint256 posBalance = IERC20(ST_TOKEN).balanceOf(VAULT);
+        uint256 posValue = _estimateAssetAmount(posBalance, assetDecimals, stDecimals);
+        return ASSET.balanceOf(address(this)) + posValue;
     }
+
+    // =============================================================
+    // Admin Controls
+    // =============================================================
 
     /**
      * @notice Update subscribe deadline window used by deposit().
@@ -85,167 +151,92 @@ contract SubRedManagementAdapter is BaseAdapter {
     }
 
     /**
+     * @notice Update redeem deadline window used by requestRedeemAsync().
+     * @param newWindow New deadline window in seconds.
+     * @dev Only callable by DEFAULT_ADMIN_ROLE.
+     */
+    function setRedeemDeadlineWindow(uint64 newWindow) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        redeemDeadlineWindow = newWindow;
+        emit RedeemDeadlineWindowUpdated(newWindow);
+    }
+
+    // =============================================================
+    // Controller Actions
+    // =============================================================
+
+    /**
      * @notice Pull funds from Vault and submit subscribe.
-     * @param amountUSDC USDC amount to subscribe.
+     * @param amountAsset Asset amount to subscribe (vault asset raw units).
      * @param receiver Receiver parameter reserved by IStrategyAdapter.
-     * @return Subscribed amount.
+     * @return Subscribed position amount (ST raw units).
      * @dev Only callable by controller when not paused.
      */
-    function deposit(uint256 amountUSDC, address receiver) external override onlyController whenNotPaused returns (uint256) {
-        if (amountUSDC == 0) {
-            revert InvalidAmount();
-        }
-        receiver;
-        // Pull USDC from Vault using temporary allowance set by StrategyController.
-        USDC.safeTransferFrom(VAULT, address(this), amountUSDC);
-        _subscribe(amountUSDC, uint64(block.timestamp + subscribeDeadlineWindow));
-        return amountUSDC;
-    }
-
-    /**
-     * @notice Digift flow is async; sync redeem is not supported.
-     */
-    function withdrawSync(uint256, address) external pure override returns (uint256) {
-        revert Unsupported();
-    }
-
-    /**
-     * @notice Register an async redeem request.
-     * @param amountUSDC Requested redeem amount.
-     * @param receiver Final receiver used to derive deterministic requestId.
-     * @return requestId Unique request key.
-     * @dev Only callable by controller when not paused.
-     */
-    function requestRedeemAsync(uint256 amountUSDC, address receiver)
+    function deposit(uint256 amountAsset, address receiver)
         external
         override
         onlyController
         whenNotPaused
-        returns (bytes32 requestId)
+        returns (uint256)
     {
-        if (amountUSDC == 0 || receiver == address(0)) {
+        if (amountAsset == 0) {
             revert InvalidAmount();
         }
-        // requestId is the async lifecycle key: request -> finalize -> claim.
-        uint256 nonce = ++redeemNonce;
-        requestId = keccak256(abi.encode(address(this), receiver, amountUSDC, nonce, block.chainid));
-        pendingRedeemUSDC[requestId] = amountUSDC;
-        emit RedeemRequested(requestId, amountUSDC, receiver);
+        receiver;
+        // Pull asset from Vault using temporary allowance set by StrategyController.
+        ASSET.safeTransferFrom(VAULT, address(this), amountAsset);
+        _subscribe(amountAsset, uint64(block.timestamp + subscribeDeadlineWindow));
+        _emitAdapterDeposit(amountAsset, receiver, amountAsset);
+        return this.estimatePosAmount(amountAsset);
     }
 
     /**
-     * @notice Transfer finalized redeem proceeds to receiver.
-     * @param requestId Redeem request identifier.
-     * @param receiver Destination address for claimed USDC.
-     * @return actualUSDC Claimed USDC amount.
+     * @notice Register an async redeem request.
+     * @param amountAsset Requested redeem amount (asset raw units).
+     * @dev amountAsset is asset-denominated; ST quantity is derived via estimatePosAmount(amountAsset).
+     * @param receiver Final receiver used to derive deterministic requestId.
      * @dev Only callable by controller when not paused.
+     * @dev Pulls position token from vault, then submits redeem request to SubRed.
      */
-    function claimRedeem(bytes32 requestId, address receiver) external onlyController whenNotPaused returns (uint256 actualUSDC) {
-        if (receiver == address(0)) {
-            revert InvalidAddress();
-        }
-        // Only finalized amounts can be claimed.
-        actualUSDC = claimableRedeemUSDC[requestId];
-        if (actualUSDC == 0) {
-            revert NoClaimable(requestId);
-        }
-        claimableRedeemUSDC[requestId] = 0;
-        USDC.safeTransfer(receiver, actualUSDC);
+    function requestRedeemAsync(uint256 amountAsset, address receiver) external override onlyController whenNotPaused {
+        uint256 quantity = this.estimatePosAmount(amountAsset);
+        IERC20(ST_TOKEN).safeTransferFrom(VAULT, address(this), quantity);
+        _redeem(quantity, uint64(block.timestamp + redeemDeadlineWindow));
+        _registerAsyncRedeem(amountAsset, receiver);
     }
 
-    /**
-     * @notice Execute Digift-specific operator action.
-     * @param payload AdapterCall envelope with action payload.
-     * @return execId Deterministic execution id.
-     * @dev Only callable by OPERATOR_ROLE when not paused.
-     */
-    function execute(bytes calldata payload)
-        external
-        override
-        onlyOperator
-        whenNotPaused
-        nonReentrant
-        returns (bytes32 execId)
-    {
-        // Validate shared envelope (deadline + optional replay salt).
-        AdapterCall memory c = AdapterCodec.decodeCall(payload);
-        _checkCall(c);
-
-        // Route Digift-specific actions.
-        (uint8 action, bytes memory actionData) = SubRedCodec.decodeAction(c.data);
-        bytes32 meta;
-
-        if (action == SubRedCodec.ACTION_SUBSCRIBE) {
-            SubRedCodec.SubscribeAction memory a = abi.decode(actionData, (SubRedCodec.SubscribeAction));
-            _subscribe(a.amountUSDC, a.deadline);
-            meta = bytes32(a.amountUSDC);
-        } else if (action == SubRedCodec.ACTION_SETTLE_SUBSCRIBER) {
-            SubRedCodec.SettleSubscriberAction memory a = abi.decode(actionData, (SubRedCodec.SettleSubscriberAction));
-            _settleSubscriber(a);
-            meta = bytes32(a.investorList.length);
-        } else if (action == SubRedCodec.ACTION_FINALIZE_REDEEM) {
-            SubRedCodec.FinalizeRedeemAction memory a = abi.decode(actionData, (SubRedCodec.FinalizeRedeemAction));
-            uint256 pending = pendingRedeemUSDC[a.requestId];
-            if (pending == 0 || a.receivedUSDC == 0) {
-                revert InvalidAmount();
-            }
-            if (a.receivedUSDC > pending) {
-                revert InvalidAmount();
-            }
-
-            // Move finalized amount from pending bucket to claimable bucket.
-            pendingRedeemUSDC[a.requestId] = pending - a.receivedUSDC;
-            claimableRedeemUSDC[a.requestId] += a.receivedUSDC;
-
-            emit RedeemFinalized(a.requestId, a.receivedUSDC);
-            meta = a.requestId;
-        } else {
-            revert UnknownAction(action);
-        }
-
-        execId = keccak256(abi.encode(address(this), msg.sender, action, c.salt, c.deadline, c.data));
-        emit Execute(execId, action, meta);
-    }
-
-    /**
-     * @notice Pause adapter and revoke SubRed allowance.
-     * @dev Only callable by controller.
-     */
-    function panic() external override onlyController {
-        paused = true;
-        emit Paused(true);
-        USDC.forceApprove(address(SUB_RED), 0);
-    }
+    // =============================================================
+    // Internal Protocol Calls
+    // =============================================================
 
     /**
      * @notice Internal helper to call SubRed subscribe.
-     * @param amountUSDC Amount to subscribe.
+     * @param amountAsset Amount to subscribe (asset raw units).
      * @param deadline Digift subscribe deadline.
+     * @dev This function only sends subscribe request.
      */
-    function _subscribe(uint256 amountUSDC, uint64 deadline) internal {
-        if (amountUSDC == 0) {
+    function _subscribe(uint256 amountAsset, uint64 deadline) internal {
+        if (amountAsset == 0) {
             revert InvalidAmount();
         }
         // Minimum-privilege approval: approve exact amount then reset.
-        USDC.forceApprove(address(SUB_RED), amountUSDC);
-        SUB_RED.subscribe(ST_TOKEN, address(USDC), amountUSDC, deadline);
-        USDC.forceApprove(address(SUB_RED), 0);
+        ASSET.forceApprove(address(SUB_RED), amountAsset);
+        SUB_RED.subscribe(ST_TOKEN, address(ASSET), amountAsset, deadline);
+        ASSET.forceApprove(address(SUB_RED), 0);
     }
 
     /**
-     * @notice Internal helper to settle subscriber batch on SubRedManagement.
-     * @param a Decoded settle action payload.
+     * @notice Internal helper to call SubRed redeem.
+     * @param quantity Amount of ST token (shares) to redeem.
+     * @param deadline Digift redeem deadline.
+     * @dev Approves ST_TOKEN to SubRed then calls redeem.
      */
-    function _settleSubscriber(SubRedCodec.SettleSubscriberAction memory a) internal {
-        uint256 len = a.investorList.length;
-        if (
-            len == 0 || len != a.quantityList.length || len != a.currencyTokenList.length || len != a.amountList.length
-                || len != a.feeList.length
-        ) {
-            revert InvalidArrayLength();
+    function _redeem(uint256 quantity, uint64 deadline) internal {
+        if (quantity == 0) {
+            revert InvalidAmount();
         }
-
-        // Settle distribution/refund through SubRedManagement; does not mint by itself.
-        SUB_RED.settleSubscriber(ST_TOKEN, a.investorList, a.quantityList, a.currencyTokenList, a.amountList, a.feeList);
+        // Minimum-privilege approval: approve exact amount then reset.
+        IERC20(ST_TOKEN).forceApprove(address(SUB_RED), quantity);
+        SUB_RED.redeem(ST_TOKEN, address(ASSET), quantity, deadline);
+        IERC20(ST_TOKEN).forceApprove(address(SUB_RED), 0);
     }
 }

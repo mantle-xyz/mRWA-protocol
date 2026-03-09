@@ -22,6 +22,7 @@ contract OperatorExecutor is Initializable, AccessControlUpgradeable, EIP712Upgr
     uint8 public constant ACTION_REBALANCE = 0;
     uint8 public constant ACTION_PROCESS_REDEEM_BATCH = 1;
     uint8 public constant ACTION_ALLOCATE_ASSETS_BATCH = 2;
+    uint8 public constant ACTION_CLAIM_ADAPTER_ASSETS = 3;
 
     IStrategyController public controller;
 
@@ -99,11 +100,14 @@ contract OperatorExecutor is Initializable, AccessControlUpgradeable, EIP712Upgr
         if (command.action == ACTION_REBALANCE) {
             controller.rebalance();
         } else if (command.action == ACTION_PROCESS_REDEEM_BATCH) {
-            (uint256[] memory ids, uint256 batchTotalUSDC) = abi.decode(command.data, (uint256[], uint256));
-            controller.processRedeemBatch(ids, batchTotalUSDC);
+            (uint256[] memory ids, uint256 batchTotalAsset) = abi.decode(command.data, (uint256[], uint256));
+            controller.processRedeemBatch(ids, batchTotalAsset);
         } else if (command.action == ACTION_ALLOCATE_ASSETS_BATCH) {
-            (uint256[] memory ids, uint256 clearedInFlightAmount) = abi.decode(command.data, (uint256[], uint256));
-            controller.allocateAssetsBatch(ids, clearedInFlightAmount);
+            (uint256[] memory ids, uint256[] memory inFlightIds) = abi.decode(command.data, (uint256[], uint256[]));
+            controller.allocateAssetsBatch(ids, inFlightIds);
+        } else if (command.action == ACTION_CLAIM_ADAPTER_ASSETS) {
+            (address adapter, uint256 posAmount, uint256 assetAmount) = abi.decode(command.data, (address, uint256, uint256));
+            controller.claimAdapterAssets(adapter, posAmount, assetAmount);
         } else {
             revert InvalidAction(command.action);
         }

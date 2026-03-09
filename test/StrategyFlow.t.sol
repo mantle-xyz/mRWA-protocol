@@ -18,6 +18,14 @@ contract MockUSDCFlow is ERC20 {
     }
 }
 
+contract MockSTTokenFlow is ERC20 {
+    constructor(string memory name_, string memory symbol_) ERC20(name_, symbol_) {}
+
+    function mint(address to, uint256 amount) external {
+        _mint(to, amount);
+    }
+}
+
 contract MockSubRedManagementFlow is ISubRedManagement {
     address public lastStToken;
     uint256 public lastAmount;
@@ -30,14 +38,7 @@ contract MockSubRedManagementFlow is ISubRedManagement {
         ERC20(currencyToken).transferFrom(msg.sender, address(this), amount);
     }
 
-    function settleSubscriber(
-        address,
-        address[] calldata,
-        uint256[] calldata,
-        address[] calldata,
-        uint256[] calldata,
-        uint256[] calldata
-    ) external override {}
+    function redeem(address, address, uint256, uint256) external override {}
 }
 
 contract MockVaultFlow is IControllerVault {
@@ -101,8 +102,7 @@ contract MockVaultFlow is IControllerVault {
     }
 
     function approveToAdapter(address adapter, address token, uint256 amount) external override {
-        require(token == address(usdc), "BAD_TOKEN");
-        usdc.approve(adapter, amount);
+        ERC20(token).approve(adapter, amount);
     }
 
     function updateRequestBatch(uint256[] calldata ids, RequestStatus status) external override {
@@ -111,8 +111,10 @@ contract MockVaultFlow is IControllerVault {
         }
     }
 
-    function markRequestsReady(uint256[] calldata ids) external override {
+    function markRequestsReady(uint256[] calldata ids, uint256[] calldata settledAssets) external override {
+        require(ids.length == settledAssets.length, "LENGTH_MISMATCH");
         for (uint256 i = 0; i < ids.length; i++) {
+            liabilities[ids[i]] = settledAssets[i];
             requestStatus[ids[i]] = RequestStatus.READY;
         }
     }
@@ -152,9 +154,19 @@ contract MockVaultFlow is IControllerVault {
         external
         view
         override
-        returns (uint256 id, address owner, uint256 shares, uint256 assets, uint256 timestamp, RequestStatus status)
+        returns (
+            uint256,
+            address,
+            uint256,
+            uint256,
+            uint256,
+            uint256,
+            RequestStatus
+        )
     {
-        return (requestId, address(0), 0, liabilities[requestId], 0, requestStatus[requestId]);
+        uint256 assets = liabilities[requestId];
+        RequestStatus status = requestStatus[requestId];
+        return (requestId, address(0), 0, assets, status == RequestStatus.READY ? assets : 0, 0, status);
     }
 
     function inFlightRecords(uint256 inFlightId)
@@ -194,13 +206,13 @@ contract StrategyFlowTest is Test {
     StrategyController internal controller;
     MockSubRedManagementFlow internal subRedISNR;
     MockSubRedManagementFlow internal subRedUMINT;
+    MockSTTokenFlow internal iSNRToken;
+    MockSTTokenFlow internal uMINTToken;
     SubRedManagementAdapter internal adapterISNR;
     SubRedManagementAdapter internal adapterUMINT;
 
     address internal user = makeAddr("user");
     address internal operator = makeAddr("operator");
-    address internal iSNR = makeAddr("iSNR");
-    address internal uMINT = makeAddr("uMINT");
 
     function setUp() public {
         usdc = new MockUSDCFlow();
@@ -214,12 +226,14 @@ contract StrategyFlowTest is Test {
 
         subRedISNR = new MockSubRedManagementFlow();
         subRedUMINT = new MockSubRedManagementFlow();
+        iSNRToken = new MockSTTokenFlow("iSNR", "iSNR");
+        uMINTToken = new MockSTTokenFlow("uMINT", "uMINT");
 
         adapterISNR = new SubRedManagementAdapter(
-            address(usdc), address(vault), address(subRedISNR), iSNR, address(this), address(controller), operator
+            address(vault), address(subRedISNR), address(iSNRToken), address(this), address(controller), address(0)
         );
         adapterUMINT = new SubRedManagementAdapter(
-            address(usdc), address(vault), address(subRedUMINT), uMINT, address(this), address(controller), operator
+            address(vault), address(subRedUMINT), address(uMINTToken), address(this), address(controller), address(0)
         );
 
         controller.registerStrategy(address(adapterISNR), 5000, 1, true, true, address(adapterISNR));
@@ -243,8 +257,8 @@ contract StrategyFlowTest is Test {
 
         assertEq(subRedISNR.subscribeCount(), 1);
         assertEq(subRedUMINT.subscribeCount(), 1);
-        assertEq(subRedISNR.lastStToken(), iSNR);
-        assertEq(subRedUMINT.lastStToken(), uMINT);
+        assertEq(subRedISNR.lastStToken(), address(iSNRToken));
+        assertEq(subRedUMINT.lastStToken(), address(uMINTToken));
         assertEq(subRedISNR.lastAmount(), 500e18);
         assertEq(subRedUMINT.lastAmount(), 500e18);
         assertEq(usdc.balanceOf(address(vault)), 0);
@@ -252,10 +266,9 @@ contract StrategyFlowTest is Test {
 
     function test_AsyncProcessBatchAddsInFlightAndMovesReady() public {
         controller.rebalance();
-
-        // Make adapter-reported value non-zero for async divest path.
-        usdc.mint(address(adapterISNR), 200e18);
-        usdc.mint(address(adapterUMINT), 200e18);
+        // Simulate settled position tokens held by vault.
+        iSNRToken.mint(address(vault), 500e18);
+        uMINTToken.mint(address(vault), 500e18);
 
         uint256[] memory ids = new uint256[](2);
         ids[0] = 101;
@@ -264,7 +277,9 @@ contract StrategyFlowTest is Test {
         vault.setLiability(ids[1], 150e18);
         vault.setLockedTotal(300e18);
 
+        uint256 inFlightBefore = vault.inFlightIdCursor();
         controller.processRedeemBatch(ids, 300e18);
+        uint256 inFlightAfter = vault.inFlightIdCursor();
 
         // PROCESSING
         assertEq(uint8(vault.requestStatus(ids[0])), uint8(RequestStatus.PROCESSING));
@@ -274,7 +289,12 @@ contract StrategyFlowTest is Test {
         // Simulate T+N settlement funds returned to vault.
         usdc.mint(address(vault), 300e18);
 
-        controller.allocateAssetsBatch(ids, 300e18);
+        uint256 redeemInFlightCount = inFlightAfter - inFlightBefore;
+        uint256[] memory inFlightIds = new uint256[](redeemInFlightCount);
+        for (uint256 i = 0; i < redeemInFlightCount; i++) {
+            inFlightIds[i] = inFlightBefore + i + 1;
+        }
+        controller.allocateAssetsBatch(ids, inFlightIds);
 
         // READY
         assertEq(uint8(vault.requestStatus(ids[0])), uint8(RequestStatus.READY));

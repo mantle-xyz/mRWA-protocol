@@ -5,9 +5,6 @@ import {Test} from "forge-std/Test.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {SubRedManagementAdapter} from "../src/adapters/digift/SubRedManagementAdapter.sol";
 import {ISubRedManagement} from "../src/interfaces/adapters/digift/ISubRedManagement.sol";
-import {AdapterCall} from "../src/libs/AdapterCodec.sol";
-import {SubRedCodec} from "../src/adapters/digift/libs/SubRedCodec.sol";
-import {BaseAdapter} from "../src/adapters/base/BaseAdapter.sol";
 
 contract MockUSDC is ERC20 {
     constructor() ERC20("MockUSDC", "mUSDC") {}
@@ -17,13 +14,45 @@ contract MockUSDC is ERC20 {
     }
 }
 
+contract MockSTToken is ERC20 {
+    constructor() ERC20("MockST", "mST") {}
+
+    function mint(address to, uint256 amount) external {
+        _mint(to, amount);
+    }
+}
+
+contract MockVaultForAdapter {
+    ERC20 public immutable usdc;
+
+    constructor(address asset_) {
+        usdc = ERC20(asset_);
+    }
+
+    function asset() external view returns (address) {
+        return address(usdc);
+    }
+
+    function approveToAdapter(address adapter, uint256 amount) external {
+        usdc.approve(adapter, amount);
+    }
+
+    function approveTokenToAdapter(address token, address adapter, uint256 amount) external {
+        ERC20(token).approve(adapter, amount);
+    }
+}
+
 contract MockSubRedManagement is ISubRedManagement {
     address public lastStToken;
     address public lastCurrencyToken;
     uint256 public lastAmount;
     uint256 public lastDeadline;
     uint256 public subscribeCount;
-    uint256 public settleCount;
+    uint256 public redeemCount;
+    address public lastRedeemStToken;
+    address public lastRedeemCurrencyToken;
+    uint256 public lastRedeemQuantity;
+    uint256 public lastRedeemDeadline;
 
     function subscribe(address stToken, address currencyToken, uint256 amount, uint256 deadline) external override {
         lastStToken = stToken;
@@ -35,107 +64,81 @@ contract MockSubRedManagement is ISubRedManagement {
         ERC20(currencyToken).transferFrom(msg.sender, address(this), amount);
     }
 
-    function settleSubscriber(
-        address,
-        address[] calldata,
-        uint256[] calldata,
-        address[] calldata,
-        uint256[] calldata,
-        uint256[] calldata
-    ) external override {
-        settleCount++;
+    function redeem(address stToken, address currencyToken, uint256 quantity, uint256 deadline) external override {
+        lastRedeemStToken = stToken;
+        lastRedeemCurrencyToken = currencyToken;
+        lastRedeemQuantity = quantity;
+        lastRedeemDeadline = deadline;
+        redeemCount++;
     }
 }
 
 contract SubRedManagementAdapterTest is Test {
     MockUSDC internal usdc;
+    MockVaultForAdapter internal vault;
     MockSubRedManagement internal subRed;
+    MockSTToken internal stToken;
     SubRedManagementAdapter internal adapter;
 
     address internal operator = makeAddr("operator");
-    address internal stToken = makeAddr("stToken");
     address internal receiver = makeAddr("receiver");
+    address internal other = makeAddr("other");
 
     function setUp() public {
         usdc = new MockUSDC();
+        vault = new MockVaultForAdapter(address(usdc));
         subRed = new MockSubRedManagement();
+        stToken = new MockSTToken();
 
-        // Use the test contract as vault and controller for simplicity.
         adapter = new SubRedManagementAdapter(
-            address(usdc), address(this), address(subRed), stToken, address(this), address(this), operator
+            address(vault), address(subRed), address(stToken), address(this), address(this), address(0)
         );
     }
 
     function test_DepositPullsFromVaultAndSubscribes() public {
-        usdc.mint(address(this), 1_000e18);
-        usdc.approve(address(adapter), 500e18);
+        usdc.mint(address(vault), 1_000e18);
+        vault.approveToAdapter(address(adapter), 500e18);
 
         uint256 subscribed = adapter.deposit(100e18, address(0));
         assertEq(subscribed, 100e18);
         assertEq(subRed.subscribeCount(), 1);
-        assertEq(subRed.lastStToken(), stToken);
+        assertEq(subRed.lastStToken(), address(stToken));
         assertEq(subRed.lastCurrencyToken(), address(usdc));
         assertEq(subRed.lastAmount(), 100e18);
         assertEq(usdc.balanceOf(address(subRed)), 100e18);
     }
 
-    function test_RequestFinalizeClaimFlow() public {
-        bytes32 requestId = adapter.requestRedeemAsync(200e18, receiver);
-        assertEq(adapter.pendingRedeemUSDC(requestId), 200e18);
+    function test_RequestRedeemAsyncPullsPosTokenFromVault() public {
+        stToken.mint(address(vault), 300e18);
+        vault.approveTokenToAdapter(address(stToken), address(adapter), 300e18);
 
-        // Simulate physical funds received by adapter before finalize.
+        adapter.requestRedeemAsync(200e18, receiver);
+        assertEq(adapter.redeemNonce(), 1);
+        assertEq(subRed.redeemCount(), 1);
+        assertEq(subRed.lastRedeemStToken(), address(stToken));
+        assertEq(subRed.lastRedeemCurrencyToken(), address(usdc));
+        assertEq(subRed.lastRedeemQuantity(), 200e18);
+        assertEq(stToken.balanceOf(address(adapter)), 200e18);
+    }
+
+    function test_ClaimToVault_ReturnsTokenBalance() public {
         usdc.mint(address(adapter), 150e18);
-
-        SubRedCodec.FinalizeRedeemAction memory finalizeAction =
-            SubRedCodec.FinalizeRedeemAction({requestId: requestId, receivedUSDC: 150e18});
-        bytes memory actionData = abi.encode(uint8(SubRedCodec.ACTION_FINALIZE_REDEEM), abi.encode(finalizeAction));
-        AdapterCall memory envelope = AdapterCall({deadline: uint64(block.timestamp + 1 hours), salt: bytes32("x"), data: actionData});
-
-        vm.prank(operator);
-        adapter.execute(abi.encode(envelope));
-
-        assertEq(adapter.pendingRedeemUSDC(requestId), 50e18);
-        assertEq(adapter.claimableRedeemUSDC(requestId), 150e18);
-
-        uint256 claimed = adapter.claimRedeem(requestId, receiver);
-        assertEq(claimed, 150e18);
-        assertEq(adapter.claimableRedeemUSDC(requestId), 0);
-        assertEq(usdc.balanceOf(receiver), 150e18);
+        uint256 claimed = adapter.claimToVault(address(usdc), 100e18);
+        assertEq(claimed, 100e18);
+        assertEq(usdc.balanceOf(address(vault)), 100e18);
+        assertEq(usdc.balanceOf(address(adapter)), 50e18);
     }
 
-    function test_RevertWhen_ExecuteCalledByNonOperator() public {
-        AdapterCall memory envelope = AdapterCall({deadline: 0, salt: bytes32(0), data: abi.encode(uint8(255), bytes(""))});
-        vm.expectRevert(BaseAdapter.NotOperator.selector);
-        adapter.execute(abi.encode(envelope));
-    }
-
-    function test_RevertWhen_ExecuteDeadlineExpired() public {
-        vm.warp(100);
-        AdapterCall memory envelope = AdapterCall({
-            deadline: uint64(block.timestamp - 1),
-            salt: bytes32("late"),
-            data: abi.encode(uint8(SubRedCodec.ACTION_SUBSCRIBE), abi.encode(SubRedCodec.SubscribeAction(1, uint64(block.timestamp))))
-        });
-
-        vm.prank(operator);
-        vm.expectRevert(BaseAdapter.DeadlineExceeded.selector);
-        adapter.execute(abi.encode(envelope));
-    }
-
-    function test_RevertWhen_ExecuteSaltReused() public {
-        bytes32 requestId = adapter.requestRedeemAsync(10e18, receiver);
-        usdc.mint(address(adapter), 10e18);
-
-        SubRedCodec.FinalizeRedeemAction memory finalizeAction =
-            SubRedCodec.FinalizeRedeemAction({requestId: requestId, receivedUSDC: 10e18});
-        bytes memory actionData = abi.encode(uint8(SubRedCodec.ACTION_FINALIZE_REDEEM), abi.encode(finalizeAction));
-        AdapterCall memory envelope = AdapterCall({deadline: uint64(block.timestamp + 1 hours), salt: bytes32("dup"), data: actionData});
-
-        vm.prank(operator);
-        adapter.execute(abi.encode(envelope));
-
-        vm.prank(operator);
+    function test_RevertWhen_ClaimToVaultCalledByNonController() public {
+        vm.prank(other);
         vm.expectRevert();
-        adapter.execute(abi.encode(envelope));
+        adapter.claimToVault(address(usdc), 1e18);
     }
+
+    function test_RevertWhen_RequestRedeemWithoutVaultPosAllowance() public {
+        stToken.mint(address(vault), 100e18);
+        vm.expectRevert();
+        adapter.requestRedeemAsync(100e18, receiver);
+    }
+
 }
