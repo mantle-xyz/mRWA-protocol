@@ -12,11 +12,7 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IStrategyAdapter} from "../adapters/interfaces/IStrategyAdapter.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
-<<<<<<< adam/accountant
-import {IMantleYieldVault, ISanctionsOracle, IERC7540Redeem} from "./interfaces/IMantleYieldVault.sol";
-=======
 import {IMantleYieldVault, ISanctionsOracle, IERC7540Redeem} from "../interfaces/vault/IMantleYieldVault.sol";
->>>>>>> develop
 
 /**
  * @title MantleYieldVault (ERC-4626 + ERC-7540 Async Redemption, Beacon Proxy Upgradeable)
@@ -115,11 +111,7 @@ contract MantleYieldVault is
     }
 
     function _checkSanctions(address account) internal view {
-<<<<<<< adam/accountant
-        if (sanctionsOracle.isBlacklisted(account)) revert Vault__Sanctioned(account);
-=======
         if (sanctionsOracle.isSanctioned(account)) revert Vault__Sanctioned(account);
->>>>>>> develop
     }
 
     function _onlyController() internal view {
@@ -181,13 +173,8 @@ contract MantleYieldVault is
         if (from != address(0) && to != address(0)) {
             _requireNotPaused();
         }
-<<<<<<< adam/accountant
-        if (from != address(0) && sanctionsOracle.isBlacklisted(from)) revert Vault__Sanctioned(from);
-        if (to != address(0) && sanctionsOracle.isBlacklisted(to)) revert Vault__Sanctioned(to);
-=======
         if (from != address(0) && sanctionsOracle.isSanctioned(from)) revert Vault__Sanctioned(from);
         if (to != address(0) && sanctionsOracle.isSanctioned(to)) revert Vault__Sanctioned(to);
->>>>>>> develop
         super._update(from, to, value);
     }
 
