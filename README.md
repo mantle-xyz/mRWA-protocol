@@ -1,66 +1,95 @@
-## Foundry
+# mRWA Protocol
 
-**Foundry is a blazing fast, portable and modular toolkit for Ethereum application development written in Rust.**
+当前 `StrategyController` 采用：
 
-Foundry consists of:
+- `TimelockUpgradeController`：治理与延迟执行
+- `UpgradeableBeacon`：统一实现地址
+- `BeaconProxy`：每个 Vault 一套实例
 
-- **Forge**: Ethereum testing framework (like Truffle, Hardhat and DappTools).
-- **Cast**: Swiss army knife for interacting with EVM smart contracts, sending transactions and getting chain data.
-- **Anvil**: Local Ethereum node, akin to Ganache, Hardhat Network.
-- **Chisel**: Fast, utilitarian, and verbose solidity REPL.
+## 基础要求
 
-## Documentation
+- 已安装 Foundry
+- 已配置 `.env`（参考 `.env.example`）
+- `foundry.toml` 中已配置对应 `rpc_endpoints`
 
-https://book.getfoundry.sh/
+## 常用命令
 
-## Usage
-
-### Build
-
-```shell
-$ forge build
+```bash
+make build
+make test
 ```
 
-### Test
+## 部署流程
 
-```shell
-$ forge test
+### 1) 部署治理与 Beacon
+
+```bash
+make deploy-strategy-beacon-timelock VERIFY=false
 ```
 
-### Format
+会部署：
 
-```shell
-$ forge fmt
+- `TimelockUpgradeController`
+- `StrategyController` implementation
+- `UpgradeableBeacon`
+
+若 `STRATEGY_DEPLOY_FIRST_PROXY=true`，会顺带部署首个 `BeaconProxy`。
+
+### 2) 部署某个 Vault 对应的 Strategy 实例
+
+`.env` 至少需要：
+
+- `STRATEGY_BEACON`
+- `STRATEGY_VAULT`
+- `STRATEGY_ADMIN`（通常填 Timelock）
+- `STRATEGY_OPERATOR`（运营多签/运维地址）
+- `STRATEGY_EXECUTOR`（执行器合约或受控地址）
+
+执行：
+
+```bash
+make deploy-strategy-beacon-proxy VERIFY=false
 ```
 
-### Gas Snapshots
+每换一个 `STRATEGY_VAULT` 再执行一次，即新增一套实例。
 
-```shell
-$ forge snapshot
+## 升级流程（Beacon）
+
+同一个 Beacon 下的所有 Proxy 会一起升级。
+
+### A. Safe 模式（推荐）
+
+```bash
+make prepare-strategy-beacon-upgrade-safe
 ```
 
-### Anvil
+脚本会输出 `schedule` / `execute` calldata：
 
-```shell
-$ anvil
+1. 先提交 `schedule(...)`
+2. 延迟到期后提交 `execute(...)`
+
+### B. 本地直升（测试用）
+
+```bash
+make upgrade-strategy-beacon-local VERIFY=false
 ```
 
-### Deploy
+该模式适合本地/测试快速验证，不建议直接用于生产治理。
 
-```shell
-$ forge script script/Counter.s.sol:CounterScript --rpc-url <your_rpc_url> --private-key <your_private_key>
+## Make 参数
+
+- `NETWORK`：默认 `mantle_sepolia`（需在 `foundry.toml` 存在）
+- `VERIFY`：`true/false`，默认 `true`
+
+示例：
+
+```bash
+make deploy-strategy-beacon-timelock NETWORK=mantle VERIFY=true
+make deploy-strategy-beacon-proxy NETWORK=mantle_sepolia VERIFY=false
 ```
 
-### Cast
+## 安全提示
 
-```shell
-$ cast <subcommand>
-```
-
-### Help
-
-```shell
-$ forge --help
-$ anvil --help
-$ cast --help
-```
+- 不要提交 `.env`
+- `PRIVATE_KEY` 必须带 `0x` 前缀
+- 私钥一旦泄露，立即更换并迁移权限

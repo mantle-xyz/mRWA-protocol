@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import {IAccountant} from "../interfaces/accountant/IAccountant.sol";
+import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 
 /// @title AccountantExecutor
 /// @notice Authorized relay for Accountant.updateExchangeRate.
@@ -61,19 +61,13 @@ contract AccountantExecutor is AccessControlUpgradeable {
     /// @notice Trigger an exchange rate update on the Accountant.
     /// @param newRate The new exchange rate to push
     /// @param computeTimestamp Off-chain computation timestamp for staleness check
-    function executeUpdateRate(uint256 newRate, uint256 computeTimestamp)
-        external
-        onlyRole(BOT_ROLE)
-    {
+    function executeUpdateRate(uint256 newRate, uint256 computeTimestamp) external onlyRole(BOT_ROLE) {
         accountant.updateExchangeRate(newRate, computeTimestamp);
         emit RateUpdateExecuted(msg.sender, newRate, computeTimestamp);
     }
 
     /// @notice Trigger management fee settlement on the Accountant.
-    function executeSettleManagementFee()
-        external
-        onlyRole(BOT_ROLE)
-    {
+    function executeSettleManagementFee() external onlyRole(BOT_ROLE) {
         accountant.settleManagementFee();
         emit ManagementFeeSettled(msg.sender);
     }

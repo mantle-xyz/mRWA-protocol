@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {Test} from "forge-std/Test.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {IStrategyAdapter} from "../src/interfaces/adapters/IStrategyAdapter.sol";
+import {ISanctionsOracle} from "../src/interfaces/oracle/ISanctionsOracle.sol";
+import {IERC7540Redeem, IMantleYieldVault} from "../src/interfaces/vault/IMantleYieldVault.sol";
 import {MantleYieldVault} from "../src/vault/MantleYieldVault.sol";
 import {VaultFactory} from "../src/vault/VaultFactory.sol";
-import {IMantleYieldVault, ISanctionsOracle, IERC7540Redeem} from "../src/interfaces/vault/IMantleYieldVault.sol";
-import {IStrategyAdapter} from "../src/adapters/interfaces/IStrategyAdapter.sol";
+import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {Test} from "forge-std/Test.sol";
 
 // =============================================================
 // Mock 合约
@@ -37,10 +38,22 @@ contract MockSanctionsOracle is ISanctionsOracle {
         sanctioned[account] = status;
     }
 
-    function totalSanctionedCount() external pure override returns (uint256) { return 0; }
-    function lastUpdateTimestamp() external pure override returns (uint256) { return 0; }
-    function batchNonce() external pure override returns (uint256) { return 0; }
-    function MAX_BATCH_SIZE() external pure override returns (uint256) { return 100; }
+    function totalSanctionedCount() external pure override returns (uint256) {
+        return 0;
+    }
+
+    function lastUpdateTimestamp() external pure override returns (uint256) {
+        return 0;
+    }
+
+    function batchNonce() external pure override returns (uint256) {
+        return 0;
+    }
+
+    function MAX_BATCH_SIZE() external pure override returns (uint256) {
+        return 100;
+    }
+
     function updateSanctionStatus(address, bool) external override {}
     function updateSanctionStatusBatch(address[] calldata, bool) external override {}
 }
@@ -54,6 +67,14 @@ contract MockStrategyAdapter is IStrategyAdapter {
 
     function asset() external pure override returns (address) {
         return address(0);
+    }
+
+    function posToken() external pure override returns (address) {
+        return address(0);
+    }
+
+    function estimatePosAmount(uint256 assetAmount) external pure override returns (uint256) {
+        return assetAmount;
     }
 
     function vault() external pure override returns (address) {
@@ -76,11 +97,13 @@ contract MockStrategyAdapter is IStrategyAdapter {
         return 0;
     }
 
-    function requestRedeemAsync(uint256, address) external pure override returns (bytes32) {
-        return bytes32(0);
+    function requestRedeemAsync(uint256, address) external pure override {}
+
+    function claimToVault(address, uint256) external pure override returns (uint256) {
+        return 0;
     }
 
-    function panic() external override {}
+    function setPaused(bool) external pure override {}
 }
 
 // =============================================================
@@ -411,7 +434,7 @@ contract AsyncRedeemTest is VaultTestBase {
         vm.prank(controllerAddr);
         vault.updateRequestBatch(ids, IMantleYieldVault.RequestStatus.PROCESSING);
 
-        (, , , uint256 reqAssets, , ,) = vault.requests(requestId);
+        (,,, uint256 reqAssets,,,) = vault.requests(requestId);
         uint256[] memory settled = new uint256[](1);
         settled[0] = reqAssets;
         vm.prank(controllerAddr);
@@ -442,7 +465,7 @@ contract AsyncRedeemTest is VaultTestBase {
         vm.prank(controllerAddr);
         vault.updateRequestBatch(ids, IMantleYieldVault.RequestStatus.PROCESSING);
 
-        (, , , uint256 reqAssets, , ,) = vault.requests(requestId);
+        (,,, uint256 reqAssets,,,) = vault.requests(requestId);
         uint256[] memory settled = new uint256[](1);
         settled[0] = reqAssets;
         vm.prank(controllerAddr);
@@ -468,8 +491,8 @@ contract AsyncRedeemTest is VaultTestBase {
         ids[1] = id2;
 
         uint256[] memory settled = new uint256[](2);
-        (, , , settled[0], , ,) = vault.requests(id1);
-        (, , , settled[1], , ,) = vault.requests(id2);
+        (,,, settled[0],,,) = vault.requests(id1);
+        (,,, settled[1],,,) = vault.requests(id2);
 
         vm.prank(controllerAddr);
         vault.updateRequestBatch(ids, IMantleYieldVault.RequestStatus.PROCESSING);
@@ -509,8 +532,7 @@ contract UpdateRequestBatchTest is VaultTestBase {
         vm.prank(controllerAddr);
         vm.expectRevert(
             abi.encodeWithSelector(
-                IMantleYieldVault.Vault__StatusTransitionForbidden.selector,
-                IMantleYieldVault.RequestStatus.NONE
+                IMantleYieldVault.Vault__StatusTransitionForbidden.selector, IMantleYieldVault.RequestStatus.NONE
             )
         );
         vault.updateRequestBatch(ids, IMantleYieldVault.RequestStatus.NONE);
@@ -526,8 +548,7 @@ contract UpdateRequestBatchTest is VaultTestBase {
         vm.prank(controllerAddr);
         vm.expectRevert(
             abi.encodeWithSelector(
-                IMantleYieldVault.Vault__StatusTransitionForbidden.selector,
-                IMantleYieldVault.RequestStatus.READY
+                IMantleYieldVault.Vault__StatusTransitionForbidden.selector, IMantleYieldVault.RequestStatus.READY
             )
         );
         vault.updateRequestBatch(ids, IMantleYieldVault.RequestStatus.READY);
@@ -543,8 +564,7 @@ contract UpdateRequestBatchTest is VaultTestBase {
         vm.prank(controllerAddr);
         vm.expectRevert(
             abi.encodeWithSelector(
-                IMantleYieldVault.Vault__StatusTransitionForbidden.selector,
-                IMantleYieldVault.RequestStatus.CLAIMED
+                IMantleYieldVault.Vault__StatusTransitionForbidden.selector, IMantleYieldVault.RequestStatus.CLAIMED
             )
         );
         vault.updateRequestBatch(ids, IMantleYieldVault.RequestStatus.CLAIMED);
@@ -557,9 +577,7 @@ contract UpdateRequestBatchTest is VaultTestBase {
         vm.prank(controllerAddr);
         vm.expectRevert(
             abi.encodeWithSelector(
-                IMantleYieldVault.Vault__InvalidState.selector,
-                999,
-                IMantleYieldVault.RequestStatus.NONE
+                IMantleYieldVault.Vault__InvalidState.selector, 999, IMantleYieldVault.RequestStatus.NONE
             )
         );
         vault.updateRequestBatch(ids, IMantleYieldVault.RequestStatus.PROCESSING);
@@ -624,9 +642,7 @@ contract AdapterManagementTest is VaultTestBase {
         vm.startPrank(controllerAddr);
         vault.registerAdapter(address(adapter));
         vault.createInFlight(address(adapter), address(usdc), 100, 100e6, true);
-        vm.expectRevert(
-            abi.encodeWithSelector(IMantleYieldVault.Vault__AdapterHasInFlight.selector, address(adapter))
-        );
+        vm.expectRevert(abi.encodeWithSelector(IMantleYieldVault.Vault__AdapterHasInFlight.selector, address(adapter)));
         vault.removeAdapter(address(adapter));
         vm.stopPrank();
     }
@@ -715,9 +731,7 @@ contract InFlightTest is VaultTestBase {
 
         vm.expectRevert(
             abi.encodeWithSelector(
-                IMantleYieldVault.Vault__InvalidInFlightState.selector,
-                id,
-                IMantleYieldVault.InFlightStatus.CONFIRMED
+                IMantleYieldVault.Vault__InvalidInFlightState.selector, id, IMantleYieldVault.InFlightStatus.CONFIRMED
             )
         );
         vault.confirmInFlight(id, 100);
@@ -733,9 +747,7 @@ contract InFlightTest is VaultTestBase {
     function test_createInFlightRevertsUnregisteredAdapter() public {
         address fakeAdapter = makeAddr("fakeAdapter");
         vm.prank(controllerAddr);
-        vm.expectRevert(
-            abi.encodeWithSelector(IMantleYieldVault.Vault__AdapterNotRegistered.selector, fakeAdapter)
-        );
+        vm.expectRevert(abi.encodeWithSelector(IMantleYieldVault.Vault__AdapterNotRegistered.selector, fakeAdapter));
         vault.createInFlight(fakeAdapter, address(usdc), 100, 100e6, true);
     }
 }
@@ -1087,7 +1099,11 @@ contract MintFeeSharesTest is VaultTestBase {
         uint256 tooMuch = totalBefore * 1_100 / FEE_BASIS;
 
         vm.prank(accountantAddr);
-        vm.expectRevert(abi.encodeWithSelector(IMantleYieldVault.Vault__FeeTooHigh.selector, tooMuch, totalBefore * 1_000 / FEE_BASIS));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IMantleYieldVault.Vault__FeeTooHigh.selector, tooMuch, totalBefore * 1_000 / FEE_BASIS
+            )
+        );
         vault.mintFeeShares(tooMuch);
     }
 
@@ -1163,7 +1179,7 @@ contract ERC7540ViewTest is VaultTestBase {
         uint256[] memory ids = new uint256[](1);
         ids[0] = id;
 
-        (, , , uint256 reqAssets, , ,) = vault.requests(id);
+        (,,, uint256 reqAssets,,,) = vault.requests(id);
         uint256[] memory settled = new uint256[](1);
         settled[0] = reqAssets;
 
@@ -1228,9 +1244,7 @@ contract ZeroCashBufferTest is VaultTestBase {
 
         vm.prank(alice);
         vm.expectRevert(
-            abi.encodeWithSignature(
-                "ERC4626ExceededMaxRedeem(address,uint256,uint256)", alice, aliceShares, uint256(0)
-            )
+            abi.encodeWithSignature("ERC4626ExceededMaxRedeem(address,uint256,uint256)", alice, aliceShares, uint256(0))
         );
         vault.redeem(aliceShares, alice, alice);
 
@@ -1419,7 +1433,7 @@ contract ZeroCashBufferTest is VaultTestBase {
         assertEq(vault.claimableReserves(), actualReceived, "claimable = actual settled amount");
 
         // estimatedAssets preserved, settledAssets = actual
-        (, , , uint256 estAssets, uint256 settled_, , IMantleYieldVault.RequestStatus status) = vault.requests(reqId);
+        (,,, uint256 estAssets, uint256 settled_,, IMantleYieldVault.RequestStatus status) = vault.requests(reqId);
         assertEq(estAssets, netAssets, "estimatedAssets preserved");
         assertEq(settled_, actualReceived, "settledAssets = actual settlement");
         assertTrue(status == IMantleYieldVault.RequestStatus.READY, "request is READY");
@@ -1444,7 +1458,7 @@ contract ZeroCashBufferTest is VaultTestBase {
         vm.prank(controllerAddr);
         vault.updateRequestBatch(ids, IMantleYieldVault.RequestStatus.PROCESSING);
 
-        (, , , uint256 estAssets, , ,) = vault.requests(reqId);
+        (,,, uint256 estAssets,,,) = vault.requests(reqId);
         uint256 surplus = 10e6;
         uint256 settledAmount = estAssets + surplus;
         uint256[] memory settled = new uint256[](1);
@@ -1474,9 +1488,7 @@ contract ZeroCashBufferTest is VaultTestBase {
         settled[1] = 100e6;
 
         vm.prank(controllerAddr);
-        vm.expectRevert(
-            abi.encodeWithSelector(IMantleYieldVault.Vault__LengthMismatch.selector, 1, 2)
-        );
+        vm.expectRevert(abi.encodeWithSelector(IMantleYieldVault.Vault__LengthMismatch.selector, 1, 2));
         vault.markRequestsReady(ids, settled);
     }
 }

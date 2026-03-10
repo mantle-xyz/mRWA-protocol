@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {Script, console2} from "forge-std/Script.sol";
-import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {Accountant} from "../src/accountant/Accountant.sol";
 import {AccountantExecutor} from "../src/accountant/AccountantExecutor.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import {Script, console2} from "forge-std/Script.sol";
 
 /// @title DeployAccountant
 /// @notice Deploys Accountant + AccountantExecutor behind ERC1967 proxies and wires roles.

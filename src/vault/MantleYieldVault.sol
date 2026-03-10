@@ -1,18 +1,21 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {ERC4626Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC4626Upgradeable.sol";
+import {IStrategyAdapter} from "../interfaces/adapters/IStrategyAdapter.sol";
+
+import {ISanctionsOracle} from "../interfaces/oracle/ISanctionsOracle.sol";
+import {IERC7540Redeem, IMantleYieldVault} from "../interfaces/vault/IMantleYieldVault.sol";
 import {AccessControlDefaultAdminRulesUpgradeable} from
     "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlDefaultAdminRulesUpgradeable.sol";
-import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import {ERC4626Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC4626Upgradeable.sol";
+import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+
+import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
-import {IStrategyAdapter} from "../adapters/interfaces/IStrategyAdapter.sol";
-import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
-import {IMantleYieldVault, ISanctionsOracle, IERC7540Redeem} from "../interfaces/vault/IMantleYieldVault.sol";
 
 /**
  * @title MantleYieldVault (ERC-4626 + ERC-7540 Async Redemption, Beacon Proxy Upgradeable)
@@ -62,12 +65,12 @@ contract MantleYieldVault is
     uint256 public claimableReserves;
 
     // Invest in-flight: USDC sent out -> adapter underlying tokens not yet received
-    uint256 public totalInvestInFlight;                                      // Total invest in-flight USDC equivalent
-    mapping(address adapter => uint256) public adapterInvestInFlightTokens;  // Per-adapter invest in-flight token amount
+    uint256 public totalInvestInFlight; // Total invest in-flight USDC equivalent
+    mapping(address adapter => uint256) public adapterInvestInFlightTokens; // Per-adapter invest in-flight token amount
 
     // Redeem in-flight: adapter underlying tokens sent out -> USDC not yet received
-    uint256 public totalRedeemInFlight;                                     // Total redeem in-flight USDC equivalent
-    mapping(address adapter => uint256) public adapterRedeemInFlightUsdc;   // Per-adapter redeem in-flight USDC amount
+    uint256 public totalRedeemInFlight; // Total redeem in-flight USDC equivalent
+    mapping(address adapter => uint256) public adapterRedeemInFlightUsdc; // Per-adapter redeem in-flight USDC amount
 
     uint256 public nextRequestId;
     uint256 public nextInFlightId;
@@ -337,13 +340,11 @@ contract MantleYieldVault is
         return physicalBalance - totalReserved;
     }
 
-    function _withdraw(
-        address caller,
-        address receiver,
-        address owner,
-        uint256 assets,
-        uint256 shares
-    ) internal virtual override {
+    function _withdraw(address caller, address receiver, address owner, uint256 assets, uint256 shares)
+        internal
+        virtual
+        override
+    {
         uint256 freeCash = getFreeCash();
         if (assets > freeCash) revert Vault__InsufficientFreeCash(assets, freeCash);
         super._withdraw(caller, receiver, owner, assets, shares);
@@ -389,10 +390,7 @@ contract MantleYieldVault is
         emit AdapterApproved(adapter, token, amount);
     }
 
-    function updateRequestBatch(
-        uint256[] calldata ids,
-        RequestStatus newStatus
-    ) external onlyController {
+    function updateRequestBatch(uint256[] calldata ids, RequestStatus newStatus) external onlyController {
         if (newStatus == RequestStatus.NONE || newStatus == RequestStatus.READY || newStatus == RequestStatus.CLAIMED) {
             revert Vault__StatusTransitionForbidden(newStatus);
         }
@@ -691,8 +689,7 @@ contract MantleYieldVault is
     // =============================================================
 
     function supportsInterface(bytes4 interfaceId) public view virtual override returns (bool) {
-        return interfaceId == type(IERC7540Redeem).interfaceId
-            || interfaceId == type(IMantleYieldVault).interfaceId
+        return interfaceId == type(IERC7540Redeem).interfaceId || interfaceId == type(IMantleYieldVault).interfaceId
             || super.supportsInterface(interfaceId);
     }
 
@@ -717,5 +714,4 @@ contract MantleYieldVault is
         IERC20(token).safeTransfer(to, amount);
         emit TokenRescued(token, to, amount);
     }
-
 }
