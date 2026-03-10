@@ -457,14 +457,18 @@ contract VaultE2E is Script {
         uint256 assetsFor1000Shares = vault.previewRedeem(1_000e6);
         console.log("[rate] 1000 shares now worth", assetsFor1000Shares / 1e6, "USDC (net of fee)");
 
-        // Try exceeding 10% limit
+        // Exceeding maxRateChangeBps triggers pause instead of revert
         uint256 tooHigh = newRate * 111 / 100;
         vm.broadcast(accountantKey);
-        try vault.updateExchangeRate(tooHigh) {
-            revert("should have reverted");
-        } catch {
-            console.log("[rate] Correctly rejected >10% change");
-        }
+        vault.updateExchangeRate(tooHigh);
+
+        require(vault.paused(), "vault should be paused after excessive rate change");
+        require(vault.exchangeRate() == tooHigh, "rate should still be updated");
+        console.log("[rate] >10% change: vault paused, rate updated to", tooHigh);
+
+        // Unpause for subsequent scenarios
+        vm.broadcast(adminKey);
+        vault.unpause();
     }
 
     // =============================================================
