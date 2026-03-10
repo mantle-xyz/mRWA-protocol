@@ -135,6 +135,40 @@ contract OperatorExecutorTest is Test {
         executor.execute(cmd, sig);
     }
 
+    function test_SignerRole_NewSignerCanExecute_AfterGrant() public {
+        uint256 newSignerPk = 0xBEEF;
+        address newSigner = vm.addr(newSignerPk);
+
+        vm.prank(admin);
+        executor.setSigner(newSigner, true);
+
+        OperatorExecutor.Command memory cmd =
+            OperatorExecutor.Command({action: 0, data: "", nonce: 0, deadline: uint64(block.timestamp + 1 hours)});
+        bytes memory sig = _sign(cmd, newSignerPk);
+        executor.execute(cmd, sig);
+
+        assertEq(controller.rebalanceCount(), 1);
+        assertEq(executor.nonces(newSigner), 1);
+    }
+
+    function test_SignerRole_RevokedSignerCannotExecute() public {
+        vm.prank(admin);
+        executor.setSigner(signer, false);
+
+        OperatorExecutor.Command memory cmd =
+            OperatorExecutor.Command({action: 0, data: "", nonce: 0, deadline: uint64(block.timestamp + 1 hours)});
+        bytes memory sig = _sign(cmd, signerPk);
+
+        vm.expectRevert(OperatorExecutor.InvalidSignature.selector);
+        executor.execute(cmd, sig);
+    }
+
+    function test_RevertWhen_SetSignerByNonAdmin() public {
+        vm.prank(makeAddr("notAdmin"));
+        vm.expectRevert();
+        executor.setSigner(makeAddr("hsm"), true);
+    }
+
     function _sign(OperatorExecutor.Command memory cmd, uint256 pk) internal view returns (bytes memory) {
         bytes32 structHash =
             keccak256(abi.encode(COMMAND_TYPEHASH, cmd.action, keccak256(cmd.data), cmd.nonce, cmd.deadline));
