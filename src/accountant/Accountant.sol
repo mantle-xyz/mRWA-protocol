@@ -39,23 +39,25 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
     /// @custom:storage-location erc7201:mrwa.storage.Accountant
     /// @dev Struct is tightly packed into 4 storage slots:
     ///      slot 0: vault(20) + maxAllowedDeviation(4) + managementFeeRate(4) + minUpdateInterval(4)
-    ///      slot 1: treasury(20) + maxComputeAge(4) + lastUpdateTimestamp(8)
-    ///      slot 2: lastComputeTimestamp(8) + lastExchangeRate(8) + lastFeeSettleTimestamp(8)
+    ///      slot 1: maxComputeAge(4) + lastComputeTimestamp(8) + lastExchangeRate(8) + lastUpdateTimestamp(8)
+    ///      slot 2: lastFeeSettleTimestamp(8)
     ///      slot 3: totalSharesLastSettle(32)
     struct AccountantStorage {
         // ── slot 0 ──
         IMantleYieldVault vault;
         uint32 maxAllowedDeviation; // bps (e.g. 100 = 1%)
         uint32 managementFeeRate; // bps (e.g. 100 = 1%)
-        // ── slot 1 ──
-        address treasury;
-        uint32 maxComputeAge; // seconds (e.g. 5 minutes)
         uint32 minUpdateInterval; // seconds (e.g. 20 hours)
-        // ── slot 2 ──
+
+        // ── slot 1 ──
+        uint32 maxComputeAge; // seconds (e.g. 5 minutes)
         uint64 lastComputeTimestamp;
         uint64 lastExchangeRate;
         uint64 lastUpdateTimestamp;
+
+        // ── slot 2 ──
         uint64 lastFeeSettleTimestamp;
+
         // ── slot 3 ──
         uint256 totalSharesLastSettle;
     }
@@ -76,8 +78,7 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
     // =============================================================
 
     event ExchangeRateUpdated(uint256 oldRate, uint256 newRate, uint256 timestamp);
-    event FeesDistributed(address indexed treasury, uint256 sharesMinted);
-    event TreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
+    event FeesDistributed(uint256 sharesMinted);
     event RiskParamsUpdated(uint256 maxDeviation, uint256 minInterval);
     event ManagementFeeRateUpdated(uint256 oldRate, uint256 newRate);
     event MaxComputeAgeUpdated(uint256 oldAge, uint256 newAge);
@@ -110,12 +111,11 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
 
     function initialize(
         address vault_,
-        address treasury_,
         uint256 initialRate,
         uint256 managementFeeRate_,
         address admin
     ) external initializer {
-        if (vault_ == address(0) || treasury_ == address(0) || admin == address(0)) {
+        if (vault_ == address(0) || admin == address(0)) {
             revert ZeroAddress();
         }
         if (initialRate == 0) revert InvalidRate();
@@ -126,7 +126,6 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
 
         AccountantStorage storage s = _getAccountantStorage();
         s.vault = IMantleYieldVault(vault_);
-        s.treasury = treasury_;
         s.managementFeeRate = managementFeeRate_.toUint32();
         s.lastExchangeRate = initialRate.toUint64();
         s.lastUpdateTimestamp = block.timestamp.toUint64();
@@ -149,10 +148,6 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
 
     function vault() external view returns (IMantleYieldVault) {
         return _getAccountantStorage().vault;
-    }
-
-    function treasury() external view returns (address) {
-        return _getAccountantStorage().treasury;
     }
 
     function maxAllowedDeviation() external view returns (uint256) {
@@ -242,8 +237,8 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
         s.totalSharesLastSettle = currentTotalShares;
 
         if (sharesToMint > 0) {
-            s.vault.mintFeeShares(s.treasury, sharesToMint);
-            emit FeesDistributed(s.treasury, sharesToMint);
+            s.vault.mintFeeShares(sharesToMint);
+            emit FeesDistributed(sharesToMint);
         }
     }
 
@@ -257,14 +252,6 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
         address oldVault = address(s.vault);
         s.vault = IMantleYieldVault(newVault);
         emit VaultUpdated(oldVault, newVault);
-    }
-
-    function setTreasury(address newTreasury) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        if (newTreasury == address(0)) revert ZeroAddress();
-        AccountantStorage storage s = _getAccountantStorage();
-        address oldTreasury = s.treasury;
-        s.treasury = newTreasury;
-        emit TreasuryUpdated(oldTreasury, newTreasury);
     }
 
     function setRiskParams(uint256 newMaxDeviation, uint256 newMinInterval) external onlyRole(DEFAULT_ADMIN_ROLE) {

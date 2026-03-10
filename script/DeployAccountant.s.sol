@@ -11,7 +11,6 @@ import {Script, console2} from "forge-std/Script.sol";
 ///
 /// Required env vars (set via deploy-config YAML):
 ///   F_VAULT_ADDRESS        – MantleYieldVault proxy address
-///   F_TREASURY_ADDRESS     – fee treasury address
 ///   F_INITIAL_RATE         – starting exchange rate (18-decimal, e.g. 1e18)
 ///   F_MANAGEMENT_FEE_BPS   – management fee in bps (e.g. 50 = 0.5%)
 ///   F_ADMIN_ADDRESS        – admin address
@@ -19,7 +18,6 @@ import {Script, console2} from "forge-std/Script.sol";
 contract DeployAccountant is Script {
     function run() external {
         address vaultAddr = vm.envAddress("F_VAULT_ADDRESS");
-        address treasuryAddr = vm.envAddress("F_TREASURY_ADDRESS");
         uint256 initialRate = vm.envUint("F_INITIAL_RATE");
         uint256 managementFeeBps = vm.envUint("F_MANAGEMENT_FEE_BPS");
         address admin = vm.envAddress("F_ADMIN_ADDRESS");
@@ -28,7 +26,6 @@ contract DeployAccountant is Script {
         console2.log("=== DeployAccountant ===");
         console2.log("Admin          :", admin);
         console2.log("Vault          :", vaultAddr);
-        console2.log("Treasury       :", treasuryAddr);
         console2.log("Initial rate   :", initialRate);
         console2.log("Mgmt fee (bps) :", managementFeeBps);
         console2.log("Bot            :", bot);
@@ -39,7 +36,7 @@ contract DeployAccountant is Script {
         Accountant accountantImpl = new Accountant();
         ERC1967Proxy accountantProxy = new ERC1967Proxy(
             address(accountantImpl),
-            abi.encodeCall(Accountant.initialize, (vaultAddr, treasuryAddr, initialRate, managementFeeBps, admin))
+            abi.encodeCall(Accountant.initialize, (vaultAddr, initialRate, managementFeeBps, admin))
         );
         Accountant accountant = Accountant(address(accountantProxy));
 
