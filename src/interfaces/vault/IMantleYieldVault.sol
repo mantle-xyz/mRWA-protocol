@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {ISanctionsOracle} from "../ISanctionsOracle.sol";
+import {ISanctionsOracle} from "../oracle/ISanctionsOracle.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
@@ -67,7 +67,7 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
         address owner;
         uint256 shares;
         uint256 estimatedAssets; // Estimated payout at requestRedeem time (reference only, may differ from settlement)
-        uint256 settledAssets;   // Actual payout (set by markRequestsReady, 0 until settled)
+        uint256 settledAssets; // Actual payout (set by markRequestsReady, 0 until settled)
         uint256 timestamp;
         RequestStatus status;
     }

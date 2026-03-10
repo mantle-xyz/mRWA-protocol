@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {Script, console} from "forge-std/Script.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IMantleYieldVault} from "../../src/interfaces/vault/IMantleYieldVault.sol";
 import {MantleYieldVault} from "../../src/vault/MantleYieldVault.sol";
 import {VaultFactory} from "../../src/vault/VaultFactory.sol";
-import {IMantleYieldVault} from "../../src/interfaces/vault/IMantleYieldVault.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {Script, console} from "forge-std/Script.sol";
 
 /**
  * @title DeployVault
@@ -90,12 +90,10 @@ contract DeployVault is Script {
         });
     }
 
-    function _logConfig(
-        address deployer,
-        bool useLedger,
-        address pauserAddr,
-        IMantleYieldVault.InitParams memory p
-    ) internal pure {
+    function _logConfig(address deployer, bool useLedger, address pauserAddr, IMantleYieldVault.InitParams memory p)
+        internal
+        pure
+    {
         console.log("=== Deployment Configuration ===");
         console.log("Deployer (admin):", deployer);
         console.log("Signing mode:", useLedger ? "Ledger" : "PrivateKey");

@@ -47,12 +47,10 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
         IMantleYieldVault vault;
         uint32 maxAllowedDeviation; // bps (e.g. 100 = 1%)
         uint32 managementFeeRate; // bps (e.g. 100 = 1%)
-        
         // ── slot 1 ──
         address treasury;
         uint32 maxComputeAge; // seconds (e.g. 5 minutes)
         uint32 minUpdateInterval; // seconds (e.g. 20 hours)
-  
         // ── slot 2 ──
         uint64 lastComputeTimestamp;
         uint64 lastExchangeRate;
@@ -230,20 +228,14 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
     /// @notice Settle accrued management fees by minting vault shares to the treasury.
     ///         Uses min(currentSupply, lastSettleSupply) as the fee base to prevent
     ///         overcharging when share supply changes drastically between settlements.
-    function settleManagementFee()
-        external
-        onlyRole(EXECUTOR_ROLE)
-        whenNotPaused
-        nonReentrant
-    {
+    function settleManagementFee() external onlyRole(EXECUTOR_ROLE) whenNotPaused nonReentrant {
         AccountantStorage storage s = _getAccountantStorage();
 
         uint256 timeElapsed = block.timestamp - s.lastFeeSettleTimestamp;
         if (timeElapsed == 0) return;
 
         uint256 currentTotalShares = s.vault.totalSupply();
-        uint256 shareBase =
-            currentTotalShares < s.totalSharesLastSettle ? currentTotalShares : s.totalSharesLastSettle;
+        uint256 shareBase = currentTotalShares < s.totalSharesLastSettle ? currentTotalShares : s.totalSharesLastSettle;
         uint256 sharesToMint = (shareBase * s.managementFeeRate * timeElapsed) / (MAX_BPS * 365 days);
 
         s.lastFeeSettleTimestamp = block.timestamp.toUint64();

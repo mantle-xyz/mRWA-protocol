@@ -1,6 +1,17 @@
 -include .env
 
-.PHONY: all build clean test fmt snapshot gas lint deploy upgrade
+# Single signing key for deployment/upgrade scripts.
+NETWORK ?= mantle_sepolia
+VERIFY ?= true
+
+VERIFY_FLAGS :=
+ifeq ($(VERIFY),true)
+VERIFY_FLAGS += --verify --verifier etherscan
+endif
+
+.PHONY: all build clean test fmt snapshot gas lint \
+	deploy-strategy-beacon-timelock deploy-strategy-beacon-proxy \
+	prepare-strategy-beacon-upgrade-safe upgrade-strategy-beacon-local
 
 all: clean install build
 
@@ -42,38 +53,34 @@ fmt-check:
 lint:
 	forge fmt --check && forge build
 
-# ==================== Deploy (Mantle Sepolia) ====================
+# ==================== Timelock + Beacon (StrategyController) ====================
 
-deploy-sepolia:
-	@echo "Deploying to Mantle Sepolia..."
-	forge script script/Deploy.s.sol:DeployScript \
-		--rpc-url mantle_sepolia \
-		--private-key $(PRIVATE_KEY) \
+deploy-strategy-beacon-timelock:
+	@forge script script/DeployStrategyBeaconWithTimelock.s.sol:DeployStrategyBeaconWithTimelockScript \
+		--rpc-url $(NETWORK) \
 		--broadcast \
-		--verify \
-		--verifier etherscan \
+		$(VERIFY_FLAGS) \
 		-vvvv
 
-# ==================== Deploy (Mainnet) ====================
-
-deploy-mainnet:
-	forge script script/Deploy.s.sol:DeployScript \
-		--rpc-url mainnet \
-		--private-key $(PRIVATE_KEY) \
+deploy-strategy-beacon-proxy:
+	@forge script script/DeployStrategyBeaconProxy.s.sol:DeployStrategyBeaconProxyScript \
+		--rpc-url $(NETWORK) \
 		--broadcast \
-		--verify \
-		--verifier etherscan \
+		$(VERIFY_FLAGS) \
 		-vvvv
 
-# ==================== Upgrade ====================
+prepare-strategy-beacon-upgrade-safe:
+	@UPGRADE_EXECUTE_ONCHAIN=false \
+	forge script script/PrepareStrategyBeaconUpgradeForSafe.s.sol:PrepareStrategyBeaconUpgradeForSafeScript \
+		--rpc-url $(NETWORK) \
+		-vvvv
 
-upgrade-sepolia:
-	forge script script/Upgrade.s.sol:UpgradeScript \
-		--rpc-url mantle_sepolia \
-		--private-key $(PRIVATE_KEY) \
+upgrade-strategy-beacon-local:
+	@UPGRADE_EXECUTE_ONCHAIN=true \
+	forge script script/PrepareStrategyBeaconUpgradeForSafe.s.sol:PrepareStrategyBeaconUpgradeForSafeScript \
+		--rpc-url $(NETWORK) \
 		--broadcast \
-		--verify \
-		--verifier etherscan \
+		$(VERIFY_FLAGS) \
 		-vvvv
 
 # ==================== Utilities ====================
