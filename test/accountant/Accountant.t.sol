@@ -216,9 +216,9 @@ contract AccountantTest is Test {
         vm.prank(executor);
         accountant.updateExchangeRate(1.005e18, computeTs1);
 
-        _skipCooldown();
+        uint64 computeTs2 = computeTs1 + uint64(accountant.minUpdateInterval()) + 1;
+        vm.warp(computeTs2);
 
-        uint64 computeTs2 = uint64(block.timestamp);
         vm.prank(executor);
         accountant.updateExchangeRate(1.009e18, computeTs2);
 
@@ -1348,9 +1348,9 @@ contract AccountantExecutorIntegrationTest is Test {
         vm.prank(bot);
         executor.executeUpdateRate(1.005e18, computeTs1);
 
-        _skipCooldown();
+        uint64 computeTs2 = computeTs1 + uint64(accountant.minUpdateInterval()) + 1;
+        vm.warp(computeTs2);
 
-        uint64 computeTs2 = uint64(block.timestamp);
         vm.prank(bot);
         executor.executeUpdateRate(1.009e18, computeTs2);
 
