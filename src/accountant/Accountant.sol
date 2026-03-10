@@ -48,16 +48,13 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
         uint32 maxAllowedDeviation; // bps (e.g. 100 = 1%)
         uint32 managementFeeRate; // bps (e.g. 100 = 1%)
         uint32 minUpdateInterval; // seconds (e.g. 20 hours)
-
         // ── slot 1 ──
         uint32 maxComputeAge; // seconds (e.g. 5 minutes)
         uint64 lastComputeTimestamp;
         uint64 lastExchangeRate;
         uint64 lastUpdateTimestamp;
-
         // ── slot 2 ──
         uint64 lastFeeSettleTimestamp;
-
         // ── slot 3 ──
         uint256 totalSharesLastSettle;
     }
@@ -109,12 +106,10 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
         _disableInitializers();
     }
 
-    function initialize(
-        address vault_,
-        uint256 initialRate,
-        uint256 managementFeeRate_,
-        address admin
-    ) external initializer {
+    function initialize(address vault_, uint256 initialRate, uint256 managementFeeRate_, address admin)
+        external
+        initializer
+    {
         if (vault_ == address(0) || admin == address(0)) {
             revert ZeroAddress();
         }
