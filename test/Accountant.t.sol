@@ -33,12 +33,10 @@ contract MockVault {
     uint256 public exchangeRate;
     uint256 public _totalSupply;
 
-    address public lastFeeTreasury;
     uint256 public lastFeeShares;
     uint256 public totalFeeMintCalls;
 
-    function mintFeeShares(address treasury, uint256 shares) external {
-        lastFeeTreasury = treasury;
+    function mintFeeShares(uint256 shares) external {
         lastFeeShares = shares;
         totalFeeMintCalls++;
     }
@@ -73,7 +71,6 @@ contract AccountantTest is Test {
     address public executor = makeAddr("executor");
     address public pauser = makeAddr("pauser");
     address public user = makeAddr("user");
-    address public treasuryAddr = makeAddr("treasury");
 
     uint256 public constant INITIAL_RATE = 1e18;
     uint256 public constant MANAGEMENT_FEE_BPS = 50; // 0.5%
@@ -88,7 +85,7 @@ contract AccountantTest is Test {
         BeaconProxy proxy = new BeaconProxy(
             address(beacon),
             abi.encodeCall(
-                Accountant.initialize, (address(vault), treasuryAddr, INITIAL_RATE, MANAGEMENT_FEE_BPS, admin)
+                Accountant.initialize, (address(vault), INITIAL_RATE, MANAGEMENT_FEE_BPS, admin)
             )
         );
         accountant = Accountant(address(proxy));
@@ -116,7 +113,6 @@ contract AccountantTest is Test {
 
     function test_initialize_setsStateCorrectly() public view {
         assertEq(address(accountant.vault()), address(vault));
-        assertEq(accountant.treasury(), treasuryAddr);
         assertEq(accountant.lastExchangeRate(), INITIAL_RATE);
         assertEq(accountant.managementFeeRate(), MANAGEMENT_FEE_BPS);
         assertEq(accountant.maxAllowedDeviation(), 100);
@@ -138,22 +134,14 @@ contract AccountantTest is Test {
 
     function test_initialize_revertsOnDoubleInit() public {
         vm.expectRevert();
-        accountant.initialize(address(vault), treasuryAddr, INITIAL_RATE, MANAGEMENT_FEE_BPS, admin);
+        accountant.initialize(address(vault), INITIAL_RATE, MANAGEMENT_FEE_BPS, admin);
     }
 
     function test_initialize_revertsWhenVaultIsZero() public {
         vm.expectRevert(Accountant.ZeroAddress.selector);
         new BeaconProxy(
             address(beacon),
-            abi.encodeCall(Accountant.initialize, (address(0), treasuryAddr, INITIAL_RATE, MANAGEMENT_FEE_BPS, admin))
-        );
-    }
-
-    function test_initialize_revertsWhenTreasuryIsZero() public {
-        vm.expectRevert(Accountant.ZeroAddress.selector);
-        new BeaconProxy(
-            address(beacon),
-            abi.encodeCall(Accountant.initialize, (address(vault), address(0), INITIAL_RATE, MANAGEMENT_FEE_BPS, admin))
+            abi.encodeCall(Accountant.initialize, (address(0), INITIAL_RATE, MANAGEMENT_FEE_BPS, admin))
         );
     }
 
@@ -162,7 +150,7 @@ contract AccountantTest is Test {
         new BeaconProxy(
             address(beacon),
             abi.encodeCall(
-                Accountant.initialize, (address(vault), treasuryAddr, INITIAL_RATE, MANAGEMENT_FEE_BPS, address(0))
+                Accountant.initialize, (address(vault), INITIAL_RATE, MANAGEMENT_FEE_BPS, address(0))
             )
         );
     }
@@ -171,7 +159,7 @@ contract AccountantTest is Test {
         vm.expectRevert(Accountant.InvalidRate.selector);
         new BeaconProxy(
             address(beacon),
-            abi.encodeCall(Accountant.initialize, (address(vault), treasuryAddr, 0, MANAGEMENT_FEE_BPS, admin))
+            abi.encodeCall(Accountant.initialize, (address(vault), 0, MANAGEMENT_FEE_BPS, admin))
         );
     }
 
@@ -180,14 +168,14 @@ contract AccountantTest is Test {
         vm.expectRevert(abi.encodeWithSelector(Accountant.InvalidFeeRate.selector, tooHigh));
         new BeaconProxy(
             address(beacon),
-            abi.encodeCall(Accountant.initialize, (address(vault), treasuryAddr, INITIAL_RATE, tooHigh, admin))
+            abi.encodeCall(Accountant.initialize, (address(vault), INITIAL_RATE, tooHigh, admin))
         );
     }
 
     function test_initialize_allowsZeroFeeRate() public {
         BeaconProxy proxy = new BeaconProxy(
             address(beacon),
-            abi.encodeCall(Accountant.initialize, (address(vault), treasuryAddr, INITIAL_RATE, 0, admin))
+            abi.encodeCall(Accountant.initialize, (address(vault), INITIAL_RATE, 0, admin))
         );
         assertEq(Accountant(address(proxy)).managementFeeRate(), 0);
     }
@@ -196,7 +184,7 @@ contract AccountantTest is Test {
         uint256 maxFee = accountant.MAX_MANAGEMENT_FEE_BPS();
         BeaconProxy proxy = new BeaconProxy(
             address(beacon),
-            abi.encodeCall(Accountant.initialize, (address(vault), treasuryAddr, INITIAL_RATE, maxFee, admin))
+            abi.encodeCall(Accountant.initialize, (address(vault), INITIAL_RATE, maxFee, admin))
         );
         assertEq(Accountant(address(proxy)).managementFeeRate(), maxFee);
     }
@@ -468,13 +456,12 @@ contract AccountantTest is Test {
         uint256 timeElapsed = block.timestamp - accountant.lastFeeSettleTimestamp();
         uint256 expectedShares = (totalShares * MANAGEMENT_FEE_BPS * timeElapsed) / (10_000 * 365 days);
 
-        vm.expectEmit(true, false, false, true);
-        emit Accountant.FeesDistributed(treasuryAddr, expectedShares);
+        vm.expectEmit(false, false, false, true);
+        emit Accountant.FeesDistributed(expectedShares);
 
         vm.prank(executor);
         accountant.settleManagementFee();
 
-        assertEq(vault.lastFeeTreasury(), treasuryAddr);
         assertEq(vault.lastFeeShares(), expectedShares);
         assertEq(vault.totalFeeMintCalls(), 1);
     }
@@ -706,45 +693,6 @@ contract AccountantTest is Test {
         );
         vm.prank(user);
         accountant.setVault(makeAddr("v"));
-    }
-
-    // =============================================================
-    //                    SET TREASURY
-    // =============================================================
-
-    function test_setTreasury_succeeds() public {
-        address newTreasury = makeAddr("newTreasury");
-
-        vm.prank(admin);
-        accountant.setTreasury(newTreasury);
-
-        assertEq(accountant.treasury(), newTreasury);
-    }
-
-    function test_setTreasury_emitsEvent() public {
-        address newTreasury = makeAddr("newTreasury");
-
-        vm.expectEmit(true, true, false, false);
-        emit Accountant.TreasuryUpdated(treasuryAddr, newTreasury);
-
-        vm.prank(admin);
-        accountant.setTreasury(newTreasury);
-    }
-
-    function test_setTreasury_revertsWhenZero() public {
-        vm.expectRevert(Accountant.ZeroAddress.selector);
-        vm.prank(admin);
-        accountant.setTreasury(address(0));
-    }
-
-    function test_setTreasury_revertsWhenNotAdmin() public {
-        bytes32 adminRole = accountant.DEFAULT_ADMIN_ROLE();
-
-        vm.expectRevert(
-            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user, adminRole)
-        );
-        vm.prank(user);
-        accountant.setTreasury(makeAddr("t"));
     }
 
     // =============================================================
@@ -1080,7 +1028,7 @@ contract AccountantTest is Test {
 
         BeaconProxy proxy = new BeaconProxy(
             address(beacon),
-            abi.encodeCall(Accountant.initialize, (address(vault), treasuryAddr, INITIAL_RATE, feeBps, admin))
+            abi.encodeCall(Accountant.initialize, (address(vault), INITIAL_RATE, feeBps, admin))
         );
         assertEq(Accountant(address(proxy)).managementFeeRate(), feeBps);
     }
@@ -1341,7 +1289,6 @@ contract AccountantExecutorIntegrationTest is Test {
 
     address public admin = makeAddr("admin");
     address public bot = makeAddr("bot");
-    address public treasuryAddr = makeAddr("treasury");
 
     uint256 public constant INITIAL_RATE = 1e18;
     uint256 public constant MANAGEMENT_FEE_BPS = 50; // 0.5%
@@ -1356,7 +1303,7 @@ contract AccountantExecutorIntegrationTest is Test {
         BeaconProxy accProxy = new BeaconProxy(
             address(accBeacon),
             abi.encodeCall(
-                Accountant.initialize, (address(vault), treasuryAddr, INITIAL_RATE, MANAGEMENT_FEE_BPS, admin)
+                Accountant.initialize, (address(vault), INITIAL_RATE, MANAGEMENT_FEE_BPS, admin)
             )
         );
         accountant = Accountant(address(accProxy));
@@ -1563,13 +1510,12 @@ contract AccountantExecutorIntegrationTest is Test {
         uint256 timeElapsed = block.timestamp - accountant.lastFeeSettleTimestamp();
         uint256 expectedShares = (totalShares * MANAGEMENT_FEE_BPS * timeElapsed) / (10_000 * 365 days);
 
-        vm.expectEmit(true, false, false, true);
-        emit Accountant.FeesDistributed(treasuryAddr, expectedShares);
+        vm.expectEmit(false, false, false, true);
+        emit Accountant.FeesDistributed(expectedShares);
 
         vm.prank(bot);
         executor.executeSettleManagementFee();
 
-        assertEq(vault.lastFeeTreasury(), treasuryAddr);
         assertEq(vault.lastFeeShares(), expectedShares);
         assertEq(vault.totalFeeMintCalls(), 1);
     }
@@ -1707,24 +1653,6 @@ contract AccountantExecutorIntegrationTest is Test {
         accountant.setManagementFeeRate(tooHigh);
     }
 
-    function test_integration_setTreasury() public {
-        address newTreasury = makeAddr("newTreasury");
-
-        vm.expectEmit(true, true, false, false);
-        emit Accountant.TreasuryUpdated(treasuryAddr, newTreasury);
-
-        vm.prank(admin);
-        accountant.setTreasury(newTreasury);
-
-        assertEq(accountant.treasury(), newTreasury);
-    }
-
-    function test_integration_setTreasury_revertsWhenZero() public {
-        vm.expectRevert(Accountant.ZeroAddress.selector);
-        vm.prank(admin);
-        accountant.setTreasury(address(0));
-    }
-
     function test_integration_setVault() public {
         address newVault = makeAddr("newVault");
 
@@ -1786,11 +1714,6 @@ contract AccountantExecutorIntegrationTest is Test {
             abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, bot, adminRole)
         );
         accountant.setManagementFeeRate(100);
-
-        vm.expectRevert(
-            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, bot, adminRole)
-        );
-        accountant.setTreasury(makeAddr("t"));
 
         vm.expectRevert(
             abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, bot, adminRole)
