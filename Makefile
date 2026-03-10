@@ -9,7 +9,7 @@ ifeq ($(VERIFY),true)
 VERIFY_FLAGS += --verify --verifier etherscan
 endif
 
-.PHONY: all build clean test fmt snapshot gas lint \
+.PHONY: all build clean test fmt snapshot gas lint install-hooks \
 	deploy-strategy-beacon-timelock deploy-strategy-beacon-proxy \
 	prepare-strategy-beacon-upgrade-safe upgrade-strategy-beacon-local
 
@@ -52,6 +52,10 @@ fmt-check:
 
 lint:
 	forge fmt --check && forge build
+
+# 仅本仓库：提交前自动 forge fmt 并重新暂存 .sol
+install-hooks:
+	git config core.hooksPath .githooks
 
 # ==================== Timelock + Beacon (StrategyController) ====================
 
