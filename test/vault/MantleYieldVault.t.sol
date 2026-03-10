@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {IStrategyAdapter} from "../src/interfaces/adapters/IStrategyAdapter.sol";
-import {ISanctionsOracle} from "../src/interfaces/oracle/ISanctionsOracle.sol";
-import {IERC7540Redeem, IMantleYieldVault} from "../src/interfaces/vault/IMantleYieldVault.sol";
-import {MantleYieldVault} from "../src/vault/MantleYieldVault.sol";
-import {VaultFactory} from "../src/vault/VaultFactory.sol";
+import {IStrategyAdapter} from "../../src/interfaces/adapters/IStrategyAdapter.sol";
+import {ISanctionsOracle} from "../../src/interfaces/oracle/ISanctionsOracle.sol";
+import {IERC7540Redeem, IMantleYieldVault} from "../../src/interfaces/vault/IMantleYieldVault.sol";
+import {MantleYieldVault} from "../../src/vault/MantleYieldVault.sol";
+import {VaultFactory} from "../../src/vault/VaultFactory.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";

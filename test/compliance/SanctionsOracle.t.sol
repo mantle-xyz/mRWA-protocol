@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {SanctionsOracle} from "../src/SanctionsOracle.sol";
-import {ISanctionsOracle} from "../src/interfaces/oracle/ISanctionsOracle.sol";
+import {SanctionsOracle} from "../../src/compliance/SanctionsOracle.sol";
+import {ISanctionsOracle} from "../../src/interfaces/oracle/ISanctionsOracle.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {Test} from "forge-std/Test.sol";
 

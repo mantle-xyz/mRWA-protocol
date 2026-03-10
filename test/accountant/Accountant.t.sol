@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {Accountant} from "../src/accountant/Accountant.sol";
-import {AccountantExecutor} from "../src/accountant/AccountantExecutor.sol";
+import {Accountant} from "../../src/accountant/Accountant.sol";
+import {AccountantExecutor} from "../../src/accountant/AccountantExecutor.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {BeaconProxy} from "@openzeppelin/contracts/proxy/beacon/BeaconProxy.sol";
 import {UpgradeableBeacon} from "@openzeppelin/contracts/proxy/beacon/UpgradeableBeacon.sol";
@@ -84,9 +84,7 @@ contract AccountantTest is Test {
         beacon = new UpgradeableBeacon(address(impl), admin);
         BeaconProxy proxy = new BeaconProxy(
             address(beacon),
-            abi.encodeCall(
-                Accountant.initialize, (address(vault), INITIAL_RATE, MANAGEMENT_FEE_BPS, admin)
-            )
+            abi.encodeCall(Accountant.initialize, (address(vault), INITIAL_RATE, MANAGEMENT_FEE_BPS, admin))
         );
         accountant = Accountant(address(proxy));
 
@@ -149,17 +147,14 @@ contract AccountantTest is Test {
         vm.expectRevert(Accountant.ZeroAddress.selector);
         new BeaconProxy(
             address(beacon),
-            abi.encodeCall(
-                Accountant.initialize, (address(vault), INITIAL_RATE, MANAGEMENT_FEE_BPS, address(0))
-            )
+            abi.encodeCall(Accountant.initialize, (address(vault), INITIAL_RATE, MANAGEMENT_FEE_BPS, address(0)))
         );
     }
 
     function test_initialize_revertsWhenRateIsZero() public {
         vm.expectRevert(Accountant.InvalidRate.selector);
         new BeaconProxy(
-            address(beacon),
-            abi.encodeCall(Accountant.initialize, (address(vault), 0, MANAGEMENT_FEE_BPS, admin))
+            address(beacon), abi.encodeCall(Accountant.initialize, (address(vault), 0, MANAGEMENT_FEE_BPS, admin))
         );
     }
 
@@ -167,15 +162,13 @@ contract AccountantTest is Test {
         uint256 tooHigh = accountant.MAX_MANAGEMENT_FEE_BPS() + 1;
         vm.expectRevert(abi.encodeWithSelector(Accountant.InvalidFeeRate.selector, tooHigh));
         new BeaconProxy(
-            address(beacon),
-            abi.encodeCall(Accountant.initialize, (address(vault), INITIAL_RATE, tooHigh, admin))
+            address(beacon), abi.encodeCall(Accountant.initialize, (address(vault), INITIAL_RATE, tooHigh, admin))
         );
     }
 
     function test_initialize_allowsZeroFeeRate() public {
         BeaconProxy proxy = new BeaconProxy(
-            address(beacon),
-            abi.encodeCall(Accountant.initialize, (address(vault), INITIAL_RATE, 0, admin))
+            address(beacon), abi.encodeCall(Accountant.initialize, (address(vault), INITIAL_RATE, 0, admin))
         );
         assertEq(Accountant(address(proxy)).managementFeeRate(), 0);
     }
@@ -183,8 +176,7 @@ contract AccountantTest is Test {
     function test_initialize_allowsMaxFeeRate() public {
         uint256 maxFee = accountant.MAX_MANAGEMENT_FEE_BPS();
         BeaconProxy proxy = new BeaconProxy(
-            address(beacon),
-            abi.encodeCall(Accountant.initialize, (address(vault), INITIAL_RATE, maxFee, admin))
+            address(beacon), abi.encodeCall(Accountant.initialize, (address(vault), INITIAL_RATE, maxFee, admin))
         );
         assertEq(Accountant(address(proxy)).managementFeeRate(), maxFee);
     }
@@ -1027,8 +1019,7 @@ contract AccountantTest is Test {
         feeBps = bound(feeBps, 0, accountant.MAX_MANAGEMENT_FEE_BPS());
 
         BeaconProxy proxy = new BeaconProxy(
-            address(beacon),
-            abi.encodeCall(Accountant.initialize, (address(vault), INITIAL_RATE, feeBps, admin))
+            address(beacon), abi.encodeCall(Accountant.initialize, (address(vault), INITIAL_RATE, feeBps, admin))
         );
         assertEq(Accountant(address(proxy)).managementFeeRate(), feeBps);
     }
@@ -1302,9 +1293,7 @@ contract AccountantExecutorIntegrationTest is Test {
         accBeacon = new UpgradeableBeacon(address(accImpl), admin);
         BeaconProxy accProxy = new BeaconProxy(
             address(accBeacon),
-            abi.encodeCall(
-                Accountant.initialize, (address(vault), INITIAL_RATE, MANAGEMENT_FEE_BPS, admin)
-            )
+            abi.encodeCall(Accountant.initialize, (address(vault), INITIAL_RATE, MANAGEMENT_FEE_BPS, admin))
         );
         accountant = Accountant(address(accProxy));
 

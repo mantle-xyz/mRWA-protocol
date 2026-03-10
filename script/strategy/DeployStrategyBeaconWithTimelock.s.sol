@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {TimelockUpgradeController} from "../src/governance/TimelockUpgradeController.sol";
-import {StrategyController} from "../src/protocol/StrategyController.sol";
+import {TimelockUpgradeController} from "../../src/governance/TimelockUpgradeController.sol";
+import {StrategyController} from "../../src/protocol/StrategyController.sol";
 import {BeaconProxy} from "@openzeppelin/contracts/proxy/beacon/BeaconProxy.sol";
 import {UpgradeableBeacon} from "@openzeppelin/contracts/proxy/beacon/UpgradeableBeacon.sol";
 import {Script, console2} from "forge-std/Script.sol";

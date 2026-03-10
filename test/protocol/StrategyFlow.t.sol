@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {SubRedManagementAdapter} from "../src/adapters/digift/SubRedManagementAdapter.sol";
-import {ISubRedManagement} from "../src/interfaces/adapters/digift/ISubRedManagement.sol";
-import {IControllerVault} from "../src/interfaces/vault/IControllerVault.sol";
-import {InFlightStatus, RequestStatus} from "../src/interfaces/vault/types/VaultTypes.sol";
-import {StrategyController} from "../src/protocol/StrategyController.sol";
+import {SubRedManagementAdapter} from "../../src/adapters/digift/SubRedManagementAdapter.sol";
+import {ISubRedManagement} from "../../src/interfaces/adapters/digift/ISubRedManagement.sol";
+import {IControllerVault} from "../../src/interfaces/vault/IControllerVault.sol";
+import {InFlightStatus, RequestStatus} from "../../src/interfaces/vault/types/VaultTypes.sol";
+import {StrategyController} from "../../src/protocol/StrategyController.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {Test} from "forge-std/Test.sol";
