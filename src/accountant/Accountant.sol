@@ -106,7 +106,7 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
         _disableInitializers();
     }
 
-    function initialize(address vault_, uint256 initialRate, uint256 managementFeeRate_, address admin)
+    function initialize(address vault_, uint64 initialRate, uint32 managementFeeRate_, address admin)
         external
         initializer
     {
@@ -121,8 +121,8 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
 
         AccountantStorage storage s = _getAccountantStorage();
         s.vault = IMantleYieldVault(vault_);
-        s.managementFeeRate = managementFeeRate_.toUint32();
-        s.lastExchangeRate = initialRate.toUint64();
+        s.managementFeeRate = managementFeeRate_;
+        s.lastExchangeRate = initialRate;
         s.lastUpdateTimestamp = block.timestamp.toUint64();
         s.lastFeeSettleTimestamp = block.timestamp.toUint64();
         s.totalSharesLastSettle = IMantleYieldVault(vault_).totalSupply();
@@ -145,27 +145,27 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
         return _getAccountantStorage().vault;
     }
 
-    function maxAllowedDeviation() external view returns (uint256) {
+    function maxAllowedDeviation() external view returns (uint32) {
         return _getAccountantStorage().maxAllowedDeviation;
     }
 
-    function managementFeeRate() external view returns (uint256) {
+    function managementFeeRate() external view returns (uint32) {
         return _getAccountantStorage().managementFeeRate;
     }
 
-    function minUpdateInterval() external view returns (uint256) {
+    function minUpdateInterval() external view returns (uint32) {
         return _getAccountantStorage().minUpdateInterval;
     }
 
-    function lastExchangeRate() external view returns (uint256) {
+    function lastExchangeRate() external view returns (uint64) {
         return _getAccountantStorage().lastExchangeRate;
     }
 
-    function lastUpdateTimestamp() external view returns (uint256) {
+    function lastUpdateTimestamp() external view returns (uint64) {
         return _getAccountantStorage().lastUpdateTimestamp;
     }
 
-    function lastFeeSettleTimestamp() external view returns (uint256) {
+    function lastFeeSettleTimestamp() external view returns (uint64) {
         return _getAccountantStorage().lastFeeSettleTimestamp;
     }
 
@@ -173,11 +173,11 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
         return _getAccountantStorage().totalSharesLastSettle;
     }
 
-    function lastComputeTimestamp() external view returns (uint256) {
+    function lastComputeTimestamp() external view returns (uint64) {
         return _getAccountantStorage().lastComputeTimestamp;
     }
 
-    function maxComputeAge() external view returns (uint256) {
+    function maxComputeAge() external view returns (uint32) {
         return _getAccountantStorage().maxComputeAge;
     }
 
@@ -188,7 +188,7 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
     /// @notice Push a new exchange rate after validating circuit breakers.
     /// @param newRate The new exchange rate (18-decimal precision)
     /// @param computeTimestamp Off-chain computation timestamp; must be strictly newer than the previous one
-    function updateExchangeRate(uint256 newRate, uint256 computeTimestamp)
+    function updateExchangeRate(uint64 newRate, uint64 computeTimestamp)
         external
         onlyRole(EXECUTOR_ROLE)
         whenNotPaused
@@ -208,9 +208,9 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
         uint256 oldRate = s.lastExchangeRate;
         s.vault.updateExchangeRate(newRate);
 
-        s.lastExchangeRate = newRate.toUint64();
+        s.lastExchangeRate = newRate;
         s.lastUpdateTimestamp = block.timestamp.toUint64();
-        s.lastComputeTimestamp = computeTimestamp.toUint64();
+        s.lastComputeTimestamp = computeTimestamp;
 
         emit ExchangeRateUpdated(oldRate, newRate, block.timestamp);
     }
@@ -249,29 +249,29 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
         emit VaultUpdated(oldVault, newVault);
     }
 
-    function setRiskParams(uint256 newMaxDeviation, uint256 newMinInterval) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function setRiskParams(uint32 newMaxDeviation, uint32 newMinInterval) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (newMaxDeviation == 0 || newMaxDeviation > MAX_DEVIATION_CEILING) {
             revert InvalidDeviation(newMaxDeviation);
         }
         AccountantStorage storage s = _getAccountantStorage();
-        s.maxAllowedDeviation = newMaxDeviation.toUint32();
-        s.minUpdateInterval = newMinInterval.toUint32();
+        s.maxAllowedDeviation = newMaxDeviation;
+        s.minUpdateInterval = newMinInterval;
         emit RiskParamsUpdated(newMaxDeviation, newMinInterval);
     }
 
-    function setMaxComputeAge(uint256 newAge) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function setMaxComputeAge(uint32 newAge) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (newAge == 0 || newAge > MAX_COMPUTE_AGE_CEILING) revert InvalidComputeAge(newAge);
         AccountantStorage storage s = _getAccountantStorage();
         uint256 oldAge = s.maxComputeAge;
-        s.maxComputeAge = newAge.toUint32();
+        s.maxComputeAge = newAge;
         emit MaxComputeAgeUpdated(oldAge, newAge);
     }
 
-    function setManagementFeeRate(uint256 newRate) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function setManagementFeeRate(uint32 newRate) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (newRate > MAX_MANAGEMENT_FEE_BPS) revert InvalidFeeRate(newRate);
         AccountantStorage storage s = _getAccountantStorage();
         uint256 oldRate = s.managementFeeRate;
-        s.managementFeeRate = newRate.toUint32();
+        s.managementFeeRate = newRate;
         emit ManagementFeeRateUpdated(oldRate, newRate);
     }
 
@@ -288,7 +288,7 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
     // =============================================================
 
     /// @dev Reverts if computeTimestamp is stale, in the future, or too old.
-    function _checkComputeTimestamp(AccountantStorage storage s, uint256 computeTimestamp) internal view {
+    function _checkComputeTimestamp(AccountantStorage storage s, uint64 computeTimestamp) internal view {
         if (computeTimestamp <= s.lastComputeTimestamp) {
             revert StaleComputeTimestamp(computeTimestamp, s.lastComputeTimestamp);
         }
@@ -301,7 +301,7 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
     }
 
     /// @dev Reverts if the rate change exceeds maxAllowedDeviation (in bps).
-    function _checkDeviation(AccountantStorage storage s, uint256 newRate) internal view {
+    function _checkDeviation(AccountantStorage storage s, uint64 newRate) internal view {
         uint256 cached = s.lastExchangeRate;
         uint256 delta = newRate > cached ? newRate - cached : cached - newRate;
         uint256 deviationBps = (delta * MAX_BPS) / cached;

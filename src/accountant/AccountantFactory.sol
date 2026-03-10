@@ -76,20 +76,15 @@ contract AccountantFactory {
      * @notice Deploy and atomically initialize an Accountant as a BeaconProxy.
      *         Use this when all dependent addresses are already known.
      * @param vault_ The MantleYieldVault address this accountant manages
-     * @param treasury_ Address receiving management-fee shares
      * @param initialRate Initial exchange rate (18-decimal precision)
      * @param managementFeeRate_ Annual management fee in basis points
      * @param admin Address granted DEFAULT_ADMIN_ROLE, PAUSER_ROLE, and EXECUTOR_ROLE
      */
-    function deployAndInitAccountant(
-        address vault_,
-        address treasury_,
-        uint256 initialRate,
-        uint256 managementFeeRate_,
-        address admin
-    ) external returns (address accountant) {
-        bytes memory initData =
-            abi.encodeCall(IAccountant.initialize, (vault_, treasury_, initialRate, managementFeeRate_, admin));
+    function deployAndInitAccountant(address vault_, uint64 initialRate, uint32 managementFeeRate_, address admin)
+        external
+        returns (address accountant)
+    {
+        bytes memory initData = abi.encodeCall(IAccountant.initialize, (vault_, initialRate, managementFeeRate_, admin));
 
         BeaconProxy proxy = new BeaconProxy(address(BEACON), initData);
         accountant = address(proxy);
