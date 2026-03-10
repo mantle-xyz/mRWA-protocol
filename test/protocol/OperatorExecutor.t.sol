@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {IStrategyController} from "../src/interfaces/strategy/IStrategyController.sol";
-import {OperatorExecutor} from "../src/protocol/OperatorExecutor.sol";
+import {IStrategyController} from "../../src/interfaces/strategy/IStrategyController.sol";
+import {OperatorExecutor} from "../../src/protocol/OperatorExecutor.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {Test} from "forge-std/Test.sol";
 

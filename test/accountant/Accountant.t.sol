@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {Accountant} from "../src/accountant/Accountant.sol";
-import {AccountantExecutor} from "../src/accountant/AccountantExecutor.sol";
+import {Accountant} from "../../src/accountant/Accountant.sol";
+import {AccountantExecutor} from "../../src/accountant/AccountantExecutor.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {BeaconProxy} from "@openzeppelin/contracts/proxy/beacon/BeaconProxy.sol";
 import {UpgradeableBeacon} from "@openzeppelin/contracts/proxy/beacon/UpgradeableBeacon.sol";

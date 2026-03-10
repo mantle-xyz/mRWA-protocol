@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {StrategyController} from "../src/protocol/StrategyController.sol";
+import {StrategyController} from "../../src/protocol/StrategyController.sol";
 import {BeaconProxy} from "@openzeppelin/contracts/proxy/beacon/BeaconProxy.sol";
 import {Script, console2} from "forge-std/Script.sol";
 
