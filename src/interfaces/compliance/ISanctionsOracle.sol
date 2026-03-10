@@ -37,6 +37,15 @@ interface ISanctionsOracle {
     error Oracle__ZeroAddress();
 
     // ─────────────────────────────────────────────────────────────
+    //                        INITIALIZER
+    // ─────────────────────────────────────────────────────────────
+
+    /// @notice Proxy initialization — replaces the constructor.
+    /// @param admin Address granted DEFAULT_ADMIN_ROLE (typically a multisig / timelock).
+    /// @param complianceBot Address granted COMPLIANCE_ROLE (off-chain Sanctions Service wallet).
+    function initialize(address admin, address complianceBot) external;
+
+    // ─────────────────────────────────────────────────────────────
     //                        READ FUNCTIONS
     // ─────────────────────────────────────────────────────────────
 

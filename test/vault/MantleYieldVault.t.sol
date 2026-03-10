@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {IStrategyAdapter} from "../../src/interfaces/adapters/IStrategyAdapter.sol";
-import {ISanctionsOracle} from "../../src/interfaces/oracle/ISanctionsOracle.sol";
+import {ISanctionsOracle} from "../../src/interfaces/compliance/ISanctionsOracle.sol";
 import {IERC7540Redeem, IMantleYieldVault} from "../../src/interfaces/vault/IMantleYieldVault.sol";
 import {MantleYieldVault} from "../../src/vault/MantleYieldVault.sol";
 import {VaultFactory} from "../../src/vault/VaultFactory.sol";
@@ -29,6 +29,8 @@ contract MockUSDC is ERC20 {
 
 contract MockSanctionsOracle is ISanctionsOracle {
     mapping(address => bool) public sanctioned;
+
+    function initialize(address, address) external override {}
 
     function isSanctioned(address account) external view override returns (bool) {
         return sanctioned[account];

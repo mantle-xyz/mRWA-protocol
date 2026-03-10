@@ -3,7 +3,7 @@ pragma solidity ^0.8.24;
 
 import {IStrategyAdapter} from "../interfaces/adapters/IStrategyAdapter.sol";
 
-import {ISanctionsOracle} from "../interfaces/oracle/ISanctionsOracle.sol";
+import {ISanctionsOracle} from "../interfaces/compliance/ISanctionsOracle.sol";
 import {IERC7540Redeem, IMantleYieldVault} from "../interfaces/vault/IMantleYieldVault.sol";
 import {AccessControlDefaultAdminRulesUpgradeable} from
     "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlDefaultAdminRulesUpgradeable.sol";

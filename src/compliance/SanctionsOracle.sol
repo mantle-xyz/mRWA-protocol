@@ -1,37 +1,16 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {ISanctionsOracle} from "../interfaces/oracle/ISanctionsOracle.sol";
-import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+import {ISanctionsOracle} from "../interfaces/compliance/ISanctionsOracle.sol";
+import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 
 /**
  * @title  SanctionsOracle
  * @author Mantle RWA Team
  * @notice On-chain AML blacklist registry that gates MantleYieldVault operations.
- *
- * @dev    Architecture position
- *         ─────────────────────
- *         • Upstream  : MantleYieldVault calls `isSanctioned()` inside deposit / redeem / transfer hooks.
- *         • Writer    : Off-chain Sanctions Service holds `COMPLIANCE_ROLE` and pushes incremental updates.
- *         • Data feed : Chainalysis / Elliptic / OFAC (aggregated off-chain, delta-compressed before pushing).
- *
- *         Design principles
- *         ─────────────────
- *         1. **Smart batching**  — Only SSTORE when status actually flips; redundant entries are skipped.
- *         2. **Gas-bounded**     — `MAX_BATCH_SIZE` hard-caps loop iterations to prevent griefing.
- *         3. **O(1) reads**      — Single SLOAD per `isSanctioned` call (< 3 000 gas in Vault hooks).
- *         4. **Audit trail**     — Monotonic `batchNonce` + per-address events for off-chain indexing.
- *         5. **Fail-safe**       — If the Compliance Service errors, no state is cleared; existing bans stay.
- *         6. **Minimal surface** — `COMPLIANCE_ROLE` can only toggle booleans; it cannot touch Vault funds.
- *
- *         Error recovery
- *         ──────────────
- *         If a legitimate user is mistakenly sanctioned:
- *           a) User files an appeal off-chain.
- *           b) Admin (multisig) instructs the Compliance Bot → `updateSanctionStatus(addr, false)`.
- *           c) Or Admin grants itself `COMPLIANCE_ROLE` for an emergency unsanction.
+ *         Deployed behind a **BeaconProxy** for unified upgradability across instances.
  */
-contract SanctionsOracle is ISanctionsOracle, AccessControl {
+contract SanctionsOracle is ISanctionsOracle, AccessControlUpgradeable {
     // ─────────────────────────────────────────────────────────────
     //                          CONSTANTS
     // ─────────────────────────────────────────────────────────────
@@ -44,40 +23,85 @@ contract SanctionsOracle is ISanctionsOracle, AccessControl {
     uint256 public constant MAX_BATCH_SIZE = 200;
 
     // ─────────────────────────────────────────────────────────────
-    //                            STATE
+    //                   ERC-7201 NAMESPACED STORAGE
     // ─────────────────────────────────────────────────────────────
 
-    /// @notice Core mapping: `true` ⇒ address is currently sanctioned / blacklisted.
-    /// @dev    Exposed as a public getter satisfying `ISanctionsOracle.isSanctioned`.
-    mapping(address account => bool sanctioned) public isSanctioned;
+    /// @custom:storage-location erc7201:mrwa.storage.SanctionsOracle
+    struct SanctionsOracleStorage {
+        /// @dev Core mapping: `true` ⇒ address is currently sanctioned.
+        mapping(address account => bool sanctioned) _sanctioned;
+        /// @dev Running count of distinct sanctioned addresses.
+        uint256 _totalSanctionedCount;
+        /// @dev Block timestamp of the most recent state-mutating update.
+        uint256 _lastUpdateTimestamp;
+        /// @dev Monotonically increasing counter; incremented on every batch call.
+        uint256 _batchNonce;
+    }
 
-    /// @notice Running count of distinct sanctioned addresses.
-    uint256 public totalSanctionedCount;
+    // keccak256(abi.encode(uint256(keccak256("mrwa.storage.SanctionsOracle")) - 1)) & ~bytes32(uint256(0xff))
+    bytes32 private constant SANCTIONS_ORACLE_STORAGE =
+        0xeaa83cc192d853a8f8b5bdc027bbf14a5aadb833634a75893f2171049ea64b00;
 
-    /// @notice Block timestamp of the most recent state-mutating update.
-    /// @dev    Off-chain monitoring uses this to detect Compliance Bot liveness issues.
-    uint256 public lastUpdateTimestamp;
-
-    /// @notice Monotonically increasing counter; incremented on every batch call.
-    /// @dev    Allows off-chain systems to correlate on-chain events with their job IDs.
-    uint256 public batchNonce;
+    function _getStorage() private pure returns (SanctionsOracleStorage storage $) {
+        bytes32 slot = SANCTIONS_ORACLE_STORAGE;
+        assembly {
+            $.slot := slot
+        }
+    }
 
     // ─────────────────────────────────────────────────────────────
-    //                         CONSTRUCTOR
+    //              CONSTRUCTOR (locks implementation)
+    // ─────────────────────────────────────────────────────────────
+
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    //                         INITIALIZER
     // ─────────────────────────────────────────────────────────────
 
     /**
+     * @notice Proxy initialization — replaces the constructor.
+     * @dev    Called exactly once per proxy via `BeaconProxy(beacon, abi.encodeCall(...))`.
      * @param admin_         Address receiving `DEFAULT_ADMIN_ROLE` (typically a multisig / timelock).
      * @param complianceBot_ Address receiving `COMPLIANCE_ROLE` (the off-chain Sanctions Service hot-wallet).
      */
-    constructor(address admin_, address complianceBot_) {
+    function initialize(address admin_, address complianceBot_) external initializer {
         if (admin_ == address(0)) revert Oracle__ZeroAddress();
         if (complianceBot_ == address(0)) revert Oracle__ZeroAddress();
+
+        __AccessControl_init();
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin_);
         _grantRole(COMPLIANCE_ROLE, complianceBot_);
 
-        lastUpdateTimestamp = block.timestamp;
+        _getStorage()._lastUpdateTimestamp = block.timestamp;
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    //                       READ FUNCTIONS
+    // ─────────────────────────────────────────────────────────────
+
+    /// @inheritdoc ISanctionsOracle
+    function isSanctioned(address account) external view override returns (bool) {
+        return _getStorage()._sanctioned[account];
+    }
+
+    /// @inheritdoc ISanctionsOracle
+    function totalSanctionedCount() external view override returns (uint256) {
+        return _getStorage()._totalSanctionedCount;
+    }
+
+    /// @inheritdoc ISanctionsOracle
+    function lastUpdateTimestamp() external view override returns (uint256) {
+        return _getStorage()._lastUpdateTimestamp;
+    }
+
+    /// @inheritdoc ISanctionsOracle
+    function batchNonce() external view override returns (uint256) {
+        return _getStorage()._batchNonce;
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -89,8 +113,6 @@ contract SanctionsOracle is ISanctionsOracle, AccessControl {
         return interfaceId == type(ISanctionsOracle).interfaceId || super.supportsInterface(interfaceId);
     }
 
-    // NOTE: `isSanctioned(address)` is auto-generated by the public mapping and satisfies the interface.
-
     // ─────────────────────────────────────────────────────────────
     //                       WRITE FUNCTIONS
     // ─────────────────────────────────────────────────────────────
@@ -99,23 +121,24 @@ contract SanctionsOracle is ISanctionsOracle, AccessControl {
     function updateSanctionStatus(address account, bool sanctioned) external onlyRole(COMPLIANCE_ROLE) {
         if (account == address(0)) revert Oracle__ZeroAddress();
 
+        SanctionsOracleStorage storage s = _getStorage();
         uint256 changed;
 
-        if (isSanctioned[account] != sanctioned) {
-            isSanctioned[account] = sanctioned;
+        if (s._sanctioned[account] != sanctioned) {
+            s._sanctioned[account] = sanctioned;
 
             if (sanctioned) {
                 unchecked {
-                    ++totalSanctionedCount;
+                    ++s._totalSanctionedCount;
                 }
             } else {
-                // Safe: count ≥ 1 because `isSanctioned[account]` was `true`.
+                // Safe: count ≥ 1 because `_sanctioned[account]` was `true`.
                 unchecked {
-                    --totalSanctionedCount;
+                    --s._totalSanctionedCount;
                 }
             }
 
-            lastUpdateTimestamp = block.timestamp;
+            s._lastUpdateTimestamp = block.timestamp;
             changed = 1;
 
             emit SanctionStatusUpdated(account, sanctioned);
@@ -124,7 +147,7 @@ contract SanctionsOracle is ISanctionsOracle, AccessControl {
         // Batch event with processed=1 for consistent off-chain indexing.
         uint256 nonce;
         unchecked {
-            nonce = batchNonce++;
+            nonce = s._batchNonce++;
         }
         emit BatchSanctionUpdated(nonce, 1, changed, sanctioned);
     }
@@ -138,16 +161,18 @@ contract SanctionsOracle is ISanctionsOracle, AccessControl {
         if (len == 0) revert Oracle__EmptyArray();
         if (len > MAX_BATCH_SIZE) revert Oracle__BatchTooLarge(len, MAX_BATCH_SIZE);
 
+        SanctionsOracleStorage storage s = _getStorage();
+
         // Cache in memory to avoid repeated SLOAD / SSTORE inside the loop.
-        uint256 cachedCount = totalSanctionedCount;
+        uint256 cachedCount = s._totalSanctionedCount;
         uint256 effectiveChanges;
 
         for (uint256 i; i < len;) {
             address account = accounts[i];
             if (account == address(0)) revert Oracle__ZeroAddress();
 
-            if (isSanctioned[account] != sanctioned) {
-                isSanctioned[account] = sanctioned;
+            if (s._sanctioned[account] != sanctioned) {
+                s._sanctioned[account] = sanctioned;
 
                 if (sanctioned) {
                     unchecked {
@@ -173,14 +198,14 @@ contract SanctionsOracle is ISanctionsOracle, AccessControl {
 
         // Single SSTORE for count (only if something changed).
         if (effectiveChanges > 0) {
-            totalSanctionedCount = cachedCount;
-            lastUpdateTimestamp = block.timestamp;
+            s._totalSanctionedCount = cachedCount;
+            s._lastUpdateTimestamp = block.timestamp;
         }
 
         // Always emit the batch event so off-chain can track every invocation.
         uint256 nonce;
         unchecked {
-            nonce = batchNonce++;
+            nonce = s._batchNonce++;
         }
         emit BatchSanctionUpdated(nonce, len, effectiveChanges, sanctioned);
     }
