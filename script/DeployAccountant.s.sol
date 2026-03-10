@@ -18,8 +18,8 @@ import {Script, console2} from "forge-std/Script.sol";
 contract DeployAccountant is Script {
     function run() external {
         address vaultAddr = vm.envAddress("F_VAULT_ADDRESS");
-        uint256 initialRate = vm.envUint("F_INITIAL_RATE");
-        uint256 managementFeeBps = vm.envUint("F_MANAGEMENT_FEE_BPS");
+        uint64 initialRate = uint64(vm.envUint("F_INITIAL_RATE"));
+        uint32 managementFeeBps = uint32(vm.envUint("F_MANAGEMENT_FEE_BPS"));
         address admin = vm.envAddress("F_ADMIN_ADDRESS");
         address bot = vm.envAddress("F_BOT_ADDRESS");
 
