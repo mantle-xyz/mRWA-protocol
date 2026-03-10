@@ -1,0 +1,15 @@
+#!/bin/sh
+# Pre-commit: run forge fmt and re-stage changed .sol files (this repo only).
+# One-time enable: git config core.hooksPath .githooks
+
+set -e
+cd "$(git rev-parse --show-toplevel)"
+
+command -v forge >/dev/null 2>&1 || { echo "githooks: forge not found"; exit 0; }
+
+forge fmt
+
+for f in $(git diff --name-only 2>/dev/null; git diff --name-only --cached 2>/dev/null); do
+  case "$f" in *.sol) [ -f "$f" ] && git add "$f" ;; esac
+done 2>/dev/null || true
+exit 0
