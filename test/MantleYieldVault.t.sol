@@ -1169,7 +1169,7 @@ contract ERC7540ViewTest is VaultTestBase {
         vm.prank(alice);
         vault.requestRedeem(500e6);
 
-        assertEq(vault.pendingRedeemRequest(0, alice), 500e6);
+        assertEq(vault.pendingRedeemRequest(alice), 500e6);
     }
 
     function test_claimableRedeemRequestAfterReady() public {
@@ -1188,7 +1188,7 @@ contract ERC7540ViewTest is VaultTestBase {
         vm.prank(controllerAddr);
         vault.markRequestsReady(ids, settled);
 
-        assertEq(vault.claimableRedeemRequest(0, alice), 500e6);
+        assertEq(vault.claimableRedeemRequest(alice), 500e6);
     }
 }
 
@@ -1563,7 +1563,7 @@ contract SyncRedeemDisabledTest is VaultTestBase {
         vm.prank(alice);
         vault.requestRedeem(shares);
 
-        assertEq(vault.pendingRedeemRequest(0, alice), shares);
+        assertEq(vault.pendingRedeemRequest(alice), shares);
     }
 
     function test_redeemWorksAfterReenabling() public {

@@ -219,11 +219,11 @@ contract MantleYieldVault is
         emit RedeemRequest(msg.sender, requestId, shares);
     }
 
-    function pendingRedeemRequest(uint256, address account) external view returns (uint256) {
+    function pendingRedeemRequest(address account) external view returns (uint256) {
         return _pendingShares[account];
     }
 
-    function claimableRedeemRequest(uint256, address account) external view returns (uint256) {
+    function claimableRedeemRequest(address account) external view returns (uint256) {
         return _claimableShares[account];
     }
 

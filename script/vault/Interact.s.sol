@@ -208,7 +208,7 @@ contract ClaimRedeem is SignerHelper {
         MantleYieldVault vault = MantleYieldVault(vaultAddr);
         IERC20 usdc = IERC20(usdcAddr);
 
-        uint256 claimableShares = vault.claimableRedeemRequest(0, user);
+        uint256 claimableShares = vault.claimableRedeemRequest(user);
         uint256 usdcBefore = usdc.balanceOf(user);
 
         console.log("=== Claim Redeem ===");
