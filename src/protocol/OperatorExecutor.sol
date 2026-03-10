@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {IStrategyController} from "../interfaces/strategy/IStrategyController.sol";
+import {IStrategyControllerExecutor} from "../interfaces/strategy/IStrategyControllerExecutor.sol";
 import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 
 import {EIP712Upgradeable} from "@openzeppelin/contracts-upgradeable/utils/cryptography/EIP712Upgradeable.sol";
@@ -25,7 +25,7 @@ contract OperatorExecutor is Initializable, AccessControlUpgradeable, EIP712Upgr
     uint8 public constant ACTION_ALLOCATE_ASSETS_BATCH = 2;
     uint8 public constant ACTION_CLAIM_ADAPTER_ASSETS = 3;
 
-    IStrategyController public controller;
+    IStrategyControllerExecutor public controller;
 
     mapping(address => uint256) public nonces;
 
@@ -59,7 +59,7 @@ contract OperatorExecutor is Initializable, AccessControlUpgradeable, EIP712Upgr
         __AccessControl_init();
         __EIP712_init("OperatorExecutor", "1");
 
-        controller = IStrategyController(controller_);
+        controller = IStrategyControllerExecutor(controller_);
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(SIGNER_ROLE, initialSigner);
