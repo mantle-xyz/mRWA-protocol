@@ -19,6 +19,8 @@ make build
 make test
 ```
 
+**提交前自动格式化（仅本仓库）**：在项目根目录执行一次 `make install-hooks`，之后每次 `git commit` 前会自动执行 `forge fmt` 并把改动的 .sol 重新暂存。
+
 ## 部署流程
 
 ### 1) 部署治理与 Beacon

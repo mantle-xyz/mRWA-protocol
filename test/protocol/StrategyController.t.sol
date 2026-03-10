@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {Test} from "forge-std/Test.sol";
-import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IStrategyAdapter} from "../../src/interfaces/adapters/IStrategyAdapter.sol";
 import {IControllerVault} from "../../src/interfaces/vault/IControllerVault.sol";
 import {InFlightStatus, RequestStatus} from "../../src/interfaces/vault/types/VaultTypes.sol";
 import {StrategyController} from "../../src/protocol/StrategyController.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {Test} from "forge-std/Test.sol";
 
 contract MockAsset is ERC20 {
     constructor() ERC20("MockAsset", "mAST") {}
@@ -230,7 +230,17 @@ contract MockControllerVault is IControllerVault {
         )
     {
         InFlight memory f = flights[inFlightId];
-        return (f.id, f.adapter, f.assetAddr, f.tokenAmount, f.usdcAmount, f.settledAmount, f.isInvest, f.timestamp, f.status);
+        return (
+            f.id,
+            f.adapter,
+            f.assetAddr,
+            f.tokenAmount,
+            f.usdcAmount,
+            f.settledAmount,
+            f.isInvest,
+            f.timestamp,
+            f.status
+        );
     }
 }
 
@@ -257,7 +267,8 @@ contract StrategyControllerUnitTest is Test {
 
         StrategyController implementation = new StrategyController();
         bytes memory initData = abi.encodeCall(
-            StrategyController.initialize, (address(vault), admin, manager, address(executorGateway), 1000, 200, 1 hours)
+            StrategyController.initialize,
+            (address(vault), admin, manager, address(executorGateway), 1000, 200, 1 hours)
         );
         controller = StrategyController(address(new ERC1967Proxy(address(implementation), initData)));
 
