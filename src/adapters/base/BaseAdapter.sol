@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {IStrategyAdapter} from "../../interfaces/adapters/IStrategyAdapter.sol";
-import {IControllerVault} from "../../interfaces/vault/IControllerVault.sol";
+import {IMantleYieldVault} from "../../interfaces/vault/IMantleYieldVault.sol";
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -45,7 +45,7 @@ abstract contract BaseAdapter is IStrategyAdapter, AccessControl, ReentrancyGuar
             revert InvalidAddress();
         }
         VAULT = vault_;
-        ASSET = IERC20(IControllerVault(vault_).asset());
+        ASSET = IERC20(IMantleYieldVault(vault_).asset());
         if (address(ASSET) == address(0)) {
             revert InvalidAddress();
         }

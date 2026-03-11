@@ -126,12 +126,14 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
 
     /**
      * @notice Return current strategy value in vault asset units (e.g. USDC/USDT).
-     * @dev Value = adapter idle asset + vault-held position token value (converted by oracle if configured).
+     * @dev Value = adapter idle asset + (adapter-held + vault-held) position token value
+     *      converted into asset units (oracle if configured).
+     *      This avoids under-reporting during async settlement windows before claimToVault().
      */
     function totalValue() external view override returns (uint256) {
         uint8 assetDecimals = IERC20Metadata(address(ASSET)).decimals();
         uint8 stDecimals = IERC20Metadata(ST_TOKEN).decimals();
-        uint256 posBalance = IERC20(ST_TOKEN).balanceOf(VAULT);
+        uint256 posBalance = IERC20(ST_TOKEN).balanceOf(address(this)) + IERC20(ST_TOKEN).balanceOf(VAULT);
         uint256 posValue = _estimateAssetAmount(posBalance, assetDecimals, stDecimals);
         return ASSET.balanceOf(address(this)) + posValue;
     }

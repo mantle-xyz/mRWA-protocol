@@ -10,7 +10,7 @@ VERIFY_FLAGS += --verify --verifier etherscan
 endif
 
 .PHONY: all build clean test fmt snapshot gas lint install-hooks \
-	deploy-strategy-beacon-timelock deploy-strategy-beacon-proxy \
+	deploy-strategy-beacon-timelock deploy-strategy-beacon-proxy deploy-mock-token \
 	prepare-strategy-beacon-upgrade-safe upgrade-strategy-beacon-local
 
 all: clean install build
@@ -88,6 +88,13 @@ upgrade-strategy-beacon-local:
 		-vvvv
 
 # ==================== Utilities ====================
+
+deploy-mock-token:
+	@forge script script/DeployMockToken.s.sol:DeployMockToken \
+		--rpc-url $(NETWORK) \
+		--broadcast \
+		--private-key $(PRIVATE_KEY) \
+		-vvvv
 
 slither:
 	slither .

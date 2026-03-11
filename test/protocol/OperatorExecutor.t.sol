@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {IStrategyController} from "../../src/interfaces/strategy/IStrategyController.sol";
+import {IStrategyControllerExecutor} from "../../src/interfaces/strategy/IStrategyControllerExecutor.sol";
 import {OperatorExecutor} from "../../src/protocol/OperatorExecutor.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {Test} from "forge-std/Test.sol";
 
-contract MockStrategyController is IStrategyController {
+contract MockStrategyController is IStrategyControllerExecutor {
     uint256 public rebalanceCount;
     bytes32 public lastProcessHash;
     bytes32 public lastAllocateHash;
@@ -26,10 +26,6 @@ contract MockStrategyController is IStrategyController {
     function claimAdapterAssets(address adapter, uint256 posAmount, uint256 assetAmount) external override {
         lastAllocateHash = keccak256(abi.encode(adapter, posAmount, assetAmount));
     }
-
-    function setAdapterPaused(address, bool) external override {}
-
-    function setAdaptersPaused(address[] calldata, bool) external override {}
 }
 
 contract OperatorExecutorTest is Test {
