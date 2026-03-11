@@ -3,8 +3,7 @@ pragma solidity ^0.8.24;
 
 import {SubRedManagementAdapter} from "../../src/adapters/digift/SubRedManagementAdapter.sol";
 import {ISubRedManagement} from "../../src/interfaces/adapters/digift/ISubRedManagement.sol";
-import {IControllerVault} from "../../src/interfaces/vault/IControllerVault.sol";
-import {InFlightStatus, RequestStatus} from "../../src/interfaces/vault/types/VaultTypes.sol";
+import {IMantleYieldVault} from "../../src/interfaces/vault/IMantleYieldVault.sol";
 import {StrategyController} from "../../src/protocol/StrategyController.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
@@ -41,7 +40,7 @@ contract MockSubRedManagementFlow is ISubRedManagement {
     function redeem(address, address, uint256, uint256) external override {}
 }
 
-contract MockVaultFlow is IControllerVault {
+contract MockVaultFlow {
     ERC20 public immutable usdc;
 
     uint256 public lockedTotal;
@@ -50,7 +49,7 @@ contract MockVaultFlow is IControllerVault {
     uint256 public inFlightIdCursor;
 
     mapping(uint256 => uint256) public liabilities;
-    mapping(uint256 => RequestStatus) public requestStatus;
+    mapping(uint256 => IMantleYieldVault.RequestStatus) public requestStatus;
 
     struct InFlightData {
         uint256 id;
@@ -61,7 +60,7 @@ contract MockVaultFlow is IControllerVault {
         uint256 settledAmount;
         bool isInvest;
         uint256 timestamp;
-        InFlightStatus status;
+        IMantleYieldVault.InFlightStatus status;
     }
 
     mapping(uint256 => InFlightData) internal inFlights;
@@ -70,7 +69,7 @@ contract MockVaultFlow is IControllerVault {
         usdc = ERC20(asset_);
     }
 
-    function asset() external view override returns (address) {
+    function asset() external view returns (address) {
         return address(usdc);
     }
 
@@ -80,8 +79,8 @@ contract MockVaultFlow is IControllerVault {
 
     function setLiability(uint256 id, uint256 amount) external {
         liabilities[id] = amount;
-        if (requestStatus[id] == RequestStatus.NONE) {
-            requestStatus[id] = RequestStatus.PENDING;
+        if (requestStatus[id] == IMantleYieldVault.RequestStatus.NONE) {
+            requestStatus[id] = IMantleYieldVault.RequestStatus.PENDING;
         }
     }
 
@@ -89,39 +88,51 @@ contract MockVaultFlow is IControllerVault {
         lockedTotal = amount;
     }
 
-    function totalLockedLiabilities() external view override returns (uint256) {
+    function totalLockedLiabilities() external view returns (uint256) {
         return lockedTotal;
     }
 
-    function totalInvestInFlight() external pure override returns (uint256) {
+    function totalInvestInFlight() external pure returns (uint256) {
         return 0;
     }
 
-    function totalRedeemInFlight() external view override returns (uint256) {
+    function totalRedeemInFlight() external view returns (uint256) {
         return redeemInFlightTotal;
     }
 
-    function approveToAdapter(address adapter, address token, uint256 amount) external override {
+    function adapterInvestInFlightTokens(address) external pure returns (uint256) {
+        return 0;
+    }
+
+    function adapterRedeemInFlightUsdc(address) external pure returns (uint256) {
+        return 0;
+    }
+
+    function getFreeCash() external view returns (uint256) {
+        uint256 totalCash = usdc.balanceOf(address(this));
+        return totalCash > lockedTotal ? totalCash - lockedTotal : 0;
+    }
+
+    function approveToAdapter(address adapter, address token, uint256 amount) external {
         ERC20(token).approve(adapter, amount);
     }
 
-    function updateRequestBatch(uint256[] calldata ids, RequestStatus status) external override {
+    function updateRequestBatch(uint256[] calldata ids, IMantleYieldVault.RequestStatus status) external {
         for (uint256 i = 0; i < ids.length; i++) {
             requestStatus[ids[i]] = status;
         }
     }
 
-    function markRequestsReady(uint256[] calldata ids, uint256[] calldata settledAssets) external override {
+    function markRequestsReady(uint256[] calldata ids, uint256[] calldata settledAssets) external {
         require(ids.length == settledAssets.length, "LENGTH_MISMATCH");
         for (uint256 i = 0; i < ids.length; i++) {
             liabilities[ids[i]] = settledAssets[i];
-            requestStatus[ids[i]] = RequestStatus.READY;
+            requestStatus[ids[i]] = IMantleYieldVault.RequestStatus.READY;
         }
     }
 
     function createInFlight(address adapter, address assetAddr, uint256 tokenAmount, uint256 usdcAmount, bool isInvest)
         external
-        override
         returns (uint256 inFlightId)
     {
         inFlightId = ++inFlightIdCursor;
@@ -134,17 +145,17 @@ contract MockVaultFlow is IControllerVault {
             settledAmount: 0,
             isInvest: isInvest,
             timestamp: block.timestamp,
-            status: InFlightStatus.PENDING
+            status: IMantleYieldVault.InFlightStatus.PENDING
         });
         if (!isInvest) {
             redeemInFlightTotal += usdcAmount;
         }
     }
 
-    function confirmInFlight(uint256 inFlightId, uint256 actualAmount) external override {
+    function confirmInFlight(uint256 inFlightId, uint256 actualAmount) external {
         InFlightData storage rec = inFlights[inFlightId];
         rec.settledAmount = actualAmount;
-        rec.status = InFlightStatus.CONFIRMED;
+        rec.status = IMantleYieldVault.InFlightStatus.CONFIRMED;
         if (!rec.isInvest && redeemInFlightTotal >= rec.usdcAmount) {
             redeemInFlightTotal -= rec.usdcAmount;
         }
@@ -153,18 +164,17 @@ contract MockVaultFlow is IControllerVault {
     function requests(uint256 requestId)
         external
         view
-        override
-        returns (uint256, address, uint256, uint256, uint256, uint256, RequestStatus)
+        returns (uint256, address, uint256, uint256, uint256, uint256, IMantleYieldVault.RequestStatus)
     {
         uint256 assets = liabilities[requestId];
-        RequestStatus status = requestStatus[requestId];
-        return (requestId, address(0), 0, assets, status == RequestStatus.READY ? assets : 0, 0, status);
+        IMantleYieldVault.RequestStatus status = requestStatus[requestId];
+        return
+            (requestId, address(0), 0, assets, status == IMantleYieldVault.RequestStatus.READY ? assets : 0, 0, status);
     }
 
     function inFlightRecords(uint256 inFlightId)
         external
         view
-        override
         returns (
             uint256 id,
             address adapter,
@@ -174,7 +184,7 @@ contract MockVaultFlow is IControllerVault {
             uint256 settledAmount,
             bool isInvest,
             uint256 timestamp,
-            InFlightStatus status
+            IMantleYieldVault.InFlightStatus status
         )
     {
         InFlightData memory rec = inFlights[inFlightId];
@@ -273,8 +283,8 @@ contract StrategyFlowTest is Test {
         uint256 inFlightAfter = vault.inFlightIdCursor();
 
         // PROCESSING
-        assertEq(uint8(vault.requestStatus(ids[0])), uint8(RequestStatus.PROCESSING));
-        assertEq(uint8(vault.requestStatus(ids[1])), uint8(RequestStatus.PROCESSING));
+        assertEq(uint8(vault.requestStatus(ids[0])), uint8(IMantleYieldVault.RequestStatus.PROCESSING));
+        assertEq(uint8(vault.requestStatus(ids[1])), uint8(IMantleYieldVault.RequestStatus.PROCESSING));
         assertEq(vault.totalRedeemInFlight(), 300e18);
 
         // Simulate T+N settlement funds returned to vault.
@@ -288,8 +298,8 @@ contract StrategyFlowTest is Test {
         controller.allocateAssetsBatch(ids, inFlightIds);
 
         // READY
-        assertEq(uint8(vault.requestStatus(ids[0])), uint8(RequestStatus.READY));
-        assertEq(uint8(vault.requestStatus(ids[1])), uint8(RequestStatus.READY));
+        assertEq(uint8(vault.requestStatus(ids[0])), uint8(IMantleYieldVault.RequestStatus.READY));
+        assertEq(uint8(vault.requestStatus(ids[1])), uint8(IMantleYieldVault.RequestStatus.READY));
         assertEq(vault.totalRedeemInFlight(), 0);
     }
 }

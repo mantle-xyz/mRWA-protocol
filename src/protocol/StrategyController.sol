@@ -2,8 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {IStrategyAdapter} from "../interfaces/adapters/IStrategyAdapter.sol";
-import {IControllerVault} from "../interfaces/vault/IControllerVault.sol";
-import {InFlightStatus, RequestStatus} from "../interfaces/vault/types/VaultTypes.sol";
+import {IMantleYieldVault} from "../interfaces/vault/IMantleYieldVault.sol";
 import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import {Initializable} from "@openzeppelin/contracts/proxy/utils/Initializable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -16,7 +15,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     uint256 public constant BPS_DENOMINATOR = 10_000;
 
     IERC20 public asset;
-    IControllerVault public vault;
+    IMantleYieldVault public vault;
 
     uint16 public bufferTargetBps;
     uint16 public rebalanceThresholdBps;
@@ -80,7 +79,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     error BatchNotProcessed(bytes32 batchKey);
     error BatchAlreadyReady(bytes32 batchKey);
     error IdsNotSorted();
-    error InvalidRequestState(uint256 id, RequestStatus status);
+    error InvalidRequestState(uint256 id, IMantleYieldVault.RequestStatus status);
     error InvalidRedeemInFlight(uint256 inFlightId);
 
     constructor() {
@@ -115,7 +114,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
 
         __AccessControl_init();
 
-        vault = IControllerVault(vault_);
+        vault = IMantleYieldVault(vault_);
         asset = IERC20(vault.asset());
         if (address(asset) == address(0)) {
             revert InvalidAddress();
@@ -310,7 +309,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         }
         processingBatchDone[batchKey] = true;
 
-        vault.updateRequestBatch(ids, RequestStatus.PROCESSING);
+        vault.updateRequestBatch(ids, IMantleYieldVault.RequestStatus.PROCESSING);
 
         uint256 freeCash = _freeCash();
         uint256 shortfall;
@@ -396,17 +395,15 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         )
     {
         totalCash = asset.balanceOf(address(vault));
-        locked = vault.totalLockedLiabilities();
-        freeCash = totalCash > locked ? totalCash - locked : 0;
+        freeCash = vault.getFreeCash();
+        locked = totalCash > freeCash ? totalCash - freeCash : 0;
         netAssets = totalCash + _totalStrategyValue() + vault.totalInvestInFlight() + vault.totalRedeemInFlight();
         targetCash = (netAssets * bufferTargetBps) / BPS_DENOMINATOR;
         threshold = (netAssets * rebalanceThresholdBps) / BPS_DENOMINATOR;
     }
 
     function _freeCash() internal view returns (uint256) {
-        uint256 totalCash = asset.balanceOf(address(vault));
-        uint256 locked = vault.totalLockedLiabilities();
-        return totalCash > locked ? totalCash - locked : 0;
+        return vault.getFreeCash();
     }
 
     function _totalStrategyValue() internal view returns (uint256 total) {
@@ -461,8 +458,10 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
             vault.approveToAdapter(adapter, address(asset), alloc);
             try IStrategyAdapter(adapter).deposit(alloc, info.receiptReceiver) returns (uint256 sharesOrPos) {
                 if (info.isAsync) {
-                    uint256 posAmount = _estimatePosAmount(adapter, alloc, sharesOrPos);
-                    if (posAmount > 0) {
+                    uint256 estimatedPos = _estimatePosAmount(adapter, alloc, sharesOrPos);
+                    uint256 pendingInvestPos = vault.adapterInvestInFlightTokens(adapter);
+                    uint256 posAmount = estimatedPos > pendingInvestPos ? estimatedPos - pendingInvestPos : 0;
+                    if (posAmount != 0) {
                         address token = _posToken(adapter);
                         vault.createInFlight(adapter, token, posAmount, alloc, true);
                     }
@@ -513,24 +512,34 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
                     continue;
                 }
 
+                // Prevent duplicate async requests on repeated rebalance:
+                // only request the delta that is not already in redeem in-flight for this adapter.
+                uint256 pendingRedeemAsset = vault.adapterRedeemInFlightUsdc(adapter);
+                uint256 coveredByPending = pendingRedeemAsset >= toWithdrawAsset ? toWithdrawAsset : pendingRedeemAsset;
+                uint256 requestAsset = toWithdrawAsset - coveredByPending;
+                if (requestAsset == 0) {
+                    remaining -= toWithdrawAsset;
+                    continue;
+                }
+
                 // Convert asset amount into position-token amount for protocol redeem.
-                uint256 posAmount = _estimatePosAmount(adapter, toWithdrawAsset, toWithdrawAsset);
+                uint256 posAmount = _estimatePosAmount(adapter, requestAsset, requestAsset);
                 if (posAmount == 0) {
-                    posAmount = toWithdrawAsset;
+                    posAmount = requestAsset;
                 }
 
                 vault.approveToAdapter(adapter, token, posAmount);
-                try IStrategyAdapter(adapter).requestRedeemAsync(toWithdrawAsset, address(vault)) {}
+                try IStrategyAdapter(adapter).requestRedeemAsync(requestAsset, address(vault)) {}
                 catch {
                     vault.approveToAdapter(adapter, token, 0);
-                    emit DivestSkipped(adapter, toWithdrawAsset);
+                    emit DivestSkipped(adapter, requestAsset);
                     continue;
                 }
                 vault.approveToAdapter(adapter, token, 0);
 
-                uint256 inFlightId = vault.createInFlight(adapter, token, posAmount, toWithdrawAsset, false);
-                emit AsyncRedeemRequested(adapter, toWithdrawAsset, inFlightId);
-                remaining -= toWithdrawAsset;
+                uint256 inFlightId = vault.createInFlight(adapter, token, posAmount, requestAsset, false);
+                emit AsyncRedeemRequested(adapter, requestAsset, inFlightId);
+                remaining -= (coveredByPending + requestAsset);
                 continue;
             }
 
@@ -559,8 +568,9 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         uint256 len = inFlightIds.length;
         for (uint256 i = 0; i < len; i++) {
             uint256 inFlightId = inFlightIds[i];
-            (,,,, uint256 usdcAmount,, bool isInvest,, InFlightStatus status) = vault.inFlightRecords(inFlightId);
-            if (isInvest || status != InFlightStatus.PENDING || usdcAmount == 0) {
+            (,,,, uint256 usdcAmount,, bool isInvest,, IMantleYieldVault.InFlightStatus status) =
+                vault.inFlightRecords(inFlightId);
+            if (isInvest || status != IMantleYieldVault.InFlightStatus.PENDING || usdcAmount == 0) {
                 revert InvalidRedeemInFlight(inFlightId);
             }
 
@@ -600,8 +610,10 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     {
         settledAssets = new uint256[](ids.length);
         for (uint256 i = 0; i < ids.length; i++) {
-            (,,, uint256 estimatedAssets_, uint256 settledAssets_,, RequestStatus status) = vault.requests(ids[i]);
-            if (status != RequestStatus.PROCESSING && status != RequestStatus.READY) {
+            (,,, uint256 estimatedAssets_, uint256 settledAssets_,, IMantleYieldVault.RequestStatus status) =
+                vault.requests(ids[i]);
+            if (status != IMantleYieldVault.RequestStatus.PROCESSING && status != IMantleYieldVault.RequestStatus.READY)
+            {
                 revert InvalidRequestState(ids[i], status);
             }
 
