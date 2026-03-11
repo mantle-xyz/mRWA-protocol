@@ -75,6 +75,7 @@ contract MockSubRedManagement is ISubRedManagement {
 
 contract SubRedManagementAdapterTest is Test {
     MockUSDC internal usdc;
+    MockUSDC internal dustToken;
     MockVaultForAdapter internal vault;
     MockSubRedManagement internal subRed;
     MockSTToken internal stToken;
@@ -86,6 +87,7 @@ contract SubRedManagementAdapterTest is Test {
 
     function setUp() public {
         usdc = new MockUSDC();
+        dustToken = new MockUSDC();
         vault = new MockVaultForAdapter(address(usdc));
         subRed = new MockSubRedManagement();
         stToken = new MockSTToken();
@@ -121,23 +123,47 @@ contract SubRedManagementAdapterTest is Test {
         assertEq(stToken.balanceOf(address(adapter)), 200e18);
     }
 
-    function test_ClaimToVault_ReturnsTokenBalance() public {
+    function test_SweepToVault_ReturnsTokenBalance() public {
         usdc.mint(address(adapter), 150e18);
-        uint256 claimed = adapter.claimToVault(address(usdc), 100e18);
+        uint256 claimed = adapter.sweepToVault(address(usdc), 100e18);
         assertEq(claimed, 100e18);
         assertEq(usdc.balanceOf(address(vault)), 100e18);
         assertEq(usdc.balanceOf(address(adapter)), 50e18);
     }
 
-    function test_RevertWhen_ClaimToVaultCalledByNonController() public {
+    function test_RevertWhen_SweepToVaultCalledByNonController() public {
         vm.prank(other);
         vm.expectRevert();
-        adapter.claimToVault(address(usdc), 1e18);
+        adapter.sweepToVault(address(usdc), 1e18);
     }
 
     function test_RevertWhen_RequestRedeemWithoutVaultPosAllowance() public {
         stToken.mint(address(vault), 100e18);
         vm.expectRevert();
         adapter.requestRedeemAsync(100e18, receiver);
+    }
+
+    function test_RevertWhen_SetPausedByUnauthorized() public {
+        vm.prank(other);
+        vm.expectRevert();
+        adapter.setPaused(true);
+    }
+
+    function test_SweepDustToken_Success() public {
+        dustToken.mint(address(adapter), 15e18);
+        adapter.sweep(address(dustToken), receiver);
+        assertEq(dustToken.balanceOf(receiver), 15e18);
+        assertEq(dustToken.balanceOf(address(adapter)), 0);
+    }
+
+    function test_RevertWhen_SweepWithZeroReceiver() public {
+        dustToken.mint(address(adapter), 1e18);
+        vm.expectRevert();
+        adapter.sweep(address(dustToken), address(0));
+    }
+
+    function test_RevertWhen_SweepWithZeroToken() public {
+        vm.expectRevert();
+        adapter.sweep(address(0), receiver);
     }
 }

@@ -7,24 +7,70 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 import {Test} from "forge-std/Test.sol";
 
 contract MockStrategyController is IStrategyControllerExecutor {
+    error NotExecutorGateway();
+
+    address public executorGateway;
     uint256 public rebalanceCount;
     bytes32 public lastProcessHash;
     bytes32 public lastAllocateHash;
+    bytes32 public lastSettleHash;
+    bytes32 public lastSettleBatchHash;
 
-    function rebalance() external override {
+    modifier onlyExecutorGateway() {
+        if (msg.sender != executorGateway) {
+            revert NotExecutorGateway();
+        }
+        _;
+    }
+
+    function setExecutorGateway(address gateway) external {
+        executorGateway = gateway;
+    }
+
+    function rebalance() external override onlyExecutorGateway {
         rebalanceCount++;
     }
 
-    function processRedeemBatch(uint256[] calldata ids, uint256 batchTotalAsset) external override {
+    function processRedeemBatch(uint256[] calldata ids, uint256 batchTotalAsset)
+        external
+        override
+        onlyExecutorGateway
+    {
         lastProcessHash = keccak256(abi.encode(ids, batchTotalAsset));
     }
 
-    function allocateAssetsBatch(uint256[] calldata ids, uint256[] calldata inFlightIds) external override {
-        lastAllocateHash = keccak256(abi.encode(ids, inFlightIds));
+    function finalizeRedeemBatch(
+        uint256[] calldata ids,
+        uint256[] calldata inFlightIds,
+        address[] calldata sweepAdapters,
+        uint256[] calldata posAmounts,
+        uint256[] calldata assetAmounts
+    ) external override onlyExecutorGateway {
+        lastAllocateHash = keccak256(abi.encode(ids, inFlightIds, sweepAdapters, posAmounts, assetAmounts));
     }
 
-    function claimAdapterAssets(address adapter, uint256 posAmount, uint256 assetAmount) external override {
-        lastAllocateHash = keccak256(abi.encode(adapter, posAmount, assetAmount));
+    function settleAdapter(
+        address adapter,
+        uint256 posAmount,
+        uint256 assetAmount,
+        uint256[] calldata investInFlightIds,
+        uint256[] calldata redeemInFlightIds,
+        uint256[] calldata ids
+    ) external override onlyExecutorGateway {
+        lastSettleHash =
+            keccak256(abi.encode(adapter, posAmount, assetAmount, investInFlightIds, redeemInFlightIds, ids));
+    }
+
+    function settleAdapters(
+        address[] calldata adapters,
+        uint256[] calldata posAmounts,
+        uint256[] calldata assetAmounts,
+        uint256[] calldata investInFlightIds,
+        uint256[] calldata redeemInFlightIds,
+        uint256[] calldata ids
+    ) external override onlyExecutorGateway {
+        lastSettleBatchHash =
+            keccak256(abi.encode(adapters, posAmounts, assetAmounts, investInFlightIds, redeemInFlightIds, ids));
     }
 }
 
@@ -48,6 +94,12 @@ contract OperatorExecutorTest is Test {
         OperatorExecutor implementation = new OperatorExecutor();
         bytes memory initData = abi.encodeCall(OperatorExecutor.initialize, (address(controller), admin, signer));
         executor = OperatorExecutor(address(new ERC1967Proxy(address(implementation), initData)));
+        controller.setExecutorGateway(address(executor));
+    }
+
+    function test_ControllerRejectsDirectCall_NotFromExecutorGateway() public {
+        vm.expectRevert(MockStrategyController.NotExecutorGateway.selector);
+        controller.rebalance();
     }
 
     function test_ExecuteRebalance_Success() public {
@@ -85,10 +137,13 @@ contract OperatorExecutorTest is Test {
         uint256[] memory inFlightIds = new uint256[](2);
         inFlightIds[0] = 11;
         inFlightIds[1] = 12;
+        address[] memory sweepAdapters = new address[](0);
+        uint256[] memory posAmounts = new uint256[](0);
+        uint256[] memory assetAmounts = new uint256[](0);
 
         OperatorExecutor.Command memory cmd = OperatorExecutor.Command({
             action: 2,
-            data: abi.encode(ids, inFlightIds),
+            data: abi.encode(ids, inFlightIds, sweepAdapters, posAmounts, assetAmounts),
             nonce: 0,
             deadline: uint64(block.timestamp + 1 hours)
         });
@@ -96,7 +151,69 @@ contract OperatorExecutorTest is Test {
         bytes memory sig = _sign(cmd, signerPk);
         executor.execute(cmd, sig);
 
-        assertEq(controller.lastAllocateHash(), keccak256(abi.encode(ids, inFlightIds)));
+        assertEq(
+            controller.lastAllocateHash(),
+            keccak256(abi.encode(ids, inFlightIds, sweepAdapters, posAmounts, assetAmounts))
+        );
+    }
+
+    function test_ExecuteSettleAdapter_Routes() public {
+        uint256[] memory investInFlightIds = new uint256[](1);
+        investInFlightIds[0] = 7;
+        uint256[] memory redeemInFlightIds = new uint256[](1);
+        redeemInFlightIds[0] = 9;
+        uint256[] memory ids = new uint256[](2);
+        ids[0] = 101;
+        ids[1] = 102;
+
+        OperatorExecutor.Command memory cmd = OperatorExecutor.Command({
+            action: 3,
+            data: abi.encode(address(0xBEEF), uint256(11), uint256(22), investInFlightIds, redeemInFlightIds, ids),
+            nonce: 0,
+            deadline: uint64(block.timestamp + 1 hours)
+        });
+
+        bytes memory sig = _sign(cmd, signerPk);
+        executor.execute(cmd, sig);
+
+        assertEq(
+            controller.lastSettleHash(),
+            keccak256(abi.encode(address(0xBEEF), uint256(11), uint256(22), investInFlightIds, redeemInFlightIds, ids))
+        );
+    }
+
+    function test_ExecuteSettleAdapters_Routes() public {
+        address[] memory adapters = new address[](2);
+        adapters[0] = address(0xA1);
+        adapters[1] = address(0xB2);
+        uint256[] memory posAmounts = new uint256[](2);
+        posAmounts[0] = 11;
+        posAmounts[1] = 22;
+        uint256[] memory assetAmounts = new uint256[](2);
+        assetAmounts[0] = 33;
+        assetAmounts[1] = 44;
+        uint256[] memory investInFlightIds = new uint256[](1);
+        investInFlightIds[0] = 7;
+        uint256[] memory redeemInFlightIds = new uint256[](1);
+        redeemInFlightIds[0] = 9;
+        uint256[] memory ids = new uint256[](2);
+        ids[0] = 101;
+        ids[1] = 102;
+
+        OperatorExecutor.Command memory cmd = OperatorExecutor.Command({
+            action: 4,
+            data: abi.encode(adapters, posAmounts, assetAmounts, investInFlightIds, redeemInFlightIds, ids),
+            nonce: 0,
+            deadline: uint64(block.timestamp + 1 hours)
+        });
+
+        bytes memory sig = _sign(cmd, signerPk);
+        executor.execute(cmd, sig);
+
+        assertEq(
+            controller.lastSettleBatchHash(),
+            keccak256(abi.encode(adapters, posAmounts, assetAmounts, investInFlightIds, redeemInFlightIds, ids))
+        );
     }
 
     function test_RevertWhen_ReplayNonce() public {
