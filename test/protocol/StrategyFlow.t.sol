@@ -44,9 +44,12 @@ contract MockVaultFlow {
     ERC20 public immutable usdc;
 
     uint256 public lockedTotal;
+    uint256 public investInFlightTotal;
     uint256 public redeemInFlightTotal;
     uint256 public requestIdCursor;
     uint256 public inFlightIdCursor;
+    mapping(address => uint256) public investInFlightByAdapter;
+    mapping(address => uint256) public redeemInFlightByAdapter;
 
     mapping(uint256 => uint256) public liabilities;
     mapping(uint256 => IMantleYieldVault.RequestStatus) public requestStatus;
@@ -92,20 +95,20 @@ contract MockVaultFlow {
         return lockedTotal;
     }
 
-    function totalInvestInFlight() external pure returns (uint256) {
-        return 0;
+    function totalInvestInFlight() external view returns (uint256) {
+        return investInFlightTotal;
     }
 
     function totalRedeemInFlight() external view returns (uint256) {
         return redeemInFlightTotal;
     }
 
-    function adapterInvestInFlightTokens(address) external pure returns (uint256) {
-        return 0;
+    function adapterInvestInFlightTokens(address adapter) external view returns (uint256) {
+        return investInFlightByAdapter[adapter];
     }
 
-    function adapterRedeemInFlightUsdc(address) external pure returns (uint256) {
-        return 0;
+    function adapterRedeemInFlightUsdc(address adapter) external view returns (uint256) {
+        return redeemInFlightByAdapter[adapter];
     }
 
     function getFreeCash() external view returns (uint256) {
@@ -147,8 +150,12 @@ contract MockVaultFlow {
             timestamp: block.timestamp,
             status: IMantleYieldVault.InFlightStatus.PENDING
         });
-        if (!isInvest) {
+        if (isInvest) {
+            investInFlightTotal += usdcAmount;
+            investInFlightByAdapter[adapter] += tokenAmount;
+        } else {
             redeemInFlightTotal += usdcAmount;
+            redeemInFlightByAdapter[adapter] += usdcAmount;
         }
     }
 
@@ -156,8 +163,17 @@ contract MockVaultFlow {
         InFlightData storage rec = inFlights[inFlightId];
         rec.settledAmount = actualAmount;
         rec.status = IMantleYieldVault.InFlightStatus.CONFIRMED;
+        if (rec.isInvest && investInFlightTotal >= rec.usdcAmount) {
+            investInFlightTotal -= rec.usdcAmount;
+            if (investInFlightByAdapter[rec.adapter] >= rec.tokenAmount) {
+                investInFlightByAdapter[rec.adapter] -= rec.tokenAmount;
+            }
+        }
         if (!rec.isInvest && redeemInFlightTotal >= rec.usdcAmount) {
             redeemInFlightTotal -= rec.usdcAmount;
+            if (redeemInFlightByAdapter[rec.adapter] >= rec.usdcAmount) {
+                redeemInFlightByAdapter[rec.adapter] -= rec.usdcAmount;
+            }
         }
     }
 
@@ -295,7 +311,7 @@ contract StrategyFlowTest is Test {
         for (uint256 i = 0; i < redeemInFlightCount; i++) {
             inFlightIds[i] = inFlightBefore + i + 1;
         }
-        controller.allocateAssetsBatch(ids, inFlightIds);
+        controller.finalizeRedeemBatch(ids, inFlightIds, new address[](0), new uint256[](0), new uint256[](0));
 
         // READY
         assertEq(uint8(vault.requestStatus(ids[0])), uint8(IMantleYieldVault.RequestStatus.READY));

@@ -23,6 +23,7 @@ abstract contract BaseAdapter is IStrategyAdapter, AccessControl, ReentrancyGuar
     error InvalidAddress();
     error NotController();
     error Unsupported();
+    error NotPauser();
     error SweepProtectedToken(address token);
     error InvalidToken(address token);
 
@@ -80,7 +81,7 @@ abstract contract BaseAdapter is IStrategyAdapter, AccessControl, ReentrancyGuar
     // =============================================================
 
     /// @notice Controller-triggered asset return path: move token balance from adapter back to Vault.
-    function claimToVault(address token, uint256 amount)
+    function sweepToVault(address token, uint256 amount)
         external
         virtual
         override
@@ -102,14 +103,22 @@ abstract contract BaseAdapter is IStrategyAdapter, AccessControl, ReentrancyGuar
     // Admin Actions
     // =============================================================
 
-    function setPaused(bool p) external {
-        require(hasRole(PAUSER_ROLE, msg.sender) || hasRole(DEFAULT_ADMIN_ROLE, msg.sender), "NO_PAUSE_ROLE");
-        paused = p;
-        emit AdapterPaused(address(this), p);
+    function setPaused(bool paused_) external virtual override {
+        if (!hasRole(PAUSER_ROLE, msg.sender) && !hasRole(DEFAULT_ADMIN_ROLE, msg.sender)) {
+            revert NotPauser();
+        }
+        paused = paused_;
+        emit AdapterPaused(address(this), paused_);
     }
 
     /// @notice Emergency sweep: transfer all of a token to receiver (admin only)
     function sweep(address token, address receiver) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (token == address(0)) {
+            revert InvalidToken(token);
+        }
+        if (receiver == address(0)) {
+            revert InvalidAddress();
+        }
         if (token == address(ASSET)) {
             revert SweepProtectedToken(token);
         }

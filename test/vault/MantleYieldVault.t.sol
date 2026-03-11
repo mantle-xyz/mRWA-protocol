@@ -101,7 +101,7 @@ contract MockStrategyAdapter is IStrategyAdapter {
 
     function requestRedeemAsync(uint256, address) external pure override {}
 
-    function claimToVault(address, uint256) external pure override returns (uint256) {
+    function sweepToVault(address, uint256) external pure override returns (uint256) {
         return 0;
     }
 
