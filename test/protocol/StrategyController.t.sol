@@ -384,6 +384,22 @@ contract StrategyControllerUnitTest is Test {
         vm.stopPrank();
     }
 
+    function test_RevertWhen_UpdateStrategyBreaksActiveWeightInvariant() public {
+        _registerTwoStrategies();
+
+        vm.prank(manager);
+        vm.expectRevert();
+        controller.updateStrategy(address(syncAdapter), 7000, 1, false, true, address(syncAdapter));
+    }
+
+    function test_RevertWhen_UpdateStrategyBreaksPriorityInvariant() public {
+        _registerTwoStrategies();
+
+        vm.prank(manager);
+        vm.expectRevert();
+        controller.updateStrategy(address(asyncAdapter), 5000, 0, true, true, address(asyncAdapter));
+    }
+
     function test_RevertWhen_RebalanceBeforeCooldown() public {
         _registerTwoStrategies();
         asset.mint(address(vault), 1_000e18);

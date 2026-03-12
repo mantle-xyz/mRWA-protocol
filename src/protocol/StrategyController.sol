@@ -42,6 +42,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     event StrategyUpdated(
         address indexed adapter, uint16 targetWeightBps, uint16 priority, bool isAsync, bool isActive
     );
+    event RiskParamsUpdated(uint16 bufferTargetBps, uint16 rebalanceThresholdBps, uint64 rebalanceCooldown);
     event StrategyOrderUpdated(address[] orderedStrategies);
     event AdapterPauseUpdated(address indexed adapter, bool paused);
     event RebalanceEvaluated(
@@ -150,6 +151,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         bufferTargetBps = bufferTargetBps_;
         rebalanceThresholdBps = rebalanceThresholdBps_;
         rebalanceCooldown = rebalanceCooldown_;
+        emit RiskParamsUpdated(bufferTargetBps_, rebalanceThresholdBps_, rebalanceCooldown_);
     }
 
     function registerStrategy(
@@ -179,6 +181,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
             receiptReceiver: receiptReceiver
         });
 
+        _validateCurrentOrderInvariant();
         emit StrategyRegistered(adapter, targetWeightBps, priority, isAsync, isActive);
     }
 
@@ -207,6 +210,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         info.isActive = isActive;
         info.receiptReceiver = receiptReceiver;
 
+        _validateCurrentOrderInvariant();
         emit StrategyUpdated(adapter, targetWeightBps, priority, isAsync, isActive);
     }
 
@@ -244,6 +248,36 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
             revert WeightsMustBe10000(totalActiveWeight);
         }
         emit StrategyOrderUpdated(orderedStrategies);
+    }
+
+    /// @dev Ensure existing execution order remains coherent after strategy config changes.
+    function _validateCurrentOrderInvariant() internal view {
+        uint256 len = strategyOrder.length;
+        if (len == 0) {
+            return;
+        }
+
+        uint256 totalActiveWeight;
+        uint16 lastPriority;
+        for (uint256 i = 0; i < len; i++) {
+            address adapter = strategyOrder[i];
+            StrategyInfo memory info = strategyInfo[adapter];
+            if (!info.exists) {
+                revert InvalidStrategy(adapter);
+            }
+            if (!info.isActive) {
+                revert StrategyInactive(adapter);
+            }
+            if (i > 0 && info.priority < lastPriority) {
+                revert InvalidPriorityOrder(adapter);
+            }
+            lastPriority = info.priority;
+            totalActiveWeight += info.targetWeightBps;
+        }
+
+        if (totalActiveWeight != BPS_DENOMINATOR) {
+            revert WeightsMustBe10000(totalActiveWeight);
+        }
     }
 
     // =============================================================
