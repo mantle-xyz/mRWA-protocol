@@ -253,8 +253,8 @@ contract StrategyFlowTest is Test {
             address(vault), address(subRedUMINT), address(uMINTToken), address(this), address(controller), address(0)
         );
 
-        controller.registerStrategy(address(adapterISNR), 5000, 1, true, true, address(adapterISNR));
-        controller.registerStrategy(address(adapterUMINT), 5000, 2, true, true, address(adapterUMINT));
+        controller.registerStrategy(address(adapterISNR), 5000, 1, true, true);
+        controller.registerStrategy(address(adapterUMINT), 5000, 2, true, true);
 
         address[] memory ordered = new address[](2);
         ordered[0] = address(adapterISNR);

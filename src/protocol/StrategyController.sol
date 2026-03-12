@@ -28,7 +28,6 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         bool isAsync;
         bool isActive;
         bool exists;
-        address receiptReceiver;
     }
 
     mapping(address => StrategyInfo) public strategyInfo;
@@ -86,6 +85,8 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     error InvestInFlightIdsRequired(address adapter);
     error RedeemInFlightIdsRequired(address adapter);
     error ClaimInputsLengthMismatch();
+    error UpdateStrategiesLengthMismatch();
+    error DuplicateStrategyUpdate(address adapter);
 
     constructor() {
         _disableInitializers();
@@ -154,15 +155,11 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         emit RiskParamsUpdated(bufferTargetBps_, rebalanceThresholdBps_, rebalanceCooldown_);
     }
 
-    function registerStrategy(
-        address adapter,
-        uint16 targetWeightBps,
-        uint16 priority,
-        bool isAsync,
-        bool isActive,
-        address receiptReceiver
-    ) external onlyRole(STRATEGY_MANAGER_ROLE) {
-        if (adapter == address(0) || receiptReceiver == address(0)) {
+    function registerStrategy(address adapter, uint16 targetWeightBps, uint16 priority, bool isAsync, bool isActive)
+        external
+        onlyRole(STRATEGY_MANAGER_ROLE)
+    {
+        if (adapter == address(0)) {
             revert InvalidAddress();
         }
         if (targetWeightBps > BPS_DENOMINATOR) {
@@ -177,44 +174,56 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
             priority: priority,
             isAsync: isAsync,
             isActive: isActive,
-            exists: true,
-            receiptReceiver: receiptReceiver
+            exists: true
         });
 
         _validateCurrentOrderInvariant();
         emit StrategyRegistered(adapter, targetWeightBps, priority, isAsync, isActive);
     }
 
-    function updateStrategy(
-        address adapter,
-        uint16 targetWeightBps,
-        uint16 priority,
-        bool isAsync,
-        bool isActive,
-        address receiptReceiver
+    function updateStrategies(
+        address[] calldata adapters,
+        uint16[] calldata targetWeightBpsList,
+        uint16[] calldata priorities,
+        bool[] calldata isAsyncList,
+        bool[] calldata isActiveList
     ) external onlyRole(STRATEGY_MANAGER_ROLE) {
-        if (targetWeightBps > BPS_DENOMINATOR) {
-            revert InvalidBps();
-        }
-        if (receiptReceiver == address(0)) {
-            revert InvalidAddress();
-        }
-        if (!strategyInfo[adapter].exists) {
-            revert InvalidStrategy(adapter);
-        }
+        _validateUpdateStrategiesInputs(adapters, targetWeightBpsList, priorities, isAsyncList, isActiveList);
 
-        StrategyInfo storage info = strategyInfo[adapter];
-        info.targetWeightBps = targetWeightBps;
-        info.priority = priority;
-        info.isAsync = isAsync;
-        info.isActive = isActive;
-        info.receiptReceiver = receiptReceiver;
+        _validateNoDuplicateAdapters(adapters);
+
+        uint256 len = adapters.length;
+        for (uint256 i = 0; i < len; i++) {
+            _applyStrategyUpdate(adapters[i], targetWeightBpsList[i], priorities[i], isAsyncList[i], isActiveList[i]);
+        }
 
         _validateCurrentOrderInvariant();
-        emit StrategyUpdated(adapter, targetWeightBps, priority, isAsync, isActive);
+    }
+
+    function updateStrategiesAndOrder(
+        address[] calldata adapters,
+        uint16[] calldata targetWeightBpsList,
+        uint16[] calldata priorities,
+        bool[] calldata isAsyncList,
+        bool[] calldata isActiveList,
+        address[] calldata orderedStrategies
+    ) external onlyRole(STRATEGY_MANAGER_ROLE) {
+        _validateUpdateStrategiesInputs(adapters, targetWeightBpsList, priorities, isAsyncList, isActiveList);
+        _validateNoDuplicateAdapters(adapters);
+
+        uint256 len = adapters.length;
+        for (uint256 i = 0; i < len; i++) {
+            _applyStrategyUpdate(adapters[i], targetWeightBpsList[i], priorities[i], isAsyncList[i], isActiveList[i]);
+        }
+
+        _setStrategyOrder(orderedStrategies);
     }
 
     function setStrategyOrder(address[] calldata orderedStrategies) external onlyRole(STRATEGY_MANAGER_ROLE) {
+        _setStrategyOrder(orderedStrategies);
+    }
+
+    function _setStrategyOrder(address[] calldata orderedStrategies) internal {
         uint256 len = orderedStrategies.length;
         delete strategyOrder;
 
@@ -250,6 +259,22 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         emit StrategyOrderUpdated(orderedStrategies);
     }
 
+    function _validateUpdateStrategiesInputs(
+        address[] calldata adapters,
+        uint16[] calldata targetWeightBpsList,
+        uint16[] calldata priorities,
+        bool[] calldata isAsyncList,
+        bool[] calldata isActiveList
+    ) internal pure {
+        uint256 len = adapters.length;
+        if (
+            len != targetWeightBpsList.length || len != priorities.length || len != isAsyncList.length
+                || len != isActiveList.length
+        ) {
+            revert UpdateStrategiesLengthMismatch();
+        }
+    }
+
     /// @dev Ensure existing execution order remains coherent after strategy config changes.
     function _validateCurrentOrderInvariant() internal view {
         uint256 len = strategyOrder.length;
@@ -277,6 +302,37 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
 
         if (totalActiveWeight != BPS_DENOMINATOR) {
             revert WeightsMustBe10000(totalActiveWeight);
+        }
+    }
+
+    function _applyStrategyUpdate(address adapter, uint16 targetWeightBps, uint16 priority, bool isAsync, bool isActive)
+        internal
+    {
+        if (targetWeightBps > BPS_DENOMINATOR) {
+            revert InvalidBps();
+        }
+        if (!strategyInfo[adapter].exists) {
+            revert InvalidStrategy(adapter);
+        }
+
+        StrategyInfo storage info = strategyInfo[adapter];
+        info.targetWeightBps = targetWeightBps;
+        info.priority = priority;
+        info.isAsync = isAsync;
+        info.isActive = isActive;
+
+        emit StrategyUpdated(adapter, targetWeightBps, priority, isAsync, isActive);
+    }
+
+    function _validateNoDuplicateAdapters(address[] calldata adapters) internal pure {
+        uint256 len = adapters.length;
+        for (uint256 i = 0; i < len; i++) {
+            address adapter = adapters[i];
+            for (uint256 j = 0; j < i; j++) {
+                if (adapters[j] == adapter) {
+                    revert DuplicateStrategyUpdate(adapter);
+                }
+            }
         }
     }
 
@@ -348,9 +404,9 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         if (processingBatchDone[batchKey]) {
             revert BatchAlreadyProcessed(batchKey);
         }
-        processingBatchDone[batchKey] = true;
 
         vault.updateRequestBatch(ids, IMantleYieldVault.RequestStatus.PROCESSING);
+        processingBatchDone[batchKey] = true;
 
         uint256 freeCash = _freeCash();
         uint256 shortfall;
@@ -550,7 +606,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
             }
 
             vault.approveToAdapter(adapter, address(asset), alloc);
-            try IStrategyAdapter(adapter).deposit(alloc, info.receiptReceiver) returns (uint256 sharesOrPos) {
+            try IStrategyAdapter(adapter).deposit(alloc, adapter) returns (uint256 sharesOrPos) {
                 if (info.isAsync) {
                     uint256 posAmount = _estimatePosAmount(adapter, alloc, sharesOrPos);
                     if (posAmount == 0) {
@@ -624,7 +680,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
                 }
 
                 vault.approveToAdapter(adapter, token, posAmount);
-                try IStrategyAdapter(adapter).requestRedeemAsync(requestAsset, address(vault)) {}
+                try IStrategyAdapter(adapter).requestRedeemAsync(requestAsset, adapter) {}
                 catch {
                     vault.approveToAdapter(adapter, token, 0);
                     emit DivestSkipped(adapter, requestAsset);

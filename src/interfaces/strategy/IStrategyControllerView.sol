@@ -17,12 +17,5 @@ interface IStrategyControllerView {
     function strategyInfo(address adapter)
         external
         view
-        returns (
-            uint16 targetWeightBps,
-            uint16 priority,
-            bool isAsync,
-            bool isActive,
-            bool exists,
-            address receiptReceiver
-        );
+        returns (uint16 targetWeightBps, uint16 priority, bool isAsync, bool isActive, bool exists);
 }

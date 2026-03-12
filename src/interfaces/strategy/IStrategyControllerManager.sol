@@ -6,22 +6,24 @@ interface IStrategyControllerManager {
     function setRiskParams(uint16 bufferTargetBps_, uint16 rebalanceThresholdBps_, uint64 rebalanceCooldown_)
         external;
 
-    function registerStrategy(
-        address adapter,
-        uint16 targetWeightBps,
-        uint16 priority,
-        bool isAsync,
-        bool isActive,
-        address receiptReceiver
+    function registerStrategy(address adapter, uint16 targetWeightBps, uint16 priority, bool isAsync, bool isActive)
+        external;
+
+    function updateStrategies(
+        address[] calldata adapters,
+        uint16[] calldata targetWeightBpsList,
+        uint16[] calldata priorities,
+        bool[] calldata isAsyncList,
+        bool[] calldata isActiveList
     ) external;
 
-    function updateStrategy(
-        address adapter,
-        uint16 targetWeightBps,
-        uint16 priority,
-        bool isAsync,
-        bool isActive,
-        address receiptReceiver
+    function updateStrategiesAndOrder(
+        address[] calldata adapters,
+        uint16[] calldata targetWeightBpsList,
+        uint16[] calldata priorities,
+        bool[] calldata isAsyncList,
+        bool[] calldata isActiveList,
+        address[] calldata orderedStrategies
     ) external;
 
     function setStrategyOrder(address[] calldata orderedStrategies) external;
