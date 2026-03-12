@@ -311,7 +311,14 @@ contract StrategyFlowTest is Test {
         for (uint256 i = 0; i < redeemInFlightCount; i++) {
             inFlightIds[i] = inFlightBefore + i + 1;
         }
-        controller.finalizeRedeemBatch(ids, inFlightIds, new address[](0), new uint256[](0), new uint256[](0));
+
+        address[] memory adapters = new address[](2);
+        adapters[0] = address(adapterISNR);
+        adapters[1] = address(adapterUMINT);
+        uint256[] memory posAmounts = new uint256[](2);
+        uint256[] memory assetAmounts = new uint256[](2);
+        controller.settleAdapters(adapters, posAmounts, assetAmounts, new uint256[](0), inFlightIds);
+        controller.finalizeRedeemBatch(ids);
 
         // READY
         assertEq(uint8(vault.requestStatus(ids[0])), uint8(IMantleYieldVault.RequestStatus.READY));

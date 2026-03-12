@@ -15,8 +15,6 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
 
     ISubRedManagement public immutable SUB_RED;
     address public immutable ST_TOKEN;
-    /// @notice Optional DFeed price oracle for ST token (e.g. uMINT). If set, estimatePosAmount uses it; else 1:1.
-    address public immutable priceOracle;
 
     uint64 public subscribeDeadlineWindow = 6 hours;
     uint64 public redeemDeadlineWindow = 6 hours;
@@ -40,13 +38,12 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
         address admin,
         address controller,
         address priceOracle_
-    ) BaseAsync7540Adapter(vault_, admin, controller) {
+    ) BaseAsync7540Adapter(vault_, admin, controller, priceOracle_) {
         if (subRedManagement == address(0) || stToken == address(0)) {
             revert InvalidAddress();
         }
         SUB_RED = ISubRedManagement(subRedManagement);
         ST_TOKEN = stToken;
-        priceOracle = priceOracle_;
     }
 
     // =============================================================
@@ -126,14 +123,13 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
 
     /**
      * @notice Return current strategy value in vault asset units (e.g. USDC/USDT).
-     * @dev Value = adapter idle asset + (adapter-held + vault-held) position token value
+     * @dev Value = adapter idle asset + vault-held position token value
      *      converted into asset units (oracle if configured).
-     *      This avoids under-reporting during async settlement windows before sweepToVault().
      */
     function totalValue() external view override returns (uint256) {
         uint8 assetDecimals = IERC20Metadata(address(ASSET)).decimals();
         uint8 stDecimals = IERC20Metadata(ST_TOKEN).decimals();
-        uint256 posBalance = IERC20(ST_TOKEN).balanceOf(address(this)) + IERC20(ST_TOKEN).balanceOf(VAULT);
+        uint256 posBalance = IERC20(ST_TOKEN).balanceOf(VAULT);
         uint256 posValue = _estimateAssetAmount(posBalance, assetDecimals, stDecimals);
         return ASSET.balanceOf(address(this)) + posValue;
     }

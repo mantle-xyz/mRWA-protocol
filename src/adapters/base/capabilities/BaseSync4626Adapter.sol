@@ -13,7 +13,7 @@ abstract contract BaseSync4626Adapter is BaseAdapter {
     IERC4626 public immutable TARGET_4626;
 
     constructor(address vault_, address target4626, address admin, address controller)
-        BaseAdapter(vault_, admin, controller)
+        BaseAdapter(vault_, admin, controller, address(0))
     {
         TARGET_4626 = IERC4626(target4626);
     }
