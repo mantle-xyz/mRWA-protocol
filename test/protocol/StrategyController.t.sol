@@ -849,7 +849,7 @@ contract StrategyControllerUnitTest is Test {
         controller.settleAdapter(address(asyncAdapter), 1e18, 0, new uint256[](0), new uint256[](0), new uint256[](0));
     }
 
-    function test_RebalanceInvestAsync_CreatesNewInFlightEvenWhenPendingIsLargerThanEstimate() public {
+    function test_RebalanceInvestAsync_DoesNotCreateDuplicateInFlightWhenPendingExists() public {
         _registerSingleAsyncStrategy();
         // Existing pending invest in-flight has large token amount for this adapter.
         vault.createInFlight(address(asyncAdapter), address(posToken), 1_000e18, 1_000e18, true);
@@ -859,9 +859,23 @@ contract StrategyControllerUnitTest is Test {
         vm.prank(address(executorGateway));
         controller.rebalance();
 
-        // If controller incorrectly subtracts pendingInvest from new estimate, this would stay at 1.
+        assertEq(vault.inFlightIdCursor(), 1);
+        assertEq(vault.investInFlightTotal(), 1_000e18);
+    }
+
+    function test_RebalanceInvestAsync_PartialPendingDeductsEstimatedCoverage() public {
+        _registerSingleAsyncStrategy();
+        // Pending invest covers part of the new target gap.
+        vault.createInFlight(address(asyncAdapter), address(posToken), 400e18, 400e18, true);
+        asset.mint(address(vault), 1_000e18);
+
+        vm.warp(2 hours);
+        vm.prank(address(executorGateway));
+        controller.rebalance();
+
+        // New in-flight = 460e18 (860 target invest request - 400 pending coverage estimate).
         assertEq(vault.inFlightIdCursor(), 2);
-        assertGt(vault.investInFlightTotal(), 1_000e18);
+        assertEq(vault.investInFlightTotal(), 860e18);
     }
 
     function test_SettleAdapter_RedeemFlow_ClaimsConfirmsAndMarksReady() public {

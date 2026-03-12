@@ -7,6 +7,7 @@ import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/acce
 import {Initializable} from "@openzeppelin/contracts/proxy/utils/Initializable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 contract StrategyController is Initializable, AccessControlUpgradeable, ReentrancyGuard {
     bytes32 public constant EXECUTOR_ROLE = keccak256("EXECUTOR_ROLE");
@@ -603,6 +604,24 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
             uint256 alloc = shortfall < remaining ? shortfall : remaining;
             if (alloc == 0) {
                 continue;
+            }
+            // Approximate pending async invest coverage in pos-token units and only invest the uncovered delta.
+            if (info.isAsync) {
+                uint256 originalAlloc = alloc;
+                uint256 pendingInvestPos = vault.adapterInvestInFlightTokens(adapter);
+                if (pendingInvestPos > 0) {
+                    uint256 estimatedPosForAlloc = _estimatePosAmount(adapter, alloc, alloc);
+                    if (pendingInvestPos >= estimatedPosForAlloc) {
+                        emit InvestSkipped(adapter, originalAlloc);
+                        continue;
+                    }
+
+                    alloc = Math.mulDiv(originalAlloc, estimatedPosForAlloc - pendingInvestPos, estimatedPosForAlloc);
+                    if (alloc == 0) {
+                        emit InvestSkipped(adapter, originalAlloc);
+                        continue;
+                    }
+                }
             }
 
             vault.approveToAdapter(adapter, address(asset), alloc);
