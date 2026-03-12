@@ -311,8 +311,8 @@ contract StrategyControllerUnitTest is Test {
 
     function _registerTwoStrategies() internal {
         vm.startPrank(manager);
-        controller.registerStrategy(address(syncAdapter), 5000, 1, false, true, address(syncAdapter));
-        controller.registerStrategy(address(asyncAdapter), 5000, 2, true, true, address(asyncAdapter));
+        controller.registerStrategy(address(syncAdapter), 5000, 1, false, true);
+        controller.registerStrategy(address(asyncAdapter), 5000, 2, true, true);
         address[] memory ordered = new address[](2);
         ordered[0] = address(syncAdapter);
         ordered[1] = address(asyncAdapter);
@@ -322,7 +322,7 @@ contract StrategyControllerUnitTest is Test {
 
     function _registerSingleAsyncStrategy() internal {
         vm.startPrank(manager);
-        controller.registerStrategy(address(asyncAdapter), 10_000, 1, true, true, address(asyncAdapter));
+        controller.registerStrategy(address(asyncAdapter), 10_000, 1, true, true);
         address[] memory ordered = new address[](1);
         ordered[0] = address(asyncAdapter);
         controller.setStrategyOrder(ordered);
@@ -345,15 +345,15 @@ contract StrategyControllerUnitTest is Test {
 
     function test_RevertWhen_RegisterDuplicateStrategy() public {
         vm.startPrank(manager);
-        controller.registerStrategy(address(syncAdapter), 5000, 1, false, true, address(syncAdapter));
+        controller.registerStrategy(address(syncAdapter), 5000, 1, false, true);
         vm.expectRevert();
-        controller.registerStrategy(address(syncAdapter), 5000, 1, false, true, address(syncAdapter));
+        controller.registerStrategy(address(syncAdapter), 5000, 1, false, true);
         vm.stopPrank();
     }
 
     function test_RevertWhen_SetStrategyOrderDuplicate() public {
         vm.startPrank(manager);
-        controller.registerStrategy(address(syncAdapter), 10000, 1, false, true, address(syncAdapter));
+        controller.registerStrategy(address(syncAdapter), 10000, 1, false, true);
         address[] memory ordered = new address[](2);
         ordered[0] = address(syncAdapter);
         ordered[1] = address(syncAdapter);
@@ -364,7 +364,7 @@ contract StrategyControllerUnitTest is Test {
 
     function test_RevertWhen_SetStrategyOrderWeightNot10000() public {
         vm.startPrank(manager);
-        controller.registerStrategy(address(syncAdapter), 7000, 1, false, true, address(syncAdapter));
+        controller.registerStrategy(address(syncAdapter), 7000, 1, false, true);
         address[] memory ordered = new address[](1);
         ordered[0] = address(syncAdapter);
         vm.expectRevert();
@@ -374,8 +374,8 @@ contract StrategyControllerUnitTest is Test {
 
     function test_RevertWhen_SetStrategyOrderPriorityInvalid() public {
         vm.startPrank(manager);
-        controller.registerStrategy(address(syncAdapter), 5000, 2, false, true, address(syncAdapter));
-        controller.registerStrategy(address(asyncAdapter), 5000, 1, true, true, address(asyncAdapter));
+        controller.registerStrategy(address(syncAdapter), 5000, 2, false, true);
+        controller.registerStrategy(address(asyncAdapter), 5000, 1, true, true);
         address[] memory ordered = new address[](2);
         ordered[0] = address(syncAdapter);
         ordered[1] = address(asyncAdapter);
@@ -384,20 +384,211 @@ contract StrategyControllerUnitTest is Test {
         vm.stopPrank();
     }
 
-    function test_RevertWhen_UpdateStrategyBreaksActiveWeightInvariant() public {
+    function test_RevertWhen_UpdateStrategiesSingleAdapterBreaksActiveWeightInvariant() public {
         _registerTwoStrategies();
+
+        address[] memory adapters = new address[](1);
+        adapters[0] = address(syncAdapter);
+        uint16[] memory weights = new uint16[](1);
+        weights[0] = 7000;
+        uint16[] memory priorities = new uint16[](1);
+        priorities[0] = 1;
+        bool[] memory asyncFlags = new bool[](1);
+        asyncFlags[0] = false;
+        bool[] memory activeFlags = new bool[](1);
+        activeFlags[0] = true;
 
         vm.prank(manager);
         vm.expectRevert();
-        controller.updateStrategy(address(syncAdapter), 7000, 1, false, true, address(syncAdapter));
+        controller.updateStrategies(adapters, weights, priorities, asyncFlags, activeFlags);
     }
 
-    function test_RevertWhen_UpdateStrategyBreaksPriorityInvariant() public {
+    function test_RevertWhen_UpdateStrategiesSingleAdapterBreaksPriorityInvariant() public {
         _registerTwoStrategies();
+
+        address[] memory adapters = new address[](1);
+        adapters[0] = address(asyncAdapter);
+        uint16[] memory weights = new uint16[](1);
+        weights[0] = 5000;
+        uint16[] memory priorities = new uint16[](1);
+        priorities[0] = 0;
+        bool[] memory asyncFlags = new bool[](1);
+        asyncFlags[0] = true;
+        bool[] memory activeFlags = new bool[](1);
+        activeFlags[0] = true;
 
         vm.prank(manager);
         vm.expectRevert();
-        controller.updateStrategy(address(asyncAdapter), 5000, 0, true, true, address(asyncAdapter));
+        controller.updateStrategies(adapters, weights, priorities, asyncFlags, activeFlags);
+    }
+
+    function test_UpdateStrategies_AllowsAtomicWeightShift() public {
+        _registerTwoStrategies();
+
+        address[] memory adapters = new address[](2);
+        adapters[0] = address(syncAdapter);
+        adapters[1] = address(asyncAdapter);
+
+        uint16[] memory weights = new uint16[](2);
+        weights[0] = 6000;
+        weights[1] = 4000;
+
+        uint16[] memory priorities = new uint16[](2);
+        priorities[0] = 1;
+        priorities[1] = 2;
+
+        bool[] memory asyncFlags = new bool[](2);
+        asyncFlags[0] = false;
+        asyncFlags[1] = true;
+
+        bool[] memory activeFlags = new bool[](2);
+        activeFlags[0] = true;
+        activeFlags[1] = true;
+
+        vm.prank(manager);
+        controller.updateStrategies(adapters, weights, priorities, asyncFlags, activeFlags);
+
+        (uint16 syncWeight, uint16 syncPriority, bool syncIsAsync, bool syncIsActive, bool syncExists) =
+            controller.strategyInfo(address(syncAdapter));
+        (uint16 asyncWeight,,,,) = controller.strategyInfo(address(asyncAdapter));
+
+        assertEq(syncWeight, 6000);
+        assertEq(asyncWeight, 4000);
+        assertEq(syncPriority, 1);
+        assertEq(syncIsAsync, false);
+        assertTrue(syncIsActive);
+        assertTrue(syncExists);
+    }
+
+    function test_RevertWhen_UpdateStrategiesLengthMismatch() public {
+        _registerTwoStrategies();
+
+        address[] memory adapters = new address[](2);
+        adapters[0] = address(syncAdapter);
+        adapters[1] = address(asyncAdapter);
+
+        uint16[] memory weights = new uint16[](1);
+        weights[0] = 10_000;
+
+        uint16[] memory priorities = new uint16[](2);
+        priorities[0] = 1;
+        priorities[1] = 2;
+
+        bool[] memory asyncFlags = new bool[](2);
+        asyncFlags[0] = false;
+        asyncFlags[1] = true;
+
+        bool[] memory activeFlags = new bool[](2);
+        activeFlags[0] = true;
+        activeFlags[1] = true;
+
+        vm.prank(manager);
+        vm.expectRevert(StrategyController.UpdateStrategiesLengthMismatch.selector);
+        controller.updateStrategies(adapters, weights, priorities, asyncFlags, activeFlags);
+    }
+
+    function test_RevertWhen_UpdateStrategiesDuplicateAdapter() public {
+        _registerTwoStrategies();
+
+        address[] memory adapters = new address[](2);
+        adapters[0] = address(syncAdapter);
+        adapters[1] = address(syncAdapter);
+
+        uint16[] memory weights = new uint16[](2);
+        weights[0] = 5000;
+        weights[1] = 5000;
+
+        uint16[] memory priorities = new uint16[](2);
+        priorities[0] = 1;
+        priorities[1] = 1;
+
+        bool[] memory asyncFlags = new bool[](2);
+        asyncFlags[0] = false;
+        asyncFlags[1] = false;
+
+        bool[] memory activeFlags = new bool[](2);
+        activeFlags[0] = true;
+        activeFlags[1] = true;
+
+        vm.prank(manager);
+        vm.expectRevert(
+            abi.encodeWithSelector(StrategyController.DuplicateStrategyUpdate.selector, address(syncAdapter))
+        );
+        controller.updateStrategies(adapters, weights, priorities, asyncFlags, activeFlags);
+    }
+
+    function test_UpdateStrategiesAndOrder_AllowsAtomicPriorityAndOrderShift() public {
+        _registerTwoStrategies();
+
+        address[] memory adapters = new address[](2);
+        adapters[0] = address(syncAdapter);
+        adapters[1] = address(asyncAdapter);
+
+        uint16[] memory weights = new uint16[](2);
+        weights[0] = 5000;
+        weights[1] = 5000;
+
+        uint16[] memory priorities = new uint16[](2);
+        priorities[0] = 2;
+        priorities[1] = 1;
+
+        bool[] memory asyncFlags = new bool[](2);
+        asyncFlags[0] = false;
+        asyncFlags[1] = true;
+
+        bool[] memory activeFlags = new bool[](2);
+        activeFlags[0] = true;
+        activeFlags[1] = true;
+
+        vm.prank(manager);
+        vm.expectRevert(abi.encodeWithSelector(StrategyController.InvalidPriorityOrder.selector, address(asyncAdapter)));
+        controller.updateStrategies(adapters, weights, priorities, asyncFlags, activeFlags);
+
+        address[] memory ordered = new address[](2);
+        ordered[0] = address(asyncAdapter);
+        ordered[1] = address(syncAdapter);
+
+        vm.prank(manager);
+        controller.updateStrategiesAndOrder(adapters, weights, priorities, asyncFlags, activeFlags, ordered);
+
+        assertEq(controller.strategyOrder(0), address(asyncAdapter));
+        assertEq(controller.strategyOrder(1), address(syncAdapter));
+
+        (, uint16 syncPriority,,,) = controller.strategyInfo(address(syncAdapter));
+        (, uint16 asyncPriority,,,) = controller.strategyInfo(address(asyncAdapter));
+        assertEq(syncPriority, 2);
+        assertEq(asyncPriority, 1);
+    }
+
+    function test_RevertWhen_UpdateStrategiesAndOrderLengthMismatch() public {
+        _registerTwoStrategies();
+
+        address[] memory adapters = new address[](2);
+        adapters[0] = address(syncAdapter);
+        adapters[1] = address(asyncAdapter);
+
+        uint16[] memory weights = new uint16[](1);
+        weights[0] = 10_000;
+
+        uint16[] memory priorities = new uint16[](2);
+        priorities[0] = 1;
+        priorities[1] = 2;
+
+        bool[] memory asyncFlags = new bool[](2);
+        asyncFlags[0] = false;
+        asyncFlags[1] = true;
+
+        bool[] memory activeFlags = new bool[](2);
+        activeFlags[0] = true;
+        activeFlags[1] = true;
+
+        address[] memory ordered = new address[](2);
+        ordered[0] = address(syncAdapter);
+        ordered[1] = address(asyncAdapter);
+
+        vm.prank(manager);
+        vm.expectRevert(StrategyController.UpdateStrategiesLengthMismatch.selector);
+        controller.updateStrategiesAndOrder(adapters, weights, priorities, asyncFlags, activeFlags, ordered);
     }
 
     function test_RevertWhen_RebalanceBeforeCooldown() public {
