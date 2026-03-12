@@ -159,11 +159,11 @@ contract AccountantTest is Test {
     }
 
     function test_initialize_revertsWhenFeeExceedsCap() public {
-        uint256 tooHigh = accountant.MAX_MANAGEMENT_FEE_BPS() + 1;
+        uint32 tooHigh = accountant.MAX_MANAGEMENT_FEE_BPS() + 1;
         vm.expectRevert(abi.encodeWithSelector(Accountant.InvalidFeeRate.selector, tooHigh));
         new BeaconProxy(
             address(beacon),
-            abi.encodeCall(Accountant.initialize, (address(vault), INITIAL_RATE, uint32(tooHigh), admin))
+            abi.encodeCall(Accountant.initialize, (address(vault), INITIAL_RATE, tooHigh, admin))
         );
     }
 
@@ -175,7 +175,7 @@ contract AccountantTest is Test {
     }
 
     function test_initialize_allowsMaxFeeRate() public {
-        uint32 maxFee = uint32(accountant.MAX_MANAGEMENT_FEE_BPS());
+        uint32 maxFee = accountant.MAX_MANAGEMENT_FEE_BPS();
         BeaconProxy proxy = new BeaconProxy(
             address(beacon), abi.encodeCall(Accountant.initialize, (address(vault), INITIAL_RATE, maxFee, admin))
         );
@@ -721,15 +721,15 @@ contract AccountantTest is Test {
     }
 
     function test_setRiskParams_revertsWhenDeviationExceedsCeiling() public {
-        uint256 tooHigh = accountant.MAX_DEVIATION_CEILING() + 1;
+        uint32 tooHigh = accountant.MAX_DEVIATION_CEILING() + 1;
 
         vm.expectRevert(abi.encodeWithSelector(Accountant.InvalidDeviation.selector, tooHigh));
         vm.prank(admin);
-        accountant.setRiskParams(uint32(tooHigh), 12 hours);
+        accountant.setRiskParams(tooHigh, 12 hours);
     }
 
     function test_setRiskParams_succeedsAtMaxDeviationCeiling() public {
-        uint32 maxDev = uint32(accountant.MAX_DEVIATION_CEILING());
+        uint32 maxDev = accountant.MAX_DEVIATION_CEILING();
 
         vm.prank(admin);
         accountant.setRiskParams(maxDev, 1 hours);
@@ -790,15 +790,15 @@ contract AccountantTest is Test {
     }
 
     function test_setMaxComputeAge_revertsWhenExceedsCeiling() public {
-        uint256 tooOld = accountant.MAX_COMPUTE_AGE_CEILING() + 1;
+        uint32 tooOld = accountant.MAX_COMPUTE_AGE_CEILING() + 1;
 
         vm.expectRevert(abi.encodeWithSelector(Accountant.InvalidComputeAge.selector, tooOld));
         vm.prank(admin);
-        accountant.setMaxComputeAge(uint32(tooOld));
+        accountant.setMaxComputeAge(tooOld);
     }
 
     function test_setMaxComputeAge_succeedsAtCeiling() public {
-        uint32 ceiling = uint32(accountant.MAX_COMPUTE_AGE_CEILING());
+        uint32 ceiling = accountant.MAX_COMPUTE_AGE_CEILING();
 
         vm.prank(admin);
         accountant.setMaxComputeAge(ceiling);
@@ -841,15 +841,15 @@ contract AccountantTest is Test {
     }
 
     function test_setManagementFeeRate_revertsWhenExceedsCap() public {
-        uint256 tooHigh = accountant.MAX_MANAGEMENT_FEE_BPS() + 1;
+        uint32 tooHigh = accountant.MAX_MANAGEMENT_FEE_BPS() + 1;
 
         vm.expectRevert(abi.encodeWithSelector(Accountant.InvalidFeeRate.selector, tooHigh));
         vm.prank(admin);
-        accountant.setManagementFeeRate(uint32(tooHigh));
+        accountant.setManagementFeeRate(tooHigh);
     }
 
     function test_setManagementFeeRate_succeedsAtMaxCap() public {
-        uint32 maxFee = uint32(accountant.MAX_MANAGEMENT_FEE_BPS());
+        uint32 maxFee = accountant.MAX_MANAGEMENT_FEE_BPS();
 
         vm.prank(admin);
         accountant.setManagementFeeRate(maxFee);
@@ -1621,10 +1621,10 @@ contract AccountantExecutorIntegrationTest is Test {
     }
 
     function test_integration_setRiskParams_revertsWhenDeviationExceedsCeiling() public {
-        uint256 tooHigh = accountant.MAX_DEVIATION_CEILING() + 1;
+        uint32 tooHigh = accountant.MAX_DEVIATION_CEILING() + 1;
         vm.expectRevert(abi.encodeWithSelector(Accountant.InvalidDeviation.selector, tooHigh));
         vm.prank(admin);
-        accountant.setRiskParams(uint32(tooHigh), 12 hours);
+        accountant.setRiskParams(tooHigh, 12 hours);
     }
 
     function test_integration_setManagementFeeRate() public {
@@ -1638,10 +1638,10 @@ contract AccountantExecutorIntegrationTest is Test {
     }
 
     function test_integration_setManagementFeeRate_revertsWhenExceedsCap() public {
-        uint256 tooHigh = accountant.MAX_MANAGEMENT_FEE_BPS() + 1;
+        uint32 tooHigh = accountant.MAX_MANAGEMENT_FEE_BPS() + 1;
         vm.expectRevert(abi.encodeWithSelector(Accountant.InvalidFeeRate.selector, tooHigh));
         vm.prank(admin);
-        accountant.setManagementFeeRate(uint32(tooHigh));
+        accountant.setManagementFeeRate(tooHigh);
     }
 
     function test_integration_setVault() public {
@@ -1681,10 +1681,10 @@ contract AccountantExecutorIntegrationTest is Test {
     }
 
     function test_integration_setMaxComputeAge_revertsWhenExceedsCeiling() public {
-        uint256 tooOld = accountant.MAX_COMPUTE_AGE_CEILING() + 1;
+        uint32 tooOld = accountant.MAX_COMPUTE_AGE_CEILING() + 1;
         vm.expectRevert(abi.encodeWithSelector(Accountant.InvalidComputeAge.selector, tooOld));
         vm.prank(admin);
-        accountant.setMaxComputeAge(uint32(tooOld));
+        accountant.setMaxComputeAge(tooOld);
     }
 
     // =============================================================

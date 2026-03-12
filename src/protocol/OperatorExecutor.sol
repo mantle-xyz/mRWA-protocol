@@ -3,16 +3,15 @@ pragma solidity ^0.8.24;
 
 import {IStrategyControllerExecutor} from "../interfaces/strategy/IStrategyControllerExecutor.sol";
 import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
-
+import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import {EIP712Upgradeable} from "@openzeppelin/contracts-upgradeable/utils/cryptography/EIP712Upgradeable.sol";
-import {Initializable} from "@openzeppelin/contracts/proxy/utils/Initializable.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
 /**
  * @notice Operator gateway with EIP-712 signed command execution.
  * @dev Grant this contract EXECUTOR_ROLE on StrategyController after deployment.
  */
-contract OperatorExecutor is Initializable, AccessControlUpgradeable, EIP712Upgradeable {
+contract OperatorExecutor is AccessControlUpgradeable, UUPSUpgradeable, EIP712Upgradeable {
     using ECDSA for bytes32;
 
     bytes32 public constant SIGNER_ROLE = keccak256("SIGNER_ROLE");
@@ -48,6 +47,7 @@ contract OperatorExecutor is Initializable, AccessControlUpgradeable, EIP712Upgr
     error InvalidNonce(address signer, uint256 expected, uint256 provided);
     error InvalidAction(uint8 action);
 
+    /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
         _disableInitializers();
     }
@@ -131,4 +131,10 @@ contract OperatorExecutor is Initializable, AccessControlUpgradeable, EIP712Upgr
 
         emit CommandExecuted(signer, msg.sender, command.action, command.nonce, commandHash);
     }
+
+    // =============================================================
+    //                   UPGRADE AUTHORIZATION
+    // =============================================================
+
+    function _authorizeUpgrade(address) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
 }
