@@ -3,12 +3,13 @@ pragma solidity ^0.8.24;
 
 import {IAccountant} from "../interfaces/accountant/IAccountant.sol";
 import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
 /// @title AccountantExecutor
 /// @notice Authorized relay for Accountant.updateExchangeRate.
 ///         Only accounts holding BOT_ROLE can trigger exchange rate updates.
 ///         DEFAULT_ADMIN_ROLE manages BOT_ROLE membership and authorizes upgrades.
-contract AccountantExecutor is AccessControlUpgradeable {
+contract AccountantExecutor is AccessControlUpgradeable, UUPSUpgradeable {
     // =============================================================
     //                        CONSTANTS
     // =============================================================
@@ -71,4 +72,10 @@ contract AccountantExecutor is AccessControlUpgradeable {
         accountant.settleManagementFee();
         emit ManagementFeeSettled(msg.sender);
     }
+
+    // =============================================================
+    //                   UPGRADE AUTHORIZATION
+    // =============================================================
+
+    function _authorizeUpgrade(address) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
 }

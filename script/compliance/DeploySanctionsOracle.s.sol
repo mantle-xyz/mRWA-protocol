@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {SanctionsOracle} from "../src/compliance/SanctionsOracle.sol";
-import {SanctionsOracleFactory} from "../src/compliance/SanctionsOracleFactory.sol";
+import {SanctionsOracle} from "../../src/compliance/SanctionsOracle.sol";
+import {SanctionsOracleFactory} from "../../src/compliance/SanctionsOracleFactory.sol";
 
 import {Script, console} from "forge-std/Script.sol";
 

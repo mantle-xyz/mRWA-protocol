@@ -1,0 +1,39 @@
+chainId: 5003
+
+envs:
+  # ── Wallet / RPC ──────────────────────────────────────────────
+  F_WALLET_TYPE: PRIVATE_KEY # options: AWS_KMS, PRIVATE_KEY, LEDGER, MNEMONIC
+  F_PRIVATE_KEY: "" # set via environment variable or .env file
+  F_MNEMONIC: ""
+  F_MNEMONIC_INDEX: 0
+  F_AWS_KMS_KEY_ID: ""
+  F_SENDER: "0xf615c372a0d91412311459bc6f8cb6e666b1ba54"
+  F_VERBOSE: true
+  F_RPC_URL: ""
+
+  # ── Addresses (roles) ────────────────────────────────────────
+  F_ADMIN_ADDRESS: "0xf615c372a0d91412311459bc6f8cb6e666b1ba54"
+  F_USDC_ADDRESS: "0x0000000000000000000000000000000000000000"          # TODO: replace with Mantle Sepolia USDC
+  F_COMPLIANCE_BOT_ADDRESS: "0xf615c372a0d91412311459bc6f8cb6e666b1ba54" # SanctionsOracle COMPLIANCE_ROLE
+  F_BOT_ADDRESS: "0xf615c372a0d91412311459bc6f8cb6e666b1ba54"           # AccountantExecutor BOT_ROLE
+  F_SIGNER_ADDRESS: "0xf615c372a0d91412311459bc6f8cb6e666b1ba54"        # OperatorExecutor SIGNER_ROLE
+  F_STRATEGY_MANAGER_ADDRESS: "0xf615c372a0d91412311459bc6f8cb6e666b1ba54" # StrategyController STRATEGY_MANAGER_ROLE
+  F_TREASURY_ADDRESS: "0xf615c372a0d91412311459bc6f8cb6e666b1ba54"      # Vault fee share recipient
+  F_PAUSER_ADDRESS: "0xf615c372a0d91412311459bc6f8cb6e666b1ba54"        # Vault PAUSER_ROLE
+
+  # ── Accountant params ────────────────────────────────────────
+  F_INITIAL_RATE: "1000000000000000000" # 1e18
+  F_MANAGEMENT_FEE_BPS: "50"           # 0.5%
+
+  # ── StrategyController params ────────────────────────────────
+  F_BUFFER_TARGET_BPS: "500"           # 5%
+  F_REBALANCE_THRESHOLD_BPS: "100"     # 1%
+  F_REBALANCE_COOLDOWN: "3600"         # 1 hour
+
+  # ── Vault params ─────────────────────────────────────────────
+  F_MAX_REDEMPTION_FEE_BPS: "500"      # 5% cap
+  F_MAX_RATE_CHANGE_BPS: "500"         # 5% cap
+  F_REDEMPTION_FEE_BPS: "10"           # 0.1%
+  F_MIN_REDEEM_AMOUNT: "1000000"       # 1 USDC (6 decimals)
+  F_MIN_DEPOSIT_AMOUNT: "1000000"      # 1 USDC (6 decimals)
+  F_SYNC_REDEEM_DISABLED: "false"

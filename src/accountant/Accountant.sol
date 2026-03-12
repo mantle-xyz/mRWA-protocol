@@ -21,9 +21,9 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
 
     uint256 public constant MAX_BPS = 10_000;
     uint256 public constant RATE_PRECISION = 1e18;
-    uint256 public constant MAX_DEVIATION_CEILING = 1000; // 10% absolute cap on configurable deviation
-    uint256 public constant MAX_MANAGEMENT_FEE_BPS = 500; // 5% absolute cap on management fee
-    uint256 public constant MAX_COMPUTE_AGE_CEILING = 1 days;
+    uint32 public constant MAX_DEVIATION_CEILING = 1000; // 10% absolute cap on configurable deviation
+    uint32 public constant MAX_MANAGEMENT_FEE_BPS = 500; // 5% absolute cap on management fee
+    uint32 public constant MAX_COMPUTE_AGE_CEILING = 1 days;
 
     // =============================================================
     //                          ROLES
