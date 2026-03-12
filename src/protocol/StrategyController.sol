@@ -61,7 +61,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     event AsyncRedeemRequested(address indexed adapter, uint256 amountAsset, uint256 inFlightId);
     event DivestIncomplete(uint256 remainingAsset);
     event RedeemBatchProcessing(uint256 indexed batchSize, uint256 batchTotalAsset, uint256 shortfallAsset);
-    event RedeemBatchReady(uint256 indexed batchSize, uint256 requiredAsset, uint256 clearedInFlightAsset);
+    event RedeemBatchReady(uint256 indexed batchSize, uint256 requiredAsset);
     event AdapterAssetsSwept(
         address indexed adapter, address indexed posToken, uint256 posClaimed, uint256 assetClaimed
     );
@@ -423,39 +423,23 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     // Business - Settlement & Redemption
     // =============================================================
 
-    /// @notice Finalize redeem batch: sweep adapter returns, confirm redeem in-flight and mark requests READY.
-    function finalizeRedeemBatch(
-        uint256[] calldata ids,
-        uint256[] calldata inFlightIds,
-        address[] calldata sweepAdapters,
-        uint256[] calldata posAmounts,
-        uint256[] calldata assetAmounts
-    ) external onlyRole(EXECUTOR_ROLE) nonReentrant {
+    /// @notice Finalize redeem batch: mark requests READY after PROCESSING.
+    /// @dev Settlement actions (sweep/confirm in-flight) are handled by settleAdapter/settleAdapters.
+    function finalizeRedeemBatch(uint256[] calldata ids) external onlyRole(EXECUTOR_ROLE) nonReentrant {
         _validateSortedIds(ids);
         bytes32 batchKey = _batchKey(ids);
         _ensureBatchReadyAllowed(batchKey);
-        _sweepBatchAdaptersToVault(sweepAdapters, posAmounts, assetAmounts, inFlightIds.length);
-        uint256 clearedInFlightAmount = _confirmRedeemInFlightIds(inFlightIds, address(0));
-        _markBatchReady(ids, batchKey, clearedInFlightAmount);
+        _markBatchReady(ids, batchKey);
     }
 
-    /// @notice Unified settlement entrypoint for adapter sweep + in-flight confirmations (+ optional batch READY).
-    /// @dev Supports single-cycle settlement where invest and redeem returns are both observed by off-chain services.
+    /// @notice Unified settlement entrypoint for adapter sweep + in-flight confirmations.
     function settleAdapter(
         address adapter,
         uint256 posAmount,
         uint256 assetAmount,
         uint256[] calldata investInFlightIds,
-        uint256[] calldata redeemInFlightIds,
-        uint256[] calldata ids
+        uint256[] calldata redeemInFlightIds
     ) external onlyRole(EXECUTOR_ROLE) nonReentrant {
-        bytes32 batchKey;
-        if (ids.length > 0) {
-            _validateSortedIds(ids);
-            batchKey = _batchKey(ids);
-            _ensureBatchReadyAllowed(batchKey);
-        }
-
         if (
             posAmount > 0 && vault.adapterInvestInFlightTokens(adapter) > 0
                 && !_hasPendingInvestInFlightForAdapter(adapter, investInFlightIds)
@@ -471,33 +455,21 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
 
         _sweepAdapterAssetsToVaultInternal(adapter, posAmount, assetAmount);
         _confirmInvestInFlightIds(adapter, investInFlightIds);
-        uint256 clearedRedeemAmount = _confirmRedeemInFlightIds(redeemInFlightIds, adapter);
-
-        if (ids.length > 0) {
-            _markBatchReady(ids, batchKey, clearedRedeemAmount);
-        }
+        _confirmRedeemInFlightIds(redeemInFlightIds, adapter);
     }
 
     /// @notice Multi-adapter settlement in a single transaction.
-    /// @dev Sweeps by adapter, confirms invest/redeem in-flight, and optionally marks a redeem batch READY.
+    /// @dev Sweeps by adapter and confirms invest/redeem in-flight.
     function settleAdapters(
         address[] calldata adapters,
         uint256[] calldata posAmounts,
         uint256[] calldata assetAmounts,
         uint256[] calldata investInFlightIds,
-        uint256[] calldata redeemInFlightIds,
-        uint256[] calldata ids
+        uint256[] calldata redeemInFlightIds
     ) external onlyRole(EXECUTOR_ROLE) nonReentrant {
         uint256 len = adapters.length;
         if (len != posAmounts.length || len != assetAmounts.length) {
             revert ClaimInputsLengthMismatch();
-        }
-
-        bytes32 batchKey;
-        if (ids.length > 0) {
-            _validateSortedIds(ids);
-            batchKey = _batchKey(ids);
-            _ensureBatchReadyAllowed(batchKey);
         }
 
         for (uint256 i = 0; i < len; i++) {
@@ -522,11 +494,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         }
 
         _confirmInvestInFlightIdsForAdapters(adapters, investInFlightIds);
-        uint256 clearedRedeemAmount = _confirmRedeemInFlightIdsForAdapters(adapters, redeemInFlightIds);
-
-        if (ids.length > 0) {
-            _markBatchReady(ids, batchKey, clearedRedeemAmount);
-        }
+        _confirmRedeemInFlightIdsForAdapters(adapters, redeemInFlightIds);
     }
 
     // =============================================================
@@ -753,29 +721,6 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         emit AdapterAssetsSwept(adapter, token, posClaimed, assetClaimed);
     }
 
-    function _sweepBatchAdaptersToVault(
-        address[] calldata sweepAdapters,
-        uint256[] calldata posAmounts,
-        uint256[] calldata assetAmounts,
-        uint256 redeemInFlightLen
-    ) internal {
-        uint256 len = sweepAdapters.length;
-        if (len != posAmounts.length || len != assetAmounts.length) {
-            revert ClaimInputsLengthMismatch();
-        }
-        for (uint256 i = 0; i < len; i++) {
-            address adapter = sweepAdapters[i];
-            uint256 posAmount = posAmounts[i];
-            uint256 assetAmount = assetAmounts[i];
-            // If redeem asset is being claimed and adapter still has pending redeem in-flight,
-            // caller must also provide redeem in-flight ids in this finalize call.
-            if (assetAmount > 0 && vault.adapterRedeemInFlightUsdc(adapter) > 0 && redeemInFlightLen == 0) {
-                revert RedeemInFlightIdsRequired(adapter);
-            }
-            _sweepAdapterAssetsToVaultInternal(adapter, posAmount, assetAmount);
-        }
-    }
-
     function _confirmRedeemInFlightIds(uint256[] calldata inFlightIds, address expectedAdapter)
         internal
         returns (uint256 clearedAmount)
@@ -804,7 +749,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         }
     }
 
-    function _markBatchReady(uint256[] calldata ids, bytes32 batchKey, uint256 clearedInFlightAmount) internal {
+    function _markBatchReady(uint256[] calldata ids, bytes32 batchKey) internal {
         (uint256 required, uint256[] memory settledAssets) = _batchRequiredAssets(ids);
         uint256 available = asset.balanceOf(address(vault));
         if (available < required) {
@@ -813,7 +758,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
 
         vault.markRequestsReady(ids, settledAssets);
         readyBatchDone[batchKey] = true;
-        emit RedeemBatchReady(ids.length, required, clearedInFlightAmount);
+        emit RedeemBatchReady(ids.length, required);
     }
 
     function _confirmInvestInFlightIds(address adapter, uint256[] calldata investInFlightIds) internal {

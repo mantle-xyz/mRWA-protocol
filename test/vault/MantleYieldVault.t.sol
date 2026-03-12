@@ -75,6 +75,14 @@ contract MockStrategyAdapter is IStrategyAdapter {
         return address(0);
     }
 
+    function priceOracle() external pure override returns (address) {
+        return address(0);
+    }
+
+    function getPosTokenPrice() external pure override returns (uint256) {
+        return 1e18;
+    }
+
     function estimatePosAmount(uint256 assetAmount) external pure override returns (uint256) {
         return assetAmount;
     }

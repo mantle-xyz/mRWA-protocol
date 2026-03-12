@@ -5,6 +5,9 @@ interface IStrategyAdapterCore {
     function name() external view returns (string memory);
     function asset() external view returns (address);
     function posToken() external view returns (address);
+    function priceOracle() external view returns (address);
+    /// @notice Position-token quote from adapter oracle (raw oracle units). Returns 0 when adapter has no oracle.
+    function getPosTokenPrice() external view returns (uint256);
     function estimatePosAmount(uint256 assetAmount) external view returns (uint256 positionAmount);
     function vault() external view returns (address);
     function totalValue() external view returns (uint256);

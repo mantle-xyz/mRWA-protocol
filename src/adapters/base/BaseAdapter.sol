@@ -2,6 +2,8 @@
 pragma solidity ^0.8.24;
 
 import {IStrategyAdapter} from "../../interfaces/adapters/IStrategyAdapter.sol";
+
+import {IDFeedPriceOracle} from "../../interfaces/adapters/digift/IDFeedPriceOracle.sol";
 import {IMantleYieldVault} from "../../interfaces/vault/IMantleYieldVault.sol";
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -16,6 +18,7 @@ abstract contract BaseAdapter is IStrategyAdapter, AccessControl, ReentrancyGuar
 
     IERC20 public immutable ASSET;
     address public immutable VAULT;
+    address public immutable priceOracle;
     bool public paused;
 
     error PausedError();
@@ -41,12 +44,13 @@ abstract contract BaseAdapter is IStrategyAdapter, AccessControl, ReentrancyGuar
         _;
     }
 
-    constructor(address vault_, address admin, address controller) {
+    constructor(address vault_, address admin, address controller, address priceOracle_) {
         if (vault_ == address(0) || admin == address(0) || controller == address(0)) {
             revert InvalidAddress();
         }
         VAULT = vault_;
         ASSET = IERC20(IMantleYieldVault(vault_).asset());
+        priceOracle = priceOracle_;
         if (address(ASSET) == address(0)) {
             revert InvalidAddress();
         }
@@ -70,6 +74,14 @@ abstract contract BaseAdapter is IStrategyAdapter, AccessControl, ReentrancyGuar
 
     function estimatePosAmount(uint256 assetAmount) external view virtual override returns (uint256 positionAmount) {
         positionAmount = assetAmount;
+    }
+
+    /// @notice Position-token quote from configured oracle in raw oracle units.
+    function getPosTokenPrice() external view virtual override returns (uint256) {
+        if (priceOracle == address(0)) {
+            return 0;
+        }
+        return IDFeedPriceOracle(priceOracle).getPrice();
     }
 
     function vault() external view virtual override returns (address) {

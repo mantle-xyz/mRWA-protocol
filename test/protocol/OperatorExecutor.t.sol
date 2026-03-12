@@ -39,14 +39,8 @@ contract MockStrategyController is IStrategyControllerExecutor {
         lastProcessHash = keccak256(abi.encode(ids, batchTotalAsset));
     }
 
-    function finalizeRedeemBatch(
-        uint256[] calldata ids,
-        uint256[] calldata inFlightIds,
-        address[] calldata sweepAdapters,
-        uint256[] calldata posAmounts,
-        uint256[] calldata assetAmounts
-    ) external override onlyExecutorGateway {
-        lastAllocateHash = keccak256(abi.encode(ids, inFlightIds, sweepAdapters, posAmounts, assetAmounts));
+    function finalizeRedeemBatch(uint256[] calldata ids) external override onlyExecutorGateway {
+        lastAllocateHash = keccak256(abi.encode(ids));
     }
 
     function settleAdapter(
@@ -54,11 +48,9 @@ contract MockStrategyController is IStrategyControllerExecutor {
         uint256 posAmount,
         uint256 assetAmount,
         uint256[] calldata investInFlightIds,
-        uint256[] calldata redeemInFlightIds,
-        uint256[] calldata ids
+        uint256[] calldata redeemInFlightIds
     ) external override onlyExecutorGateway {
-        lastSettleHash =
-            keccak256(abi.encode(adapter, posAmount, assetAmount, investInFlightIds, redeemInFlightIds, ids));
+        lastSettleHash = keccak256(abi.encode(adapter, posAmount, assetAmount, investInFlightIds, redeemInFlightIds));
     }
 
     function settleAdapters(
@@ -66,11 +58,10 @@ contract MockStrategyController is IStrategyControllerExecutor {
         uint256[] calldata posAmounts,
         uint256[] calldata assetAmounts,
         uint256[] calldata investInFlightIds,
-        uint256[] calldata redeemInFlightIds,
-        uint256[] calldata ids
+        uint256[] calldata redeemInFlightIds
     ) external override onlyExecutorGateway {
         lastSettleBatchHash =
-            keccak256(abi.encode(adapters, posAmounts, assetAmounts, investInFlightIds, redeemInFlightIds, ids));
+            keccak256(abi.encode(adapters, posAmounts, assetAmounts, investInFlightIds, redeemInFlightIds));
     }
 }
 
@@ -134,16 +125,10 @@ contract OperatorExecutorTest is Test {
     function test_ExecuteAllocateBatch_Routes() public {
         uint256[] memory ids = new uint256[](1);
         ids[0] = 9;
-        uint256[] memory inFlightIds = new uint256[](2);
-        inFlightIds[0] = 11;
-        inFlightIds[1] = 12;
-        address[] memory sweepAdapters = new address[](0);
-        uint256[] memory posAmounts = new uint256[](0);
-        uint256[] memory assetAmounts = new uint256[](0);
 
         OperatorExecutor.Command memory cmd = OperatorExecutor.Command({
             action: 2,
-            data: abi.encode(ids, inFlightIds, sweepAdapters, posAmounts, assetAmounts),
+            data: abi.encode(ids),
             nonce: 0,
             deadline: uint64(block.timestamp + 1 hours)
         });
@@ -151,10 +136,7 @@ contract OperatorExecutorTest is Test {
         bytes memory sig = _sign(cmd, signerPk);
         executor.execute(cmd, sig);
 
-        assertEq(
-            controller.lastAllocateHash(),
-            keccak256(abi.encode(ids, inFlightIds, sweepAdapters, posAmounts, assetAmounts))
-        );
+        assertEq(controller.lastAllocateHash(), keccak256(abi.encode(ids)));
     }
 
     function test_ExecuteSettleAdapter_Routes() public {
@@ -162,13 +144,10 @@ contract OperatorExecutorTest is Test {
         investInFlightIds[0] = 7;
         uint256[] memory redeemInFlightIds = new uint256[](1);
         redeemInFlightIds[0] = 9;
-        uint256[] memory ids = new uint256[](2);
-        ids[0] = 101;
-        ids[1] = 102;
 
         OperatorExecutor.Command memory cmd = OperatorExecutor.Command({
             action: 3,
-            data: abi.encode(address(0xBEEF), uint256(11), uint256(22), investInFlightIds, redeemInFlightIds, ids),
+            data: abi.encode(address(0xBEEF), uint256(11), uint256(22), investInFlightIds, redeemInFlightIds),
             nonce: 0,
             deadline: uint64(block.timestamp + 1 hours)
         });
@@ -178,7 +157,7 @@ contract OperatorExecutorTest is Test {
 
         assertEq(
             controller.lastSettleHash(),
-            keccak256(abi.encode(address(0xBEEF), uint256(11), uint256(22), investInFlightIds, redeemInFlightIds, ids))
+            keccak256(abi.encode(address(0xBEEF), uint256(11), uint256(22), investInFlightIds, redeemInFlightIds))
         );
     }
 
@@ -196,13 +175,10 @@ contract OperatorExecutorTest is Test {
         investInFlightIds[0] = 7;
         uint256[] memory redeemInFlightIds = new uint256[](1);
         redeemInFlightIds[0] = 9;
-        uint256[] memory ids = new uint256[](2);
-        ids[0] = 101;
-        ids[1] = 102;
 
         OperatorExecutor.Command memory cmd = OperatorExecutor.Command({
             action: 4,
-            data: abi.encode(adapters, posAmounts, assetAmounts, investInFlightIds, redeemInFlightIds, ids),
+            data: abi.encode(adapters, posAmounts, assetAmounts, investInFlightIds, redeemInFlightIds),
             nonce: 0,
             deadline: uint64(block.timestamp + 1 hours)
         });
@@ -212,7 +188,7 @@ contract OperatorExecutorTest is Test {
 
         assertEq(
             controller.lastSettleBatchHash(),
-            keccak256(abi.encode(adapters, posAmounts, assetAmounts, investInFlightIds, redeemInFlightIds, ids))
+            keccak256(abi.encode(adapters, posAmounts, assetAmounts, investInFlightIds, redeemInFlightIds))
         );
     }
 

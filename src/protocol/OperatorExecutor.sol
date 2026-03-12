@@ -105,34 +105,26 @@ contract OperatorExecutor is Initializable, AccessControlUpgradeable, EIP712Upgr
             (uint256[] memory ids, uint256 batchTotalAsset) = abi.decode(command.data, (uint256[], uint256));
             controller.processRedeemBatch(ids, batchTotalAsset);
         } else if (command.action == ACTION_FINALIZE_REDEEM_BATCH) {
-            (
-                uint256[] memory ids,
-                uint256[] memory inFlightIds,
-                address[] memory sweepAdapters,
-                uint256[] memory posAmounts,
-                uint256[] memory assetAmounts
-            ) = abi.decode(command.data, (uint256[], uint256[], address[], uint256[], uint256[]));
-            controller.finalizeRedeemBatch(ids, inFlightIds, sweepAdapters, posAmounts, assetAmounts);
+            uint256[] memory ids = abi.decode(command.data, (uint256[]));
+            controller.finalizeRedeemBatch(ids);
         } else if (command.action == ACTION_SETTLE_ADAPTER) {
             (
                 address adapter,
                 uint256 posAmount,
                 uint256 assetAmount,
                 uint256[] memory investInFlightIds,
-                uint256[] memory redeemInFlightIds,
-                uint256[] memory ids
-            ) = abi.decode(command.data, (address, uint256, uint256, uint256[], uint256[], uint256[]));
-            controller.settleAdapter(adapter, posAmount, assetAmount, investInFlightIds, redeemInFlightIds, ids);
+                uint256[] memory redeemInFlightIds
+            ) = abi.decode(command.data, (address, uint256, uint256, uint256[], uint256[]));
+            controller.settleAdapter(adapter, posAmount, assetAmount, investInFlightIds, redeemInFlightIds);
         } else if (command.action == ACTION_SETTLE_ADAPTERS) {
             (
                 address[] memory adapters,
                 uint256[] memory posAmounts,
                 uint256[] memory assetAmounts,
                 uint256[] memory investInFlightIds,
-                uint256[] memory redeemInFlightIds,
-                uint256[] memory ids
-            ) = abi.decode(command.data, (address[], uint256[], uint256[], uint256[], uint256[], uint256[]));
-            controller.settleAdapters(adapters, posAmounts, assetAmounts, investInFlightIds, redeemInFlightIds, ids);
+                uint256[] memory redeemInFlightIds
+            ) = abi.decode(command.data, (address[], uint256[], uint256[], uint256[], uint256[]));
+            controller.settleAdapters(adapters, posAmounts, assetAmounts, investInFlightIds, redeemInFlightIds);
         } else {
             revert InvalidAction(command.action);
         }
