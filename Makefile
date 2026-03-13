@@ -53,7 +53,7 @@ fmt-check:
 lint:
 	forge fmt --check && forge build
 
-# 仅本仓库：提交前自动 forge fmt 并重新暂存 .sol
+# only for this repo, not for submodules, only run once
 install-hooks:
 	git config core.hooksPath .githooks
 

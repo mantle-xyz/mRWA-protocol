@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {IDFeedPriceOracle} from "../../interfaces/adapters/digift/IDFeedPriceOracle.sol";
 import {ISubRedManagement} from "../../interfaces/adapters/digift/ISubRedManagement.sol";
 import {BaseAsync7540Adapter} from "../base/capabilities/BaseAsync7540Adapter.sol";
 
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {IERC20, SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 /// @notice Async-first adapter for Digift SubRed subscribe/redeem flow.
 /// @dev Controller drives unified adapter methods.
@@ -62,25 +62,30 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
     }
 
     /**
-     * @notice Estimate ST token amount (in ST raw units) for a given asset amount using DFeed price when oracle is set.
-     * @dev Formula: positionAmount = (amountAsset * 10**oracleDecimals * 10**stDecimals) / (getPrice() * 10**assetDecimals) (floor).
-     *      getPrice() is "asset per 1 ST" (e.g. USDC/USDT per 1 ST). Result is in ST token's smallest unit (e.g. 18 decimals).
-     *      Rounds down. If priceOracle is zero or getPrice() is 0, returns amountAsset scaled to ST raw (1:1 human).
+     * @notice Estimate ST token amount (in ST raw units) for a given asset amount.
+     * @dev Uses getPosTokenPrice() in 1e18 precision. Falls back to 1:1 human scaling when price is invalid (0).
      */
     function estimatePosAmount(uint256 amountAsset) external view override returns (uint256 positionAmount) {
         uint8 assetDecimals = IERC20Metadata(address(ASSET)).decimals();
         uint8 stDecimals = IERC20Metadata(ST_TOKEN).decimals();
+        return _estimatePosAmountInternal(amountAsset, assetDecimals, stDecimals);
+    }
 
-        if (priceOracle == address(0) || amountAsset == 0) {
-            // 1:1 in human terms: scale amountAsset to ST raw
+    function _estimatePosAmountInternal(uint256 amountAsset, uint8 assetDecimals, uint8 stDecimals)
+        internal
+        view
+        returns (uint256)
+    {
+        if (amountAsset == 0) {
+            return 0;
+        }
+        uint256 priceE18 = getPosTokenPrice();
+        if (priceE18 == 0) {
             return _scaleToStRaw(amountAsset, assetDecimals, stDecimals);
         }
-        uint256 price = IDFeedPriceOracle(priceOracle).getPrice();
-        if (price == 0) {
-            return _scaleToStRaw(amountAsset, assetDecimals, stDecimals);
-        }
-        uint8 dec = IDFeedPriceOracle(priceOracle).decimals();
-        return (amountAsset * (10 ** dec) * (10 ** stDecimals)) / (price * (10 ** assetDecimals));
+        uint256 stScale = 10 ** stDecimals;
+        uint256 assetScale = 10 ** assetDecimals;
+        return Math.mulDiv(amountAsset, 1e18 * stScale, priceE18 * assetScale, Math.Rounding.Floor);
     }
 
     function _scaleToStRaw(uint256 amountAssetRaw, uint8 assetDecimals, uint8 stDecimals)
@@ -110,28 +115,16 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
         view
         returns (uint256)
     {
-        if (priceOracle == address(0) || amountPosRaw == 0) {
+        if (amountPosRaw == 0) {
             return _scaleToAssetRaw(amountPosRaw, stDecimals, assetDecimals);
         }
-        uint256 price = IDFeedPriceOracle(priceOracle).getPrice();
-        if (price == 0) {
+        uint256 priceE18 = getPosTokenPrice();
+        if (priceE18 == 0) {
             return _scaleToAssetRaw(amountPosRaw, stDecimals, assetDecimals);
         }
-        uint8 dec = IDFeedPriceOracle(priceOracle).decimals();
-        return (amountPosRaw * price * (10 ** assetDecimals)) / ((10 ** dec) * (10 ** stDecimals));
-    }
-
-    /**
-     * @notice Return current strategy value in vault asset units (e.g. USDC/USDT).
-     * @dev Value = adapter idle asset + (adapter-held + vault-held) position token value
-     *      converted into asset units (oracle if configured).
-     */
-    function getPrice() external view override returns (uint256) {
-        if (priceOracle == address(0)) return 1e18;
-        uint256 p = IDFeedPriceOracle(priceOracle).getPrice();
-        if (p == 0) return 1e18;
-        uint8 dec = IDFeedPriceOracle(priceOracle).decimals();
-        return p * 1e18 / (10 ** dec);
+        uint256 stScale = 10 ** stDecimals;
+        uint256 assetScale = 10 ** assetDecimals;
+        return Math.mulDiv(amountPosRaw, priceE18 * assetScale, 1e18 * stScale, Math.Rounding.Floor);
     }
 
     function totalValue() external view override returns (uint256) {
@@ -192,7 +185,9 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
         ASSET.safeTransferFrom(VAULT, address(this), amountAsset);
         _subscribe(amountAsset, uint64(block.timestamp + subscribeDeadlineWindow));
         _emitAdapterDeposit(amountAsset, receiver, amountAsset);
-        return this.estimatePosAmount(amountAsset);
+        uint8 assetDecimals = IERC20Metadata(address(ASSET)).decimals();
+        uint8 stDecimals = IERC20Metadata(ST_TOKEN).decimals();
+        return _estimatePosAmountInternal(amountAsset, assetDecimals, stDecimals);
     }
 
     /**
@@ -204,7 +199,9 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
      * @dev Pulls position token from vault, then submits redeem request to SubRed.
      */
     function requestRedeemAsync(uint256 amountAsset, address receiver) external override onlyController whenNotPaused {
-        uint256 quantity = this.estimatePosAmount(amountAsset);
+        uint8 assetDecimals = IERC20Metadata(address(ASSET)).decimals();
+        uint8 stDecimals = IERC20Metadata(ST_TOKEN).decimals();
+        uint256 quantity = _estimatePosAmountInternal(amountAsset, assetDecimals, stDecimals);
         IERC20(ST_TOKEN).safeTransferFrom(VAULT, address(this), quantity);
         _redeem(quantity, uint64(block.timestamp + redeemDeadlineWindow));
         _registerAsyncRedeem(amountAsset, receiver);

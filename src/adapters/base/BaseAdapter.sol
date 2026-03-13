@@ -9,6 +9,7 @@ import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 abstract contract BaseAdapter is IStrategyAdapter, AccessControl, ReentrancyGuard {
     using SafeERC20 for IERC20;
@@ -76,12 +77,18 @@ abstract contract BaseAdapter is IStrategyAdapter, AccessControl, ReentrancyGuar
         positionAmount = assetAmount;
     }
 
-    /// @notice Position-token quote from configured oracle in raw oracle units.
-    function getPosTokenPrice() external view virtual override returns (uint256) {
+    /// @notice Position-token quote in 1e18 precision (asset per 1 pos token).
+    /// @dev Returns 1e18 when no oracle is configured; returns 0 when oracle price is invalid.
+    function getPosTokenPrice() public view virtual override returns (uint256) {
         if (priceOracle == address(0)) {
+            return 1e18;
+        }
+        uint256 rawPrice = IDFeedPriceOracle(priceOracle).getPrice();
+        if (rawPrice == 0) {
             return 0;
         }
-        return IDFeedPriceOracle(priceOracle).getPrice();
+        uint8 dec = IDFeedPriceOracle(priceOracle).decimals();
+        return Math.mulDiv(rawPrice, 1e18, 10 ** dec, Math.Rounding.Floor);
     }
 
     function vault() external view virtual override returns (address) {
