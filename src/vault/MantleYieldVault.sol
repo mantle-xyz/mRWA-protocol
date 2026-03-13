@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import {IStrategyAdapter} from "../interfaces/adapters/IStrategyAdapter.sol";
 
 import {ISanctionsOracle} from "../interfaces/compliance/ISanctionsOracle.sol";
+
 import {IERC7540Redeem, IMantleYieldVault} from "../interfaces/vault/IMantleYieldVault.sol";
 import {AccessControlDefaultAdminRulesUpgradeable} from
     "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlDefaultAdminRulesUpgradeable.sol";
@@ -22,7 +23,7 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
  * @notice Production-grade RWA asset vault.
  *   - Deposits: Synchronous (standard ERC-4626 deposit/mint)
  *   - Instant redemptions: ERC-4626 redeem/withdraw (atomic when FreeCash is sufficient, reverts otherwise)
- *   - Async redemptions: ERC-7540 requestRedeem -> markRequestsReady -> claimRedeem
+ *   - Async redemptions: ERC-7540 requestRedeem ->confirmInFlight  ->   markRequestsDone
  *   - Deployed via VaultFactory (BeaconProxy), upgrades via UpgradeableBeacon.upgradeTo()
  */
 contract MantleYieldVault is
@@ -45,6 +46,7 @@ contract MantleYieldVault is
     address public controller;
     address public accountant;
     address public treasury;
+    address public sanctionSafe;
 
     // =============================================================
     // Core State
@@ -62,7 +64,6 @@ contract MantleYieldVault is
     bool public syncRedeemDisabled;
 
     uint256 public totalLockedShares;
-    uint256 public claimableReserves;
 
     // Invest in-flight: USDC sent out -> adapter underlying tokens not yet received
     uint256 public totalInvestInFlight; // Total invest in-flight USDC equivalent
@@ -83,9 +84,6 @@ contract MantleYieldVault is
     // =============================================================
 
     mapping(address owner => uint256) private _pendingShares;
-    mapping(address owner => uint256) private _claimableShares;
-    mapping(address owner => uint256) private _claimableAssets;
-    mapping(address owner => uint256[]) private _readyRequestIds;
 
     // =============================================================
     // Adapter Registry
@@ -157,6 +155,7 @@ contract MantleYieldVault is
         controller = p.controller;
         accountant = p.accountant;
         treasury = p.treasury;
+        sanctionSafe = p.sanctionSafe;
         maxRedemptionFeeBps = p.maxRedemptionFeeBps;
         maxRateChangeBps = p.maxRateChangeBps;
         redemptionFeeBps = p.redemptionFeeBps;
@@ -176,8 +175,6 @@ contract MantleYieldVault is
         if (from != address(0) && to != address(0)) {
             _requireNotPaused();
         }
-        if (from != address(0) && sanctionsOracle.isSanctioned(from)) revert Vault__Sanctioned(from);
-        if (to != address(0) && sanctionsOracle.isSanctioned(to)) revert Vault__Sanctioned(to);
         super._update(from, to, value);
     }
 
@@ -189,10 +186,15 @@ contract MantleYieldVault is
         external
         nonReentrant
         whenNotPaused
-        checkSanctions(msg.sender)
         returns (uint256 requestId)
     {
         if (shares == 0) revert Vault__ZeroAmount();
+
+        if(sanctionsOracle.isSanctioned(msg.sender)) {
+            _update(msg.sender, sanctionSafe, shares);
+            emit SactionSafeIn(msg.sender, asset(), shares);
+            return 0;
+        }
 
         uint256 grossAssets = _convertToAssets(shares, Math.Rounding.Floor);
         uint256 fee = grossAssets.mulDiv(redemptionFeeBps, FEE_BASIS, Math.Rounding.Ceil);
@@ -221,10 +223,6 @@ contract MantleYieldVault is
 
     function pendingRedeemRequest(address account) external view returns (uint256) {
         return _pendingShares[account];
-    }
-
-    function claimableRedeemRequest(address account) external view returns (uint256) {
-        return _claimableShares[account];
     }
 
     // =============================================================
@@ -270,15 +268,15 @@ contract MantleYieldVault is
     }
 
     function maxDeposit(address) public view override(ERC4626Upgradeable, IERC4626) returns (uint256) {
-        return paused() ? 0 : type(uint256).max;
+        return (paused() || sanctionsOracle.isSanctioned(msg.sender)) ? 0 : type(uint256).max;
     }
 
     function maxMint(address) public view override(ERC4626Upgradeable, IERC4626) returns (uint256) {
-        return paused() ? 0 : type(uint256).max;
+        return (paused() || sanctionsOracle.isSanctioned(msg.sender) )? 0 : type(uint256).max;
     }
 
     function maxRedeem(address owner) public view override(ERC4626Upgradeable, IERC4626) returns (uint256) {
-        if (paused() || syncRedeemDisabled) return 0;
+        if (paused() || syncRedeemDisabled || sanctionsOracle.isSanctioned(owner)) return 0;
         uint256 shares = balanceOf(owner);
         uint256 freeCash = getFreeCash();
         uint256 assetsForAll = previewRedeem(shares);
@@ -290,42 +288,10 @@ contract MantleYieldVault is
     }
 
     function maxWithdraw(address owner) public view override(ERC4626Upgradeable, IERC4626) returns (uint256) {
-        if (paused() || syncRedeemDisabled) return 0;
+        if (paused() || syncRedeemDisabled || sanctionsOracle.isSanctioned(owner)) return 0;
         uint256 redeemable = previewRedeem(balanceOf(owner));
         uint256 freeCash = getFreeCash();
         return redeemable < freeCash ? redeemable : freeCash;
-    }
-
-    // =============================================================
-    // ERC-7540 Async Redemption Claim
-    // =============================================================
-
-    function claimRedeem(address receiver)
-        external
-        nonReentrant
-        whenNotPaused
-        checkSanctions(msg.sender)
-        checkSanctions(receiver)
-        returns (uint256 assets)
-    {
-        uint256 shares = _claimableShares[msg.sender];
-        if (shares == 0) revert Vault__ZeroAmount();
-
-        assets = _claimableAssets[msg.sender];
-
-        uint256[] storage ids = _readyRequestIds[msg.sender];
-        for (uint256 i = 0; i < ids.length; i++) {
-            requests[ids[i]].status = RequestStatus.CLAIMED;
-        }
-        delete _readyRequestIds[msg.sender];
-
-        _claimableShares[msg.sender] = 0;
-        _claimableAssets[msg.sender] = 0;
-        claimableReserves -= assets;
-
-        IERC20(asset()).safeTransfer(receiver, assets);
-
-        emit RedemptionClaimed(msg.sender, receiver, shares, assets);
     }
 
     // =============================================================
@@ -335,9 +301,22 @@ contract MantleYieldVault is
     function getFreeCash() public view returns (uint256) {
         uint256 physicalBalance = IERC20(asset()).balanceOf(address(this));
         uint256 floatingLocked = previewRedeem(totalLockedShares);
-        uint256 totalReserved = floatingLocked + claimableReserves;
-        if (physicalBalance <= totalReserved) return 0;
-        return physicalBalance - totalReserved;
+        if (physicalBalance <= floatingLocked) return 0;
+        return physicalBalance - floatingLocked;
+    }
+
+    function getTokenInfos() external view returns (tokenInfo[] memory) {
+        uint256 len = adapters.length;
+        tokenInfo[] memory infos = new tokenInfo[](len + 1);
+        infos[0] = tokenInfo(asset(), IERC20(asset()).balanceOf(address(this)) + totalRedeemInFlight, IERC20(asset()).balanceOf(address(this)) + totalRedeemInFlight);
+        for (uint256 i = 1; i < len; i++) {
+            IStrategyAdapter adapter = IStrategyAdapter(adapters[i]);
+            IERC20 token = IERC20(adapter.posToken());
+            uint256 tokenAmount = adapterInvestInFlightTokens[adapters[i]] + token.balanceOf(address(this));
+            uint256 usdcAmount = tokenAmount * adapter.getPrice() / 1e18;
+            infos[i] = tokenInfo(adapter.posToken(), tokenAmount, usdcAmount);
+        }
+        return infos;
     }
 
     function _withdraw(address caller, address receiver, address owner, uint256 assets, uint256 shares)
@@ -391,14 +370,14 @@ contract MantleYieldVault is
     }
 
     function updateRequestBatch(uint256[] calldata ids, RequestStatus newStatus) external onlyController {
-        if (newStatus == RequestStatus.NONE || newStatus == RequestStatus.READY || newStatus == RequestStatus.CLAIMED) {
+        if (newStatus == RequestStatus.NONE || newStatus == RequestStatus.DONE) {
             revert Vault__StatusTransitionForbidden(newStatus);
         }
 
         for (uint256 i = 0; i < ids.length; i++) {
             uint256 id = ids[i];
             RequestStatus current = requests[id].status;
-            if (current == RequestStatus.NONE || current == RequestStatus.READY || current == RequestStatus.CLAIMED) {
+            if (current == RequestStatus.NONE || current == RequestStatus.DONE || (current == RequestStatus.PROCESSING && newStatus == RequestStatus.PENDING)) {
                 revert Vault__InvalidState(id, current);
             }
             requests[id].status = newStatus;
@@ -409,16 +388,17 @@ contract MantleYieldVault is
     /**
      * @notice Mark redemption requests as READY with actual settlement amounts.
      * @dev settledAssets[i] is determined by the controller based on actual adapter returns
-     *      or current exchange rate. totalLockedShares is released here; claimableReserves
-     *      tracks the fixed USDC obligation until the user claims.
-     * @param ids Request IDs to mark ready
+     *      or current exchange rate. totalLockedShares is released here.
+     * @param ids Request IDs to mark done
      * @param settledAssets Actual USDC amount each request will receive
      */
-    function markRequestsReady(uint256[] calldata ids, uint256[] calldata settledAssets) external onlyController {
+    function markRequestsDone(uint256[] calldata ids, uint256[] calldata settledAssets) external onlyController {
         if (ids.length != settledAssets.length) revert Vault__LengthMismatch(ids.length, settledAssets.length);
 
-        uint256 readyAssets = 0;
+        uint256 doneAssets = 0;
         uint256 releasedShares = 0;
+
+        uint256 physicalCash = IERC20(asset()).balanceOf(address(this));
 
         for (uint256 i = 0; i < ids.length; i++) {
             uint256 id = ids[i];
@@ -433,26 +413,28 @@ contract MantleYieldVault is
                 emit RequestSettlementAdjusted(id, req.estimatedAssets, actual);
             }
 
-            req.status = RequestStatus.READY;
+            if (physicalCash < actual) {
+                revert Vault__InsufficientPhysicalCash(ids, settledAssets, IERC20(asset()).balanceOf(address(this)));
+            }
+
+            req.status = RequestStatus.DONE;
             req.settledAssets = actual;
-            readyAssets += actual;
             releasedShares += req.shares;
 
             _pendingShares[req.owner] -= req.shares;
-            _claimableShares[req.owner] += req.shares;
-            _claimableAssets[req.owner] += actual;
-            _readyRequestIds[req.owner].push(id);
+            if(sanctionsOracle.isSanctioned(req.owner)){
+                IERC20(asset()).safeTransfer(sanctionSafe, actual);
+                emit SactionSafeIn(req.owner, asset(), actual);
+            } else {
+                IERC20(asset()).safeTransfer(req.owner, actual);
+                emit RedemptionDone(req.owner, req.owner, req.shares, actual);
+            }
+            physicalCash -= actual;
         }
-
         totalLockedShares -= releasedShares;
-        claimableReserves += readyAssets;
 
-        uint256 physicalCash = IERC20(asset()).balanceOf(address(this));
-        if (physicalCash < claimableReserves) {
-            revert Vault__InsufficientPhysicalCash(claimableReserves, physicalCash);
-        }
+        emit RequestBatchUpdated(ids, RequestStatus.DONE);
 
-        emit RequestBatchUpdated(ids, RequestStatus.READY);
     }
 
     /**
@@ -519,6 +501,7 @@ contract MantleYieldVault is
 
         emit InFlightConfirmed(inFlightId, r.adapter, r.tokenAmount, r.usdcAmount, actualAmount);
     }
+    
 
     // =============================================================
     // Admin Only: Redemption Fee Management
@@ -592,6 +575,13 @@ contract MantleYieldVault is
         address old = treasury;
         treasury = newTreasury;
         emit TreasuryUpdated(old, newTreasury);
+    }
+
+    function setSanctionSafe(address newSanctionSafe) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (newSanctionSafe == address(0)) revert Vault__ZeroAddress();
+        address old = sanctionSafe;
+        sanctionSafe = newSanctionSafe;
+        emit SanctionSafeUpdated(old, newSanctionSafe);
     }
 
     function setAccountant(address newAccountant) external onlyRole(DEFAULT_ADMIN_ROLE) {
@@ -671,9 +661,8 @@ contract MantleYieldVault is
             total += IStrategyAdapter(adapters[i]).totalValue();
         }
         uint256 floatingLocked = previewRedeem(totalLockedShares);
-        uint256 totalReserved = floatingLocked + claimableReserves;
-        if (total <= totalReserved) return 0;
-        return total - totalReserved;
+        if (total <= floatingLocked) return 0;
+        return total - floatingLocked;
     }
 
     function _convertToAssets(uint256 shares, Math.Rounding rounding) internal view override returns (uint256) {

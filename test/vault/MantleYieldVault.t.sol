@@ -95,6 +95,10 @@ contract MockStrategyAdapter is IStrategyAdapter {
         return mockTotalValue;
     }
 
+    function getPrice() external pure override returns (uint256) {
+        return 1e18;
+    }
+
     function setTotalValue(uint256 v) external {
         mockTotalValue = v;
     }
@@ -178,6 +182,7 @@ abstract contract VaultTestBase is Test {
             controller: controllerAddr,
             accountant: accountantAddr,
             treasury: treasuryAddr,
+            sanctionSafe: treasuryAddr,
             maxRedemptionFeeBps: 500,
             maxRateChangeBps: 1000,
             redemptionFeeBps: FEE_BPS,
@@ -447,49 +452,15 @@ contract AsyncRedeemTest is VaultTestBase {
         (,,, uint256 reqAssets,,,) = vault.requests(requestId);
         uint256[] memory settled = new uint256[](1);
         settled[0] = reqAssets;
-        vm.prank(controllerAddr);
-        vault.markRequestsReady(ids, settled);
 
         uint256 balBefore = usdc.balanceOf(alice);
-
-        vm.prank(alice);
-        uint256 claimed = vault.claimRedeem(alice);
-
-        assertGt(claimed, 0);
-        assertEq(usdc.balanceOf(alice), balBefore + claimed);
-    }
-
-    function test_claimRedeemRevertsWhenNothingClaimable() public {
-        vm.prank(alice);
-        vm.expectRevert(IMantleYieldVault.Vault__ZeroAmount.selector);
-        vault.claimRedeem(alice);
-    }
-
-    function test_claimRedeemRevertsWhenPaused() public {
-        uint256 shares = 500e6;
-        vm.prank(alice);
-        uint256 requestId = vault.requestRedeem(shares);
-
-        uint256[] memory ids = new uint256[](1);
-        ids[0] = requestId;
         vm.prank(controllerAddr);
-        vault.updateRequestBatch(ids, IMantleYieldVault.RequestStatus.PROCESSING);
+        vault.markRequestsDone(ids, settled);
 
-        (,,, uint256 reqAssets,,,) = vault.requests(requestId);
-        uint256[] memory settled = new uint256[](1);
-        settled[0] = reqAssets;
-        vm.prank(controllerAddr);
-        vault.markRequestsReady(ids, settled);
-
-        vm.prank(pauser);
-        vault.pause();
-
-        vm.prank(alice);
-        vm.expectRevert();
-        vault.claimRedeem(alice);
+        assertEq(usdc.balanceOf(alice), balBefore + reqAssets, "USDC transferred directly by markRequestsDone");
     }
 
-    function test_multipleRequestsThenClaim() public {
+    function test_multipleRequestsThenSettle() public {
         vm.prank(alice);
         uint256 id1 = vault.requestRedeem(200e6);
 
@@ -504,15 +475,13 @@ contract AsyncRedeemTest is VaultTestBase {
         (,,, settled[0],,,) = vault.requests(id1);
         (,,, settled[1],,,) = vault.requests(id2);
 
+        uint256 balBefore = usdc.balanceOf(alice);
         vm.prank(controllerAddr);
         vault.updateRequestBatch(ids, IMantleYieldVault.RequestStatus.PROCESSING);
         vm.prank(controllerAddr);
-        vault.markRequestsReady(ids, settled);
+        vault.markRequestsDone(ids, settled);
 
-        vm.prank(alice);
-        uint256 claimed = vault.claimRedeem(alice);
-
-        assertGt(claimed, 0);
+        assertEq(usdc.balanceOf(alice), balBefore + settled[0] + settled[1], "USDC transferred directly");
     }
 }
 
@@ -548,7 +517,7 @@ contract UpdateRequestBatchTest is VaultTestBase {
         vault.updateRequestBatch(ids, IMantleYieldVault.RequestStatus.NONE);
     }
 
-    function test_revertsForbiddenTargetStatus_READY() public {
+    function test_revertsForbiddenTargetStatus_DONE() public {
         vm.prank(alice);
         uint256 id = vault.requestRedeem(500e6);
 
@@ -558,26 +527,10 @@ contract UpdateRequestBatchTest is VaultTestBase {
         vm.prank(controllerAddr);
         vm.expectRevert(
             abi.encodeWithSelector(
-                IMantleYieldVault.Vault__StatusTransitionForbidden.selector, IMantleYieldVault.RequestStatus.READY
+                IMantleYieldVault.Vault__StatusTransitionForbidden.selector, IMantleYieldVault.RequestStatus.DONE
             )
         );
-        vault.updateRequestBatch(ids, IMantleYieldVault.RequestStatus.READY);
-    }
-
-    function test_revertsForbiddenTargetStatus_CLAIMED() public {
-        vm.prank(alice);
-        uint256 id = vault.requestRedeem(500e6);
-
-        uint256[] memory ids = new uint256[](1);
-        ids[0] = id;
-
-        vm.prank(controllerAddr);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IMantleYieldVault.Vault__StatusTransitionForbidden.selector, IMantleYieldVault.RequestStatus.CLAIMED
-            )
-        );
-        vault.updateRequestBatch(ids, IMantleYieldVault.RequestStatus.CLAIMED);
+        vault.updateRequestBatch(ids, IMantleYieldVault.RequestStatus.DONE);
     }
 
     function test_revertsIfCurrentStatusIsNONE() public {
@@ -1182,24 +1135,6 @@ contract ERC7540ViewTest is VaultTestBase {
         assertEq(vault.pendingRedeemRequest(alice), 500e6);
     }
 
-    function test_claimableRedeemRequestAfterReady() public {
-        vm.prank(alice);
-        uint256 id = vault.requestRedeem(500e6);
-
-        uint256[] memory ids = new uint256[](1);
-        ids[0] = id;
-
-        (,,, uint256 reqAssets,,,) = vault.requests(id);
-        uint256[] memory settled = new uint256[](1);
-        settled[0] = reqAssets;
-
-        vm.prank(controllerAddr);
-        vault.updateRequestBatch(ids, IMantleYieldVault.RequestStatus.PROCESSING);
-        vm.prank(controllerAddr);
-        vault.markRequestsReady(ids, settled);
-
-        assertEq(vault.claimableRedeemRequest(alice), 500e6);
-    }
 }
 
 // =============================================================
@@ -1296,24 +1231,19 @@ contract ZeroCashBufferTest is VaultTestBase {
         assertEq(vault.totalRedeemInFlight(), 0, "redeem in-flight cleared");
         assertEq(usdc.balanceOf(address(vault)), netAssets, "vault received USDC");
 
-        // Step 3e: Mark requests ready (no friction, settled = full amount)
+        // Step 3e: Mark requests done (USDC transferred directly to user)
         uint256[] memory settled = new uint256[](1);
         settled[0] = netAssets;
         vm.prank(controllerAddr);
-        vault.markRequestsReady(ids, settled);
-
-        // Step 3f: User claims
-        vm.prank(alice);
-        vault.claimRedeem(alice);
+        vault.markRequestsDone(ids, settled);
 
         // ====================================================
-        // Final state verification
+        // Final state verification (markRequestsDone transfers USDC directly)
         // ====================================================
 
         assertEq(usdc.balanceOf(alice), netAssets, "alice received 990 USDC");
         assertEq(usdc.balanceOf(address(vault)), 0, "vault back to 0 cash");
         assertEq(vault.totalLockedShares(), 0, "locked shares cleared");
-        assertEq(vault.claimableReserves(), 0, "claimable reserves cleared");
         assertEq(vault.totalSupply(), 0, "no shares outstanding");
         assertEq(vault.totalAssets(), 10e6, "fee retained in adapter");
     }
@@ -1431,34 +1361,27 @@ contract ZeroCashBufferTest is VaultTestBase {
 
         assertEq(usdc.balanceOf(address(vault)), actualReceived, "vault has 985 USDC");
 
-        // markRequestsReady with settledAssets = actualReceived (less than estimated)
+        // markRequestsDone with settledAssets = actualReceived (less than estimated)
         uint256 lockedSharesBefore = vault.totalLockedShares();
         uint256[] memory settled = new uint256[](1);
         settled[0] = actualReceived;
         vm.prank(controllerAddr);
-        vault.markRequestsReady(ids, settled);
+        vault.markRequestsDone(ids, settled);
 
-        // Shares released from totalLockedShares; claimableReserves holds actual USDC amount
+        // Shares released; USDC transferred directly to alice
         assertEq(vault.totalLockedShares(), lockedSharesBefore - aliceShares, "locked shares released");
-        assertEq(vault.claimableReserves(), actualReceived, "claimable = actual settled amount");
+        assertEq(usdc.balanceOf(alice), actualReceived, "alice receives 985 USDC (990 - 5 friction) directly");
 
         // estimatedAssets preserved, settledAssets = actual
         (,,, uint256 estAssets, uint256 settled_,, IMantleYieldVault.RequestStatus status) = vault.requests(reqId);
         assertEq(estAssets, netAssets, "estimatedAssets preserved");
         assertEq(settled_, actualReceived, "settledAssets = actual settlement");
-        assertTrue(status == IMantleYieldVault.RequestStatus.READY, "request is READY");
-
-        // --- Alice claims the friction-adjusted amount ---
-        vm.prank(alice);
-        vault.claimRedeem(alice);
-
-        assertEq(usdc.balanceOf(alice), actualReceived, "alice receives 985 USDC (990 - 5 friction)");
+        assertTrue(status == IMantleYieldVault.RequestStatus.DONE, "request is DONE");
         assertEq(vault.totalLockedShares(), 0, "all locked shares settled");
-        assertEq(vault.claimableReserves(), 0, "claimable reserves cleared");
     }
 
     /// @dev settledAssets > estimatedAssets (underlying appreciated during async period)
-    function test_markRequestsReady_settledExceedsEstimated_works() public {
+    function test_markRequestsDone_settledExceedsEstimated_works() public {
         uint256 redeemShares = 500e6;
         vm.prank(alice);
         uint256 reqId = vault.requestRedeem(redeemShares);
@@ -1479,14 +1402,14 @@ contract ZeroCashBufferTest is VaultTestBase {
         usdc.mint(address(vault), surplus);
 
         vm.prank(controllerAddr);
-        vault.markRequestsReady(ids, settled);
+        vault.markRequestsDone(ids, settled);
 
         assertEq(vault.totalLockedShares(), lockedSharesBefore - redeemShares, "locked shares released");
-        assertEq(vault.claimableReserves(), settledAmount, "claimable includes surplus");
+        assertEq(usdc.balanceOf(alice), settledAmount, "alice receives surplus directly");
     }
 
     /// @dev ids and settledAssets length mismatch reverts
-    function test_markRequestsReady_revertsOnLengthMismatch() public {
+    function test_markRequestsDone_revertsOnLengthMismatch() public {
         vm.prank(alice);
         uint256 reqId = vault.requestRedeem(500e6);
 
@@ -1499,7 +1422,7 @@ contract ZeroCashBufferTest is VaultTestBase {
 
         vm.prank(controllerAddr);
         vm.expectRevert(abi.encodeWithSelector(IMantleYieldVault.Vault__LengthMismatch.selector, 1, 2));
-        vault.markRequestsReady(ids, settled);
+        vault.markRequestsDone(ids, settled);
     }
 }
 

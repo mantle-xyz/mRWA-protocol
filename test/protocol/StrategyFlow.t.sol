@@ -126,11 +126,11 @@ contract MockVaultFlow {
         }
     }
 
-    function markRequestsReady(uint256[] calldata ids, uint256[] calldata settledAssets) external {
+    function markRequestsDone(uint256[] calldata ids, uint256[] calldata settledAssets) external {
         require(ids.length == settledAssets.length, "LENGTH_MISMATCH");
         for (uint256 i = 0; i < ids.length; i++) {
             liabilities[ids[i]] = settledAssets[i];
-            requestStatus[ids[i]] = IMantleYieldVault.RequestStatus.READY;
+            requestStatus[ids[i]] = IMantleYieldVault.RequestStatus.DONE;
         }
     }
 
@@ -185,7 +185,7 @@ contract MockVaultFlow {
         uint256 assets = liabilities[requestId];
         IMantleYieldVault.RequestStatus status = requestStatus[requestId];
         return
-            (requestId, address(0), 0, assets, status == IMantleYieldVault.RequestStatus.READY ? assets : 0, 0, status);
+            (requestId, address(0), 0, assets, status == IMantleYieldVault.RequestStatus.DONE ? assets : 0, 0, status);
     }
 
     function inFlightRecords(uint256 inFlightId)
@@ -320,9 +320,9 @@ contract StrategyFlowTest is Test {
         controller.settleAdapters(adapters, posAmounts, assetAmounts, new uint256[](0), inFlightIds);
         controller.finalizeRedeemBatch(ids);
 
-        // READY
-        assertEq(uint8(vault.requestStatus(ids[0])), uint8(IMantleYieldVault.RequestStatus.READY));
-        assertEq(uint8(vault.requestStatus(ids[1])), uint8(IMantleYieldVault.RequestStatus.READY));
+        // DONE
+        assertEq(uint8(vault.requestStatus(ids[0])), uint8(IMantleYieldVault.RequestStatus.DONE));
+        assertEq(uint8(vault.requestStatus(ids[1])), uint8(IMantleYieldVault.RequestStatus.DONE));
         assertEq(vault.totalRedeemInFlight(), 0);
     }
 }

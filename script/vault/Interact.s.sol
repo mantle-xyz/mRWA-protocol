@@ -26,11 +26,13 @@ import {Script, console} from "forge-std/Script.sol";
  *   # Deposit (Ledger)
  *   forge script script/vault/Interact.s.sol:Deposit --rpc-url mantle_sepolia --broadcast --ledger -vvv
  *
- *   # Sync Redeem / Request Async Redeem / Claim Async Redeem — same pattern, swap contract name
+ *   # Sync Redeem / Request Async Redeem — same pattern, swap contract name
+ *
+ *   Note: Async redeem no longer requires ClaimRedeem — controller's MarkRequestsDone transfers USDC directly to users.
  *
  * === Controller Actions ===
  *
- *   # ProcessRequests / ReadyRequests — same pattern with CONTROLLER_PRIVATE_KEY or CONTROLLER_ADDRESS
+ *   # ProcessRequests (PENDING->PROCESSING) / MarkRequestsDone (transfers USDC to users) — same pattern with CONTROLLER_PRIVATE_KEY or CONTROLLER_ADDRESS
  *
  * === View Actions (no broadcast / no signing) ===
  *
@@ -191,39 +193,7 @@ contract RequestRedeem is SignerHelper {
         console.log("Shares burned:", reqShares);
         console.log("Expected payout (USDC):", reqAssets);
         console.log("Status: PENDING");
-        console.log("\nNext: Controller calls ProcessRequests -> ReadyRequests, then user calls ClaimRedeem");
-    }
-}
-
-// =============================================================
-// User: Claim Async Redeem
-// =============================================================
-
-contract ClaimRedeem is SignerHelper {
-    function run() external {
-        (address user, bool useLedger) = _resolveUser();
-        address vaultAddr = vm.envAddress("VAULT_ADDRESS");
-        address usdcAddr = vm.envAddress("USDC_ADDRESS");
-
-        MantleYieldVault vault = MantleYieldVault(vaultAddr);
-        IERC20 usdc = IERC20(usdcAddr);
-
-        uint256 claimableShares = vault.claimableRedeemRequest(user);
-        uint256 usdcBefore = usdc.balanceOf(user);
-
-        console.log("=== Claim Redeem ===");
-        console.log("User:", user);
-        console.log("Signing mode:", useLedger ? "Ledger" : "PrivateKey");
-        console.log("Claimable shares:", claimableShares);
-
-        require(claimableShares > 0, "Nothing to claim - wait for controller to mark requests READY");
-
-        _startUserBroadcast(useLedger, user);
-        uint256 assets = vault.claimRedeem(user);
-        vm.stopBroadcast();
-
-        console.log("\nUSDC claimed:", assets);
-        console.log("USDC balance change:", usdc.balanceOf(user) - usdcBefore);
+        console.log("\nNext: Controller calls ProcessRequests -> MarkRequestsDone (USDC transferred directly to user)");
     }
 }
 
@@ -259,10 +229,10 @@ contract ProcessRequests is SignerHelper {
 }
 
 // =============================================================
-// Controller: Ready Requests (PROCESSING -> READY with settled amounts)
+// Controller: Mark Requests Done (PROCESSING -> DONE, transfers USDC directly to users)
 // =============================================================
 
-contract ReadyRequests is SignerHelper {
+contract MarkRequestsDone is SignerHelper {
     function run() external {
         (address controller, bool useLedger) = _resolveController();
         address vaultAddr = vm.envAddress("VAULT_ADDRESS");
@@ -273,7 +243,7 @@ contract ReadyRequests is SignerHelper {
 
         require(ids.length == settled.length, "REQUEST_IDS and SETTLED_AMOUNTS must have same length");
 
-        console.log("=== Ready Requests ===");
+        console.log("=== Mark Requests Done ===");
         console.log("Controller:", controller);
         console.log("Signing mode:", useLedger ? "Ledger" : "PrivateKey");
         for (uint256 i = 0; i < ids.length; i++) {
@@ -284,12 +254,10 @@ contract ReadyRequests is SignerHelper {
         }
 
         _startControllerBroadcast(useLedger, controller);
-        vault.markRequestsReady(ids, settled);
+        vault.markRequestsDone(ids, settled);
         vm.stopBroadcast();
 
-        console.log("\nAll requests moved to READY");
-        console.log("claimableReserves:", vault.claimableReserves());
-        console.log("Users can now call ClaimRedeem");
+        console.log("\nAll requests marked DONE - USDC transferred directly to request owners");
     }
 }
 
@@ -324,7 +292,6 @@ contract VaultStatus is Script {
 
         console.log("--- Liabilities ---");
         console.log("totalLockedShares:", vault.totalLockedShares());
-        console.log("claimableReserves:", vault.claimableReserves());
         console.log("");
 
         console.log("--- In-Flight ---");

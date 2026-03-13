@@ -14,4 +14,5 @@ interface IStrategyAdapterCore {
     function deposit(uint256 amount, address receiver) external returns (uint256 sharesOrPos);
     function sweepToVault(address token, uint256 amount) external returns (uint256 claimed);
     function setPaused(bool paused) external;
+    function getPrice() external view returns (uint256);
 }

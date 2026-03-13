@@ -126,6 +126,14 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
      * @dev Value = adapter idle asset + (adapter-held + vault-held) position token value
      *      converted into asset units (oracle if configured).
      */
+    function getPrice() external view override returns (uint256) {
+        if (priceOracle == address(0)) return 1e18;
+        uint256 p = IDFeedPriceOracle(priceOracle).getPrice();
+        if (p == 0) return 1e18;
+        uint8 dec = IDFeedPriceOracle(priceOracle).decimals();
+        return p * 1e18 / (10 ** dec);
+    }
+
     function totalValue() external view override returns (uint256) {
         uint8 assetDecimals = IERC20Metadata(address(ASSET)).decimals();
         uint8 stDecimals = IERC20Metadata(ST_TOKEN).decimals();

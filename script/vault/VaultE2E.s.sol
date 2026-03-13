@@ -94,6 +94,10 @@ contract MockStrategyAdapter is IStrategyAdapter {
         return mockTotalValue;
     }
 
+    function getPrice() external pure override returns (uint256) {
+        return 1e18;
+    }
+
     function setTotalValue(uint256 v) external {
         mockTotalValue = v;
     }
@@ -216,6 +220,7 @@ contract VaultE2E is Script {
                 controller: controller,
                 accountant: accountant,
                 treasury: treasury,
+                sanctionSafe: treasury,
                 maxRedemptionFeeBps: 500,
                 maxRateChangeBps: 1_000,
                 redemptionFeeBps: 100,
@@ -325,29 +330,18 @@ contract VaultE2E is Script {
         vault.updateRequestBatch(ids, IMantleYieldVault.RequestStatus.PROCESSING);
         console.log("[async] Step 2 - PROCESSING");
 
-        // Step 3: markRequestsReady (no friction)
+        // Step 3: markRequestsDone - directly transfers USDC to user (no separate claim)
         uint256[] memory settledAmounts = new uint256[](1);
         settledAmounts[0] = reqAssets;
 
-        vm.broadcast(controllerKey);
-        vault.markRequestsReady(ids, settledAmounts);
-        console.log("[async] Step 3 - READY (settled:", reqAssets / 1e6, "USDC)");
-
-        require(vault.claimableReserves() == reqAssets, "claimableReserves wrong");
-
-        // Step 4: claimRedeem
         uint256 usdcBefore = usdc.balanceOf(alice);
 
-        vm.broadcast(aliceKey);
-        uint256 claimed = vault.claimRedeem(alice);
+        vm.broadcast(controllerKey);
+        vault.markRequestsDone(ids, settledAmounts);
+        console.log("[async] Step 3 - DONE (settled:", reqAssets / 1e6, "USDC, transferred directly)");
 
-        require(claimed == reqAssets, "claimed != reqAssets");
         require(usdc.balanceOf(alice) == usdcBefore + reqAssets, "usdc not received");
-        require(vault.claimableReserves() == 0, "claimable not cleared");
-
-        console.log("[async] Step 4 - CLAIMED:", claimed / 1e6, "USDC");
         console.log("[async] totalLockedShares:", vault.totalLockedShares());
-        console.log("[async] claimableReserves:", vault.claimableReserves());
     }
 
     // =============================================================
@@ -376,29 +370,21 @@ contract VaultE2E is Script {
         uint256[] memory settledAmounts = new uint256[](1);
         settledAmounts[0] = actualSettled;
 
-        uint256 lockedBeforeReady = vault.totalLockedShares();
+        uint256 usdcBefore = usdc.balanceOf(alice);
 
         vm.broadcast(controllerKey);
-        vault.markRequestsReady(ids, settledAmounts);
+        vault.markRequestsDone(ids, settledAmounts);
 
-        uint256 lockedAfterReady = vault.totalLockedShares();
-        require(lockedAfterReady == lockedBeforeReady - redeemShares, "shares not released from locked");
-
-        console.log("[friction] Estimated (USDC):", estAssets / 1e6, "| Settled:", actualSettled / 1e6);
-        console.log("[friction] Friction (USDC):", friction / 1e6);
-        console.log("[friction] LockedShares after ready:", lockedAfterReady);
-
-        vm.broadcast(aliceKey);
-        uint256 claimed = vault.claimRedeem(alice);
-
-        require(claimed == actualSettled, "claimed != actualSettled");
+        require(usdc.balanceOf(alice) == usdcBefore + actualSettled, "usdc not received");
         require(vault.totalLockedShares() == lockedBefore, "lockedShares not back to original");
 
         (,,, uint256 storedEstAssets, uint256 storedSettled,,) = vault.requests(reqId);
         require(storedEstAssets == estAssets, "estimatedAssets should be unchanged");
         require(storedSettled == actualSettled, "settledAssets wrong");
 
-        console.log("[friction] Claimed (USDC):", claimed / 1e6);
+        console.log("[friction] Estimated (USDC):", estAssets / 1e6, "| Settled:", actualSettled / 1e6);
+        console.log("[friction] Friction (USDC):", friction / 1e6);
+        console.log("[friction] USDC received directly:", actualSettled / 1e6);
         console.log("[friction] Audit: est=", storedEstAssets / 1e6, "settled=", storedSettled / 1e6);
     }
 

@@ -11,9 +11,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 interface IERC7540Redeem {
     event RedeemRequest(address indexed account, uint256 indexed requestId, uint256 shares);
-
     function pendingRedeemRequest(address account) external view returns (uint256 shares);
-    function claimableRedeemRequest(address account) external view returns (uint256 shares);
 }
 
 /**
@@ -31,8 +29,7 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
         NONE,
         PENDING,
         PROCESSING,
-        READY,
-        CLAIMED
+        DONE
     }
 
     enum InFlightStatus {
@@ -54,6 +51,7 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
         address controller;
         address accountant;
         address treasury;
+        address sanctionSafe;
         uint256 maxRedemptionFeeBps;
         uint256 maxRateChangeBps;
         uint256 redemptionFeeBps;
@@ -67,7 +65,7 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
         address owner;
         uint256 shares;
         uint256 estimatedAssets; // Estimated payout at requestRedeem time (reference only, may differ from settlement)
-        uint256 settledAssets; // Actual payout (set by markRequestsReady, 0 until settled)
+        uint256 settledAssets; // Actual payout (set by markRequestsDone, 0 until settled)
         uint256 timestamp;
         RequestStatus status;
     }
@@ -84,6 +82,12 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
         InFlightStatus status;
     }
 
+    struct tokenInfo {
+        address token;
+        uint256 tokenAmount;
+        uint256 usdcAmount;
+    }
+
     // =============================================================
     // Errors
     // =============================================================
@@ -91,9 +95,8 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     error Vault__Sanctioned(address account);
     error Vault__NotAuthorized();
     error Vault__InvalidState(uint256 requestId, RequestStatus currentStatus);
-    error Vault__InsufficientPhysicalCash(uint256 required, uint256 available);
+    error Vault__InsufficientPhysicalCash(uint256[] requestIds, uint256[] settledAssets, uint256 physicalCash);
     error Vault__InsufficientFreeCash(uint256 requested, uint256 freeCash);
-    error Vault__InsufficientClaimable(uint256 requested, uint256 available);
     error Vault__Underflow(uint256 current, uint256 deduction);
     error Vault__RescueAssetCannotBeUnderlying();
     error Vault__ZeroAmount();
@@ -117,7 +120,8 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     // Events (vault-specific; RedeemRequest is inherited from IERC7540Redeem)
     // =============================================================
 
-    event RedemptionClaimed(address indexed account, address indexed receiver, uint256 shares, uint256 assets);
+    event SactionSafeIn(address indexed account, address indexed token, uint256 amount);
+    event RedemptionDone(address indexed account, address indexed receiver, uint256 shares, uint256 assets);
     event ExchangeRateUpdated(uint256 oldRate, uint256 newRate);
     event ExchangeRateChangeExceedsLimit(uint256 oldRate, uint256 newRate, uint256 maxDeltaBps);
     event RedemptionFeeUpdated(uint256 oldFeeBps, uint256 newFeeBps);
@@ -147,6 +151,7 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     event ControllerUpdated(address indexed oldController, address indexed newController);
     event AccountantUpdated(address indexed oldAccountant, address indexed newAccountant);
     event TreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
+    event SanctionSafeUpdated(address indexed oldSanctionSafe, address indexed newSanctionSafe);
     event RequestSettlementAdjusted(uint256 indexed requestId, uint256 originalAssets, uint256 settledAssets);
     event TokenRescued(address indexed token, address indexed to, uint256 amount);
     event MaxRedemptionFeeUpdated(uint256 oldMaxBps, uint256 newMaxBps);
@@ -179,12 +184,13 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     function minDepositAmount() external view returns (uint256);
     function syncRedeemDisabled() external view returns (bool);
     function totalLockedShares() external view returns (uint256);
-    function claimableReserves() external view returns (uint256);
 
     function totalInvestInFlight() external view returns (uint256);
     function totalRedeemInFlight() external view returns (uint256);
     function adapterInvestInFlightTokens(address adapter) external view returns (uint256);
     function adapterRedeemInFlightUsdc(address adapter) external view returns (uint256);
+
+    function getTokenInfos() external view returns (tokenInfo[] memory);
 
     function nextRequestId() external view returns (uint256);
     function nextInFlightId() external view returns (uint256);
@@ -223,14 +229,6 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     function getFreeCash() external view returns (uint256);
 
     // =============================================================
-    // ERC-7540: Async Redemption (requestRedeem & claimRedeem are vault-specific;
-    // pendingRedeemRequest & claimableRedeemRequest are inherited from IERC7540Redeem)
-    // =============================================================
-
-    function requestRedeem(uint256 shares) external returns (uint256 requestId);
-    function claimRedeem(address receiver) external returns (uint256 assets);
-
-    // =============================================================
     // ERC-7575
     // =============================================================
 
@@ -244,7 +242,7 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     function removeAdapter(address adapter) external;
     function approveToAdapter(address adapter, address token, uint256 amount) external;
     function updateRequestBatch(uint256[] calldata ids, RequestStatus newStatus) external;
-    function markRequestsReady(uint256[] calldata ids, uint256[] calldata settledAssets) external;
+    function markRequestsDone(uint256[] calldata ids, uint256[] calldata settledAssets) external;
     function createInFlight(address adapter, address token, uint256 tokenAmount, uint256 usdcAmount, bool isInvest)
         external
         returns (uint256 inFlightId);
@@ -254,6 +252,7 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     // Admin Only
     // =============================================================
 
+    function setSanctionSafe(address newSanctionSafe) external;
     function setRedemptionFee(uint256 newFeeBps) external;
     function setMaxRedemptionFee(uint256 newMaxBps) external;
     function setMaxRateChangeBps(uint256 newMaxBps) external;

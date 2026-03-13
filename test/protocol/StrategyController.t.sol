@@ -80,6 +80,10 @@ contract MockStrategyAdapter is IStrategyAdapter {
         return mockedTotalValue;
     }
 
+    function getPrice() external pure returns (uint256) {
+        return 1e18;
+    }
+
     function deposit(uint256 amount, address) external returns (uint256 sharesOrPos) {
         if (failDeposit) revert("DEPOSIT_FAIL");
         depositCount++;
@@ -199,7 +203,7 @@ contract MockControllerVault {
     function markRequestsReady(uint256[] calldata ids, uint256[] calldata settledAssets) external {
         for (uint256 i = 0; i < ids.length; i++) {
             reqs[ids[i]].settledAssets = settledAssets[i];
-            reqs[ids[i]].status = IMantleYieldVault.RequestStatus.READY;
+            reqs[ids[i]].status = IMantleYieldVault.RequestStatus.DONE;
         }
     }
 
@@ -765,7 +769,7 @@ contract StrategyControllerUnitTest is Test {
         assertEq(vault.totalRedeemInFlight(), 10e18);
         (,,,, uint256 settledAssets,, IMantleYieldVault.RequestStatus reqStatus) = vault.requests(22);
         assertEq(settledAssets, 100e18);
-        assertEq(uint8(reqStatus), uint8(IMantleYieldVault.RequestStatus.READY));
+        assertEq(uint8(reqStatus), uint8(IMantleYieldVault.RequestStatus.DONE));
     }
 
     function test_FinalizeRedeemBatch_RequiresSortedIds() public {

@@ -756,7 +756,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
             revert InsufficientCashForReady(required, available);
         }
 
-        vault.markRequestsReady(ids, settledAssets);
+        vault.markRequestsDone(ids, settledAssets);
         readyBatchDone[batchKey] = true;
         emit RedeemBatchReady(ids.length, required);
     }
@@ -902,7 +902,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         for (uint256 i = 0; i < ids.length; i++) {
             (,,, uint256 estimatedAssets_, uint256 settledAssets_,, IMantleYieldVault.RequestStatus status) =
                 vault.requests(ids[i]);
-            if (status != IMantleYieldVault.RequestStatus.PROCESSING && status != IMantleYieldVault.RequestStatus.READY)
+            if (status != IMantleYieldVault.RequestStatus.PROCESSING && status != IMantleYieldVault.RequestStatus.DONE)
             {
                 revert InvalidRequestState(ids[i], status);
             }
