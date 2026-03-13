@@ -80,10 +80,6 @@ contract MockStrategyAdapter is IStrategyAdapter {
         return mockedTotalValue;
     }
 
-    function getPrice() external pure returns (uint256) {
-        return 1e18;
-    }
-
     function deposit(uint256 amount, address) external returns (uint256 sharesOrPos) {
         if (failDeposit) revert("DEPOSIT_FAIL");
         depositCount++;
@@ -200,7 +196,7 @@ contract MockControllerVault {
         }
     }
 
-    function markRequestsReady(uint256[] calldata ids, uint256[] calldata settledAssets) external {
+    function markRequestsDone(uint256[] calldata ids, uint256[] calldata settledAssets) external {
         for (uint256 i = 0; i < ids.length; i++) {
             reqs[ids[i]].settledAssets = settledAssets[i];
             reqs[ids[i]].status = IMantleYieldVault.RequestStatus.DONE;

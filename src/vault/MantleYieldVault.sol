@@ -174,6 +174,8 @@ contract MantleYieldVault is
     function _update(address from, address to, uint256 value) internal virtual override {
         if (from != address(0) && to != address(0)) {
             _requireNotPaused();
+            _checkSanctions(from);
+            _checkSanctions(to);
         }
         super._update(from, to, value);
     }
@@ -182,16 +184,12 @@ contract MantleYieldVault is
     // ERC-7540: Async Redemption Requests
     // =============================================================
 
-    function requestRedeem(uint256 shares)
-        external
-        nonReentrant
-        whenNotPaused
-        returns (uint256 requestId)
-    {
+    function requestRedeem(uint256 shares) external nonReentrant whenNotPaused returns (uint256 requestId) {
         if (shares == 0) revert Vault__ZeroAmount();
 
-        if(sanctionsOracle.isSanctioned(msg.sender)) {
-            _update(msg.sender, sanctionSafe, shares);
+        if (sanctionsOracle.isSanctioned(msg.sender)) {
+            // Route sanctioned account shares to sanctionSafe without triggering transfer sanctions checks.
+            super._update(msg.sender, sanctionSafe, shares);
             emit SactionSafeIn(msg.sender, asset(), shares);
             return 0;
         }
@@ -272,7 +270,7 @@ contract MantleYieldVault is
     }
 
     function maxMint(address) public view override(ERC4626Upgradeable, IERC4626) returns (uint256) {
-        return (paused() || sanctionsOracle.isSanctioned(msg.sender) )? 0 : type(uint256).max;
+        return (paused() || sanctionsOracle.isSanctioned(msg.sender)) ? 0 : type(uint256).max;
     }
 
     function maxRedeem(address owner) public view override(ERC4626Upgradeable, IERC4626) returns (uint256) {
@@ -308,12 +306,17 @@ contract MantleYieldVault is
     function getTokenInfos() external view returns (tokenInfo[] memory) {
         uint256 len = adapters.length;
         tokenInfo[] memory infos = new tokenInfo[](len + 1);
-        infos[0] = tokenInfo(asset(), IERC20(asset()).balanceOf(address(this)) + totalRedeemInFlight, IERC20(asset()).balanceOf(address(this)) + totalRedeemInFlight);
+        infos[0] = tokenInfo(
+            asset(),
+            IERC20(asset()).balanceOf(address(this)) + totalRedeemInFlight,
+            IERC20(asset()).balanceOf(address(this)) + totalRedeemInFlight
+        );
         for (uint256 i = 1; i < len; i++) {
             IStrategyAdapter adapter = IStrategyAdapter(adapters[i]);
             IERC20 token = IERC20(adapter.posToken());
             uint256 tokenAmount = adapterInvestInFlightTokens[adapters[i]] + token.balanceOf(address(this));
-            uint256 usdcAmount = tokenAmount * adapter.getPrice() / 1e18;
+            uint256 priceE18 = adapter.getPosTokenPrice();
+            uint256 usdcAmount = tokenAmount.mulDiv(priceE18, 1e18, Math.Rounding.Floor);
             infos[i] = tokenInfo(adapter.posToken(), tokenAmount, usdcAmount);
         }
         return infos;
@@ -377,7 +380,10 @@ contract MantleYieldVault is
         for (uint256 i = 0; i < ids.length; i++) {
             uint256 id = ids[i];
             RequestStatus current = requests[id].status;
-            if (current == RequestStatus.NONE || current == RequestStatus.DONE || (current == RequestStatus.PROCESSING && newStatus == RequestStatus.PENDING)) {
+            if (
+                current == RequestStatus.NONE || current == RequestStatus.DONE
+                    || (current == RequestStatus.PROCESSING && newStatus == RequestStatus.PENDING)
+            ) {
                 revert Vault__InvalidState(id, current);
             }
             requests[id].status = newStatus;
@@ -422,7 +428,7 @@ contract MantleYieldVault is
             releasedShares += req.shares;
 
             _pendingShares[req.owner] -= req.shares;
-            if(sanctionsOracle.isSanctioned(req.owner)){
+            if (sanctionsOracle.isSanctioned(req.owner)) {
                 IERC20(asset()).safeTransfer(sanctionSafe, actual);
                 emit SactionSafeIn(req.owner, asset(), actual);
             } else {
@@ -434,7 +440,6 @@ contract MantleYieldVault is
         totalLockedShares -= releasedShares;
 
         emit RequestBatchUpdated(ids, RequestStatus.DONE);
-
     }
 
     /**
@@ -501,7 +506,6 @@ contract MantleYieldVault is
 
         emit InFlightConfirmed(inFlightId, r.adapter, r.tokenAmount, r.usdcAmount, actualAmount);
     }
-    
 
     // =============================================================
     // Admin Only: Redemption Fee Management

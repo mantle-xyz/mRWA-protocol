@@ -27,10 +27,6 @@ contract MockSync4626Adapter is BaseSync4626Adapter {
         positionAmount = TARGET_4626.previewDeposit(assetAmount);
     }
 
-    function getPrice() external view override returns (uint256) {
-        return 1e18;
-    }
-
     function totalValue() external view override returns (uint256) {
         uint256 idle = ASSET.balanceOf(address(this));
         uint256 shares = IERC20(address(TARGET_4626)).balanceOf(address(this));

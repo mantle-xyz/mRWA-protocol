@@ -94,10 +94,6 @@ contract MockStrategyAdapter is IStrategyAdapter {
         return mockTotalValue;
     }
 
-    function getPrice() external pure override returns (uint256) {
-        return 1e18;
-    }
-
     function setTotalValue(uint256 v) external {
         mockTotalValue = v;
     }

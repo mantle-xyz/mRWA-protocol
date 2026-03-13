@@ -162,8 +162,7 @@ contract AccountantTest is Test {
         uint32 tooHigh = accountant.MAX_MANAGEMENT_FEE_BPS() + 1;
         vm.expectRevert(abi.encodeWithSelector(Accountant.InvalidFeeRate.selector, tooHigh));
         new BeaconProxy(
-            address(beacon),
-            abi.encodeCall(Accountant.initialize, (address(vault), INITIAL_RATE, tooHigh, admin))
+            address(beacon), abi.encodeCall(Accountant.initialize, (address(vault), INITIAL_RATE, tooHigh, admin))
         );
     }
 

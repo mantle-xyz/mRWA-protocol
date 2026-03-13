@@ -21,6 +21,7 @@ import {Script, console2} from "forge-std/Script.sol";
 ///   F_CONTROLLER_ADDRESS      – StrategyController proxy address
 ///   F_ACCOUNTANT_ADDRESS      – Accountant proxy address
 ///   F_TREASURY_ADDRESS        – treasury address for fee shares
+///                              (also used as sanctionSafe in vault init)
 ///   F_PAUSER_ADDRESS          – address to receive PAUSER_ROLE
 ///   F_MAX_REDEMPTION_FEE_BPS  – max redemption fee cap in bps
 ///   F_MAX_RATE_CHANGE_BPS     – max rate change cap in bps
@@ -29,12 +30,10 @@ import {Script, console2} from "forge-std/Script.sol";
 ///   F_MIN_DEPOSIT_AMOUNT      – minimum deposit amount
 ///   F_SYNC_REDEEM_DISABLED    – whether sync redeem is disabled (true/false)
 contract DeployVault is Script {
-    function run()
-        external
-        returns (MantleYieldVault vaultImpl, VaultFactory factory, MantleYieldVault vault)
-    {
+    function run() external returns (MantleYieldVault vaultImpl, VaultFactory factory, MantleYieldVault vault) {
         address admin = vm.envAddress("F_ADMIN_ADDRESS");
         address pauser = vm.envAddress("F_PAUSER_ADDRESS");
+        address treasury = vm.envAddress("F_TREASURY_ADDRESS");
 
         IMantleYieldVault.InitParams memory params = IMantleYieldVault.InitParams({
             asset: IERC20(vm.envAddress("F_USDC_ADDRESS")),
@@ -44,7 +43,8 @@ contract DeployVault is Script {
             sanctionsOracle: vm.envAddress("F_SANCTIONS_ORACLE"),
             controller: vm.envAddress("F_CONTROLLER_ADDRESS"),
             accountant: vm.envAddress("F_ACCOUNTANT_ADDRESS"),
-            treasury: vm.envAddress("F_TREASURY_ADDRESS"),
+            treasury: treasury,
+            sanctionSafe: treasury,
             maxRedemptionFeeBps: vm.envUint("F_MAX_REDEMPTION_FEE_BPS"),
             maxRateChangeBps: vm.envUint("F_MAX_RATE_CHANGE_BPS"),
             redemptionFeeBps: vm.envUint("F_REDEMPTION_FEE_BPS"),

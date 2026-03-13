@@ -85,7 +85,15 @@ contract StrategyControllerFactory {
     ) external returns (address controller) {
         bytes memory initData = abi.encodeCall(
             StrategyController.initialize,
-            (vault_, admin, strategyManager, executorGateway, bufferTargetBps_, rebalanceThresholdBps_, rebalanceCooldown_)
+            (
+                vault_,
+                admin,
+                strategyManager,
+                executorGateway,
+                bufferTargetBps_,
+                rebalanceThresholdBps_,
+                rebalanceCooldown_
+            )
         );
 
         BeaconProxy proxy = new BeaconProxy(address(BEACON), initData);
