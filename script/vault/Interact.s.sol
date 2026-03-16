@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {IMantleYieldVault} from "../../src/interfaces/vault/IMantleYieldVault.sol";
+import {MantleVaultGateway} from "../../src/vault/MantleVaultGateway.sol";
 import {MantleYieldVault} from "../../src/vault/MantleYieldVault.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Script, console} from "forge-std/Script.sol";
@@ -44,6 +45,15 @@ import {Script, console} from "forge-std/Script.sol";
 // =============================================================
 
 abstract contract SignerHelper is Script {
+    function _resolveGateway(MantleYieldVault vault) internal view returns (MantleVaultGateway) {
+        address gatewayAddr = vm.envOr("VAULT_GATEWAY_ADDRESS", address(0));
+        if (gatewayAddr == address(0)) {
+            gatewayAddr = vault.gateway();
+        }
+        require(gatewayAddr != address(0), "Gateway not set");
+        return MantleVaultGateway(gatewayAddr);
+    }
+
     /// @dev Resolve user signer: try USER_PRIVATE_KEY, fall back to USER_ADDRESS (Ledger).
     function _resolveUser() internal view returns (address user, bool useLedger) {
         uint256 pk = vm.envOr("USER_PRIVATE_KEY", uint256(0));
@@ -108,6 +118,7 @@ contract Deposit is SignerHelper {
         uint256 amount = vm.envUint("DEPOSIT_AMOUNT");
 
         MantleYieldVault vault = MantleYieldVault(vaultAddr);
+        MantleVaultGateway gateway = _resolveGateway(vault);
         IERC20 usdc = IERC20(usdcAddr);
 
         console.log("=== Deposit ===");
@@ -119,7 +130,7 @@ contract Deposit is SignerHelper {
 
         _startUserBroadcast(useLedger, user);
         usdc.approve(vaultAddr, amount);
-        uint256 shares = vault.deposit(amount, user);
+        uint256 shares = gateway.deposit(amount, user);
         vm.stopBroadcast();
 
         console.log("\nShares received:", shares);
@@ -137,6 +148,7 @@ contract SyncRedeem is SignerHelper {
         address vaultAddr = vm.envAddress("VAULT_ADDRESS");
 
         MantleYieldVault vault = MantleYieldVault(vaultAddr);
+        MantleVaultGateway gateway = _resolveGateway(vault);
 
         uint256 shares = vm.envUint("REDEEM_SHARES");
         uint256 maxRedeemable = vault.maxRedeem(user);
@@ -153,7 +165,7 @@ contract SyncRedeem is SignerHelper {
         require(shares <= maxRedeemable, "Exceeds maxRedeem - use async redeem instead");
 
         _startUserBroadcast(useLedger, user);
-        uint256 assets = vault.redeem(shares, user, user);
+        uint256 assets = gateway.redeem(shares, user, user);
         vm.stopBroadcast();
 
         console.log("\nUSDC received:", assets);
@@ -171,6 +183,7 @@ contract RequestRedeem is SignerHelper {
         address vaultAddr = vm.envAddress("VAULT_ADDRESS");
 
         MantleYieldVault vault = MantleYieldVault(vaultAddr);
+        MantleVaultGateway gateway = _resolveGateway(vault);
 
         uint256 shares = vm.envUint("REDEEM_SHARES");
         uint256 shareBal = vault.balanceOf(user);
@@ -184,7 +197,7 @@ contract RequestRedeem is SignerHelper {
         require(shares <= shareBal, "Insufficient shares");
 
         _startUserBroadcast(useLedger, user);
-        uint256 requestId = vault.requestRedeem(shares);
+        uint256 requestId = gateway.requestRedeem(shares, user, user);
         vm.stopBroadcast();
 
         (,, uint256 reqShares, uint256 reqAssets,,,) = vault.requests(requestId);
@@ -265,12 +278,13 @@ contract MarkRequestsDone is SignerHelper {
 // View: Vault Status (read-only, no broadcast)
 // =============================================================
 
-contract VaultStatus is Script {
+contract VaultStatus is SignerHelper {
     function run() external view {
         address vaultAddr = vm.envAddress("VAULT_ADDRESS");
         address usdcAddr = vm.envAddress("USDC_ADDRESS");
 
         MantleYieldVault vault = MantleYieldVault(vaultAddr);
+        MantleVaultGateway gateway = _resolveGateway(vault);
         IERC20 usdc = IERC20(usdcAddr);
 
         console.log("=== Vault Status ===");
@@ -303,8 +317,12 @@ contract VaultStatus is Script {
         console.log("Controller:", vault.controller());
         console.log("Accountant:", vault.accountant());
         console.log("Treasury:", vault.treasury());
-        console.log("SanctionsOracle:", address(vault.sanctionsOracle()));
-        console.log("redemptionFeeBps:", vault.redemptionFeeBps());
+        console.log("Gateway:", address(gateway));
+        console.log("SanctionsOracle:", address(gateway.sanctionsOracle()));
+        console.log("SanctionSafe:", gateway.sanctionSafe());
+        console.log("syncRedeemDisabled:", gateway.syncRedeemDisabled());
+        console.log("managementFeeRate:", gateway.managementFeeRate());
+        console.log("redemptionFeeBps:", gateway.redemptionFeeBps());
         console.log("minRedeemAmount:", vault.minRedeemAmount());
         console.log("Paused:", vault.paused());
     }

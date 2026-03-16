@@ -737,7 +737,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
                 revert InvalidRedeemInFlight(inFlightId);
             }
 
-            vault.confirmInFlight(inFlightId, usdcAmount);
+            vault.confirmInFlight(inFlightId, usdcAmount, false);
             clearedAmount += usdcAmount;
         }
     }
@@ -777,7 +777,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
             }
 
             // Invest in-flight settledAmount represents actually received position token amount.
-            vault.confirmInFlight(inFlightId, tokenAmount);
+            vault.confirmInFlight(inFlightId, tokenAmount, false);
         }
     }
 
@@ -796,7 +796,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
                 revert InvalidInvestInFlight(inFlightId);
             }
 
-            vault.confirmInFlight(inFlightId, tokenAmount);
+            vault.confirmInFlight(inFlightId, tokenAmount, false);
         }
     }
 
@@ -816,7 +816,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
                 revert InvalidRedeemInFlight(inFlightId);
             }
 
-            vault.confirmInFlight(inFlightId, usdcAmount);
+            vault.confirmInFlight(inFlightId, usdcAmount, false);
             clearedAmount += usdcAmount;
         }
     }

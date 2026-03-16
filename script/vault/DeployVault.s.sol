@@ -2,6 +2,10 @@
 pragma solidity ^0.8.24;
 
 import {IMantleYieldVault} from "../../src/interfaces/vault/IMantleYieldVault.sol";
+import {IMantleVaultGateway} from "../../src/interfaces/vault/IMantleVaultGateway.sol";
+import {ISanctionsOracle} from "../../src/interfaces/compliance/ISanctionsOracle.sol";
+import {MantleVaultGateway} from "../../src/vault/MantleVaultGateway.sol";
+import {GatewayFactory} from "../../src/vault/GatewayFactory.sol";
 import {MantleYieldVault} from "../../src/vault/MantleYieldVault.sol";
 import {VaultFactory} from "../../src/vault/VaultFactory.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -21,48 +25,47 @@ import {Script, console2} from "forge-std/Script.sol";
 ///   F_CONTROLLER_ADDRESS      – StrategyController proxy address
 ///   F_ACCOUNTANT_ADDRESS      – Accountant proxy address
 ///   F_TREASURY_ADDRESS        – treasury address for fee shares
-///                              (also used as sanctionSafe in vault init)
+///                              (also used as gateway.sanctionSafe init)
 ///   F_PAUSER_ADDRESS          – address to receive PAUSER_ROLE
 ///   F_MAX_REDEMPTION_FEE_BPS  – max redemption fee cap in bps
-///   F_MAX_RATE_CHANGE_BPS     – max rate change cap in bps
 ///   F_REDEMPTION_FEE_BPS      – initial redemption fee in bps
 ///   F_MIN_REDEEM_AMOUNT       – minimum redeem amount
 ///   F_MIN_DEPOSIT_AMOUNT      – minimum deposit amount
-///   F_SYNC_REDEEM_DISABLED    – whether sync redeem is disabled (true/false)
+///   F_SYNC_REDEEM_DISABLED    – gateway sync redeem disabled flag (true/false)
 contract DeployVault is Script {
-    function run() external returns (MantleYieldVault vaultImpl, VaultFactory factory, MantleYieldVault vault) {
+    function run()
+        external
+        returns (MantleYieldVault vaultImpl, VaultFactory factory, MantleYieldVault vault, MantleVaultGateway gateway)
+    {
         address admin = vm.envAddress("F_ADMIN_ADDRESS");
         address pauser = vm.envAddress("F_PAUSER_ADDRESS");
         address treasury = vm.envAddress("F_TREASURY_ADDRESS");
+        address sanctionsOracle = vm.envAddress("F_SANCTIONS_ORACLE");
 
         IMantleYieldVault.InitParams memory params = IMantleYieldVault.InitParams({
             asset: IERC20(vm.envAddress("F_USDC_ADDRESS")),
             name: "Mantle RWA Vault",
             symbol: "mRWA",
             admin: admin,
-            sanctionsOracle: vm.envAddress("F_SANCTIONS_ORACLE"),
+            gateway: address(0),
             controller: vm.envAddress("F_CONTROLLER_ADDRESS"),
             accountant: vm.envAddress("F_ACCOUNTANT_ADDRESS"),
             treasury: treasury,
-            sanctionSafe: treasury,
             maxRedemptionFeeBps: vm.envUint("F_MAX_REDEMPTION_FEE_BPS"),
-            maxRateChangeBps: vm.envUint("F_MAX_RATE_CHANGE_BPS"),
             redemptionFeeBps: vm.envUint("F_REDEMPTION_FEE_BPS"),
             minRedeemAmount: vm.envUint("F_MIN_REDEEM_AMOUNT"),
-            minDepositAmount: vm.envUint("F_MIN_DEPOSIT_AMOUNT"),
-            syncRedeemDisabled: vm.envBool("F_SYNC_REDEEM_DISABLED")
+            minDepositAmount: vm.envUint("F_MIN_DEPOSIT_AMOUNT")
         });
 
         console2.log("=== DeployVault ===");
         console2.log("Admin              :", admin);
         console2.log("USDC               :", address(params.asset));
-        console2.log("SanctionsOracle    :", params.sanctionsOracle);
+        console2.log("SanctionsOracle    :", sanctionsOracle);
         console2.log("Controller         :", params.controller);
         console2.log("Accountant         :", params.accountant);
         console2.log("Treasury           :", params.treasury);
         console2.log("Pauser             :", pauser);
         console2.log("MaxRedemptionFee   :", params.maxRedemptionFeeBps);
-        console2.log("MaxRateChange      :", params.maxRateChangeBps);
         console2.log("RedemptionFee      :", params.redemptionFeeBps);
         console2.log("MinRedeem          :", params.minRedeemAmount);
         console2.log("MinDeposit         :", params.minDepositAmount);
@@ -78,14 +81,34 @@ contract DeployVault is Script {
         console2.log("[2/4] VaultFactory       :", address(factory));
         console2.log("       Beacon            :", address(factory.BEACON()));
 
-        // ---- 3. Deploy MantleYieldVault instance via BeaconProxy ----
-        address vaultAddr = factory.deployAndInitVault(params);
+        // ---- 3. Deploy gateway implementation + factory ----
+        MantleVaultGateway gatewayImpl = new MantleVaultGateway();
+        GatewayFactory gatewayFactory = new GatewayFactory(address(gatewayImpl), admin);
+
+        // ---- 4. Deploy MantleYieldVault instance via BeaconProxy (uninitialized) ----
+        address vaultAddr = factory.deployVault();
         vault = MantleYieldVault(vaultAddr);
         console2.log("[3/4] Vault (proxy)      :", vaultAddr);
 
-        // ---- 4. Grant PAUSER_ROLE ----
+        // ---- 5. Deploy gateway proxy (uninitialized), then initialize vault + gateway ----
+        address gatewayAddr = gatewayFactory.deployGateway();
+        gateway = MantleVaultGateway(gatewayAddr);
+        params.gateway = address(gateway);
+        vault.initialize(params);
+        gateway.initialize(
+            IMantleVaultGateway.InitParams({
+                vault: vaultAddr,
+                sanctionsOracle: ISanctionsOracle(sanctionsOracle),
+                sanctionSafe: treasury,
+                admin: admin,
+                syncRedeemDisabled: vm.envBool("F_SYNC_REDEEM_DISABLED")
+            })
+        );
+        console2.log("[4/5] Vault Gateway      :", params.gateway);
+
+        // ---- 5. Grant PAUSER_ROLE ----
         vault.grantRole(vault.PAUSER_ROLE(), pauser);
-        console2.log("[4/4] PAUSER_ROLE granted to:", pauser);
+        console2.log("[5/5] PAUSER_ROLE granted to:", pauser);
 
         vm.stopBroadcast();
 
@@ -96,6 +119,7 @@ contract DeployVault is Script {
         console2.log("Factory vault cnt: ", factory.vaultCount());
         console2.log("Has ADMIN_ROLE:    ", vault.hasRole(vault.DEFAULT_ADMIN_ROLE(), admin));
         console2.log("Has PAUSER_ROLE:   ", vault.hasRole(vault.PAUSER_ROLE(), pauser));
+        console2.log("Gateway:           ", vault.gateway());
         console2.log("Asset:             ", vault.asset());
         console2.log("Exchange rate:     ", vault.exchangeRate());
     }

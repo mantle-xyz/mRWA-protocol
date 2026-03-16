@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {ISanctionsOracle} from "../compliance/ISanctionsOracle.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
@@ -12,6 +11,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 interface IERC7540Redeem {
     event RedeemRequest(address indexed account, uint256 indexed requestId, uint256 shares);
 
+    function requestRedeem(uint256 shares) external returns (uint256 requestId);
     function pendingRedeemRequest(address account) external view returns (uint256 shares);
 }
 
@@ -48,17 +48,14 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
         string name;
         string symbol;
         address admin;
-        address sanctionsOracle;
+        address gateway;
         address controller;
         address accountant;
         address treasury;
-        address sanctionSafe;
         uint256 maxRedemptionFeeBps;
-        uint256 maxRateChangeBps;
         uint256 redemptionFeeBps;
         uint256 minRedeemAmount;
         uint256 minDepositAmount;
-        bool syncRedeemDisabled;
     }
 
     struct RedemptionRequest {
@@ -110,10 +107,10 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     error Vault__AdapterHasInFlight(address adapter);
     error Vault__OnlyController();
     error Vault__OnlyAccountant();
+    error Vault__OnlyGateway();
     error Vault__ZeroAddress();
     error Vault__SyncRedeemDisabled();
     error Vault__ZeroExchangeRate();
-    error Vault__ExchangeRateChangeExceedsLimit(uint256 oldRate, uint256 newRate, uint256 maxDeltaBps);
     error Vault__InvalidInFlightState(uint256 inFlightId, InFlightStatus currentStatus);
     error Vault__LengthMismatch(uint256 idsLength, uint256 amountsLength);
 
@@ -124,7 +121,6 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     event SactionSafeIn(address indexed account, address indexed token, uint256 amount);
     event RedemptionDone(address indexed account, address indexed receiver, uint256 shares, uint256 assets);
     event ExchangeRateUpdated(uint256 oldRate, uint256 newRate);
-    event ExchangeRateChangeExceedsLimit(uint256 oldRate, uint256 newRate, uint256 maxDeltaBps);
     event RedemptionFeeUpdated(uint256 oldFeeBps, uint256 newFeeBps);
     event MinRedeemAmountUpdated(uint256 oldAmount, uint256 newAmount);
     event MinDepositAmountUpdated(uint256 oldAmount, uint256 newAmount);
@@ -148,17 +144,14 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
         uint256 settledAmount
     );
     event FeeSharesMinted(address indexed treasury, uint256 shares);
-    event SanctionsOracleUpdated(address indexed oldOracle, address indexed newOracle);
     event ControllerUpdated(address indexed oldController, address indexed newController);
     event AccountantUpdated(address indexed oldAccountant, address indexed newAccountant);
     event TreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
-    event SanctionSafeUpdated(address indexed oldSanctionSafe, address indexed newSanctionSafe);
     event RequestSettlementAdjusted(uint256 indexed requestId, uint256 originalAssets, uint256 settledAssets);
     event TokenRescued(address indexed token, address indexed to, uint256 amount);
     event MaxRedemptionFeeUpdated(uint256 oldMaxBps, uint256 newMaxBps);
-    event MaxRateChangeBpsUpdated(uint256 oldMaxBps, uint256 newMaxBps);
-    event SyncRedeemDisabledUpdated(bool disabled);
     event FeeChangedWithLockedShares(uint256 totalLockedShares, uint256 oldFeeBps, uint256 newFeeBps);
+    event GatewayUpdated(address indexed oldGateway, address indexed newGateway);
 
     // =============================================================
     // Initialization
@@ -173,17 +166,15 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     function PAUSER_ROLE() external view returns (bytes32);
     function FEE_BASIS() external view returns (uint256);
     function maxRedemptionFeeBps() external view returns (uint256);
-    function maxRateChangeBps() external view returns (uint256);
 
     function treasury() external view returns (address);
     function controller() external view returns (address);
     function accountant() external view returns (address);
-    function sanctionsOracle() external view returns (ISanctionsOracle);
+    function gateway() external view returns (address);
     function exchangeRate() external view returns (uint256);
     function redemptionFeeBps() external view returns (uint256);
     function minRedeemAmount() external view returns (uint256);
     function minDepositAmount() external view returns (uint256);
-    function syncRedeemDisabled() external view returns (bool);
     function totalLockedShares() external view returns (uint256);
 
     function totalInvestInFlight() external view returns (uint256);
@@ -236,6 +227,15 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     function share() external view returns (address);
 
     // =============================================================
+    // Gateway Only
+    // =============================================================
+
+    function depositFor(address caller, uint256 assets, address receiver) external returns (uint256 shares);
+    function redeemFor(address caller, uint256 shares, address receiver, address owner) external returns (uint256 assets);
+    function requestRedeemFor(address caller, address owner, uint256 shares) external returns (uint256 requestId);
+    function routeSanctionedShares(address caller, address owner, uint256 shares) external;
+
+    // =============================================================
     // Controller Only
     // =============================================================
 
@@ -247,20 +247,17 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     function createInFlight(address adapter, address token, uint256 tokenAmount, uint256 usdcAmount, bool isInvest)
         external
         returns (uint256 inFlightId);
-    function confirmInFlight(uint256 inFlightId, uint256 actualAmount) external;
+    function confirmInFlight(uint256 inFlightId, uint256 actualAmount, bool isAbnormal) external;
 
     // =============================================================
     // Admin Only
     // =============================================================
 
-    function setSanctionSafe(address newSanctionSafe) external;
     function setRedemptionFee(uint256 newFeeBps) external;
     function setMaxRedemptionFee(uint256 newMaxBps) external;
-    function setMaxRateChangeBps(uint256 newMaxBps) external;
     function setMinRedeemAmount(uint256 newAmount) external;
     function setMinDepositAmount(uint256 newAmount) external;
-    function setSyncRedeemDisabled(bool disabled) external;
-    function setSanctionsOracle(address newOracle) external;
+    function setGateway(address newGateway) external;
     function setController(address newController) external;
     function setAccountant(address newAccountant) external;
     function setTreasury(address newTreasury) external;
@@ -269,7 +266,6 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     // Accountant Only
     // =============================================================
 
-    function updateExchangeRate(uint256 newRate) external;
     function mintFeeShares(uint256 shares) external;
 
     // =============================================================

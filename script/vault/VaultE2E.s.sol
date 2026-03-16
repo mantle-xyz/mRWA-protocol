@@ -3,7 +3,10 @@ pragma solidity ^0.8.24;
 
 import {IStrategyAdapter} from "../../src/interfaces/adapters/IStrategyAdapter.sol";
 import {ISanctionsOracle} from "../../src/interfaces/compliance/ISanctionsOracle.sol";
+import {IMantleVaultGateway} from "../../src/interfaces/vault/IMantleVaultGateway.sol";
 import {IMantleYieldVault} from "../../src/interfaces/vault/IMantleYieldVault.sol";
+import {GatewayFactory} from "../../src/vault/GatewayFactory.sol";
+import {MantleVaultGateway} from "../../src/vault/MantleVaultGateway.sol";
 import {MantleYieldVault} from "../../src/vault/MantleYieldVault.sol";
 import {VaultFactory} from "../../src/vault/VaultFactory.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
@@ -115,6 +118,31 @@ contract MockStrategyAdapter is IStrategyAdapter {
     function setPaused(bool) external pure override {}
 }
 
+contract MockAccountant {
+    bool public pauseStatus;
+    uint256 public exchangeRate = 1e18;
+
+    function getPauseStatus() external view returns (bool) {
+        return pauseStatus;
+    }
+
+    function getExchangeRate() external view returns (uint256) {
+        return exchangeRate;
+    }
+
+    function setPauseStatus(bool paused_) external {
+        pauseStatus = paused_;
+    }
+
+    function setExchangeRate(uint256 newRate) external {
+        exchangeRate = newRate;
+    }
+
+    function mintFeeSharesOnVault(address vault, uint256 shares) external {
+        IMantleYieldVault(vault).mintFeeShares(shares);
+    }
+}
+
 // =============================================================
 // E2E Script: exercises every vault flow end-to-end
 // =============================================================
@@ -123,8 +151,11 @@ contract VaultE2E is Script {
     MockUSDC usdc;
     MockSanctionsOracle oracle;
     MockStrategyAdapter adapter;
+    MockAccountant accountantMock;
     MantleYieldVault vault;
+    MantleVaultGateway gateway;
     VaultFactory factory;
+    GatewayFactory gatewayFactory;
 
     address admin;
     address controller;
@@ -136,7 +167,6 @@ contract VaultE2E is Script {
 
     uint256 adminKey;
     uint256 controllerKey;
-    uint256 accountantKey;
     uint256 pauserKey;
     uint256 aliceKey;
     uint256 bobKey;
@@ -152,7 +182,7 @@ contract VaultE2E is Script {
         _scenarioAsyncRedeemFullLifecycle();
         _scenarioAsyncRedeemWithFriction();
         _scenarioInFlightRebalance();
-        _scenarioExchangeRateUpdate();
+        _scenarioExchangeRateRead();
         _scenarioMintFeeShares();
         _scenarioPauseUnpause();
         _scenarioAdminSetters();
@@ -169,14 +199,12 @@ contract VaultE2E is Script {
     function _setupAccounts() internal {
         adminKey = 0xA0001;
         controllerKey = 0xA0002;
-        accountantKey = 0xA0003;
         pauserKey = 0xA0004;
         aliceKey = 0xA0005;
         bobKey = 0xA0006;
 
         admin = vm.addr(adminKey);
         controller = vm.addr(controllerKey);
-        accountant = vm.addr(accountantKey);
         pauser = vm.addr(pauserKey);
         alice = vm.addr(aliceKey);
         bob = vm.addr(bobKey);
@@ -188,11 +216,15 @@ contract VaultE2E is Script {
         usdc = new MockUSDC();
         oracle = new MockSanctionsOracle();
         adapter = new MockStrategyAdapter();
+        accountantMock = new MockAccountant();
         vm.stopBroadcast();
+
+        accountant = address(accountantMock);
 
         console.log("[infra] USDC:", address(usdc));
         console.log("[infra] Oracle:", address(oracle));
         console.log("[infra] Adapter:", address(adapter));
+        console.log("[infra] Accountant:", accountant);
     }
 
     // =============================================================
@@ -204,33 +236,45 @@ contract VaultE2E is Script {
 
         vm.startBroadcast(adminKey);
         MantleYieldVault impl = new MantleYieldVault();
+        MantleVaultGateway gatewayImpl = new MantleVaultGateway();
         factory = new VaultFactory(address(impl), admin);
+        gatewayFactory = new GatewayFactory(address(gatewayImpl), admin);
 
-        address vaultAddr = factory.deployAndInitVault(
+        address vaultAddr = factory.deployVault();
+        address gatewayAddr = gatewayFactory.deployGateway();
+        vault = MantleYieldVault(vaultAddr);
+        gateway = MantleVaultGateway(gatewayAddr);
+        vault.initialize(
             IMantleYieldVault.InitParams({
                 asset: IERC20(address(usdc)),
                 name: "Mantle RWA Vault",
                 symbol: "mRWA",
                 admin: admin,
-                sanctionsOracle: address(oracle),
+                gateway: gatewayAddr,
                 controller: controller,
                 accountant: accountant,
                 treasury: treasury,
-                sanctionSafe: treasury,
                 maxRedemptionFeeBps: 500,
-                maxRateChangeBps: 1_000,
                 redemptionFeeBps: 100,
                 minRedeemAmount: 10e6,
-                minDepositAmount: 1e6,
+                minDepositAmount: 1e6
+            })
+        );
+        gateway.initialize(
+            IMantleVaultGateway.InitParams({
+                vault: vaultAddr,
+                sanctionsOracle: ISanctionsOracle(address(oracle)),
+                sanctionSafe: treasury,
+                admin: admin,
                 syncRedeemDisabled: false
             })
         );
         vm.stopBroadcast();
 
-        vault = MantleYieldVault(vaultAddr);
         require(vault.exchangeRate() == 1e18, "exchangeRate != 1e18");
         require(vault.controller() == controller, "controller mismatch");
         require(vault.treasury() == treasury, "treasury mismatch");
+        require(vault.gateway() == address(gateway), "gateway mismatch");
         require(factory.vaultCount() == 1, "vault count != 1");
         require(factory.implementation() == address(impl), "impl mismatch");
 
@@ -241,6 +285,7 @@ contract VaultE2E is Script {
         console.log("[Beacon] Factory:", address(factory));
         console.log("[Beacon] Implementation:", address(impl));
         console.log("[Beacon] Vault:", vaultAddr);
+        console.log("[Beacon] Gateway:", address(gateway));
 
         // Also test uninitialized deployment
         vm.startBroadcast(adminKey);
@@ -263,7 +308,7 @@ contract VaultE2E is Script {
 
         vm.startBroadcast(aliceKey);
         usdc.approve(address(vault), type(uint256).max);
-        uint256 shares = vault.deposit(5_000e6, alice);
+        uint256 shares = gateway.deposit(5_000e6, alice);
         vm.stopBroadcast();
 
         require(shares == 5_000e6, "shares != 5000e6");
@@ -286,7 +331,7 @@ contract VaultE2E is Script {
         uint256 usdcBefore = usdc.balanceOf(alice);
 
         vm.broadcast(aliceKey);
-        uint256 assetsOut = vault.redeem(1_000e6, alice, alice);
+        uint256 assetsOut = gateway.redeem(1_000e6, alice, alice);
 
         uint256 expectedNet = 1_000e6 - (1_000e6 * 100 / 10_000);
         require(assetsOut == expectedNet, "sync redeem net wrong");
@@ -308,7 +353,7 @@ contract VaultE2E is Script {
 
         // Step 1: requestRedeem
         vm.broadcast(aliceKey);
-        uint256 reqId = vault.requestRedeem(redeemShares);
+        uint256 reqId = gateway.requestRedeem(redeemShares, alice, alice);
         console.log("[async] Step 1 - requestRedeem: id =", reqId);
 
         (,, uint256 reqShares, uint256 reqAssets, uint256 settled,, IMantleYieldVault.RequestStatus status) =
@@ -351,7 +396,7 @@ contract VaultE2E is Script {
         uint256 lockedBefore = vault.totalLockedShares();
 
         vm.broadcast(aliceKey);
-        uint256 reqId = vault.requestRedeem(redeemShares);
+        uint256 reqId = gateway.requestRedeem(redeemShares, alice, alice);
 
         (,,, uint256 estAssets,,,) = vault.requests(reqId);
         uint256 friction = 5e6;
@@ -404,7 +449,7 @@ contract VaultE2E is Script {
 
         // Confirm invest with slight slippage (got 495 tokens instead of 500)
         vm.broadcast(controllerKey);
-        vault.confirmInFlight(investId, 495);
+        vault.confirmInFlight(investId, 495, false);
 
         require(vault.totalInvestInFlight() == 0, "investInFlight not cleared");
         console.log("[inflight] Confirmed invest: actual 495 tokens. InFlight cleared.");
@@ -417,7 +462,7 @@ contract VaultE2E is Script {
         console.log("[inflight] Created redeem id:", redeemId, "| 200 tokens -> 200 USDC");
 
         vm.broadcast(controllerKey);
-        vault.confirmInFlight(redeemId, 198e6);
+        vault.confirmInFlight(redeemId, 198e6, false);
 
         require(vault.totalRedeemInFlight() == 0, "redeemInFlight not cleared");
         console.log("[inflight] Confirmed redeem: actual 198 USDC. InFlight cleared.");
@@ -429,38 +474,15 @@ contract VaultE2E is Script {
     }
 
     // =============================================================
-    // Scenario 8: Exchange Rate Update
+    // Scenario 8: Exchange Rate Read
     // =============================================================
 
-    function _scenarioExchangeRateUpdate() internal {
-        console.log("\n--- Scenario: Exchange Rate Update ---");
-
-        uint256 oldRate = vault.exchangeRate();
-
-        // +5% increase
-        uint256 newRate = oldRate * 105 / 100;
-        vm.broadcast(accountantKey);
-        vault.updateExchangeRate(newRate);
-
-        require(vault.exchangeRate() == newRate, "rate not updated");
-        console.log("[rate] Updated:", oldRate, "->", newRate);
-
-        // Verify share pricing changed
-        uint256 assetsFor1000Shares = vault.previewRedeem(1_000e6);
-        console.log("[rate] 1000 shares now worth", assetsFor1000Shares / 1e6, "USDC (net of fee)");
-
-        // Exceeding maxRateChangeBps triggers pause instead of revert
-        uint256 tooHigh = newRate * 111 / 100;
-        vm.broadcast(accountantKey);
-        vault.updateExchangeRate(tooHigh);
-
-        require(vault.paused(), "vault should be paused after excessive rate change");
-        require(vault.exchangeRate() == tooHigh, "rate should still be updated");
-        console.log("[rate] >10% change: vault paused, rate updated to", tooHigh);
-
-        // Unpause for subsequent scenarios
-        vm.broadcast(adminKey);
-        vault.unpause();
+    function _scenarioExchangeRateRead() internal view {
+        console.log("\n--- Scenario: Exchange Rate Read ---");
+        uint256 rate = vault.exchangeRate();
+        require(rate > 0, "rate must be positive");
+        console.log("[rate] Current rate:", rate);
+        console.log("[rate] 1000 shares worth", vault.previewRedeem(1_000e6) / 1e6, "USDC (net of fee)");
     }
 
     // =============================================================
@@ -473,8 +495,8 @@ contract VaultE2E is Script {
         uint256 supply = vault.totalSupply();
         uint256 toMint = supply * 100 / 10_000; // 1% of supply
 
-        vm.broadcast(accountantKey);
-        vault.mintFeeShares(toMint);
+        vm.broadcast(adminKey);
+        accountantMock.mintFeeSharesOnVault(address(vault), toMint);
 
         require(vault.balanceOf(treasury) == toMint, "treasury balance wrong");
         console.log("[fees] Minted", toMint / 1e6, "fee shares to treasury");
@@ -507,7 +529,7 @@ contract VaultE2E is Script {
 
         // Deposit should revert when paused
         vm.broadcast(aliceKey);
-        try vault.deposit(100e6, alice) {
+        try gateway.deposit(100e6, alice) {
             revert("deposit should revert when paused");
         } catch {
             console.log("[pause] Deposit correctly blocked");
@@ -530,6 +552,7 @@ contract VaultE2E is Script {
         address newController = vm.addr(0xB0001);
         address newAccountant = vm.addr(0xB0002);
         address newTreasury = vm.addr(0xB0003);
+        address newSanctionSafe = vm.addr(0xB0004);
         MockSanctionsOracle newOracle = new MockSanctionsOracle();
 
         vm.startBroadcast(adminKey);
@@ -546,9 +569,17 @@ contract VaultE2E is Script {
         require(vault.treasury() == newTreasury, "treasury not set");
         console.log("[admin] setTreasury:", newTreasury);
 
-        vault.setSanctionsOracle(address(newOracle));
-        require(address(vault.sanctionsOracle()) == address(newOracle), "oracle not set");
-        console.log("[admin] setSanctionsOracle:", address(newOracle));
+        gateway.setSanctionsOracle(address(newOracle));
+        require(address(gateway.sanctionsOracle()) == address(newOracle), "oracle not set");
+        console.log("[admin] gateway.setSanctionsOracle:", address(newOracle));
+
+        gateway.setSanctionSafe(newSanctionSafe);
+        require(gateway.sanctionSafe() == newSanctionSafe, "sanctionSafe not set");
+        console.log("[admin] gateway.setSanctionSafe:", newSanctionSafe);
+
+        gateway.setSyncRedeemDisabled(true);
+        require(gateway.syncRedeemDisabled(), "sync disable not set");
+        console.log("[admin] gateway.setSyncRedeemDisabled: true");
 
         vault.setRedemptionFee(200);
         require(vault.redemptionFeeBps() == 200, "fee not set");
@@ -562,7 +593,9 @@ contract VaultE2E is Script {
         vault.setController(controller);
         vault.setAccountant(accountant);
         vault.setTreasury(treasury);
-        vault.setSanctionsOracle(address(oracle));
+        gateway.setSanctionsOracle(address(oracle));
+        gateway.setSanctionSafe(treasury);
+        gateway.setSyncRedeemDisabled(false);
         vault.setRedemptionFee(100);
         vault.setMinRedeemAmount(10e6);
 

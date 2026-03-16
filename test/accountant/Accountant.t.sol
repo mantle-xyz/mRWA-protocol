@@ -187,7 +187,7 @@ contract AccountantTest is Test {
         _doUpdate(newRate);
 
         assertEq(accountant.lastExchangeRate(), newRate);
-        assertEq(vault.exchangeRate(), newRate);
+        assertEq(accountant.getExchangeRate(), newRate);
         assertEq(accountant.lastUpdateTimestamp(), block.timestamp);
         assertEq(accountant.lastComputeTimestamp(), block.timestamp);
     }
@@ -1247,7 +1247,7 @@ contract AccountantExecutorIntegrationTest is Test {
         executor.executeUpdateRate(newRate, computeTs);
 
         assertEq(accountant.lastExchangeRate(), newRate);
-        assertEq(vault.exchangeRate(), newRate);
+        assertEq(accountant.getExchangeRate(), newRate);
         assertEq(accountant.lastComputeTimestamp(), computeTs);
     }
 

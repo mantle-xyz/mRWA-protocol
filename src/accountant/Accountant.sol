@@ -219,8 +219,6 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
 
         _settleManagementFee(s);
 
-        s.vault.updateExchangeRate(newRate);
-
         s.lastExchangeRate = newRate;
         s.lastUpdateTimestamp = block.timestamp.toUint64();
         s.lastComputeTimestamp = computeTimestamp;
