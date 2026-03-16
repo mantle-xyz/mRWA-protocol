@@ -16,16 +16,11 @@ contract MockAccountant {
     uint256 public lastNewRate;
     uint256 public lastComputeTimestamp;
     uint256 public callCount;
-    uint256 public settleManagementFeeCallCount;
 
     function updateExchangeRate(uint64 newRate, uint64 computeTimestamp) external {
         lastNewRate = newRate;
         lastComputeTimestamp = computeTimestamp;
         callCount++;
-    }
-
-    function settleManagementFee() external {
-        settleManagementFeeCallCount++;
     }
 }
 
@@ -429,19 +424,19 @@ contract AccountantTest is Test {
     }
 
     // =============================================================
-    //                    FEE SETTLEMENT
+    //                    FEE SETTLEMENT (via updateExchangeRate)
     // =============================================================
 
-    function test_settleManagementFee_mintsFeeShares() public {
+    function test_updateExchangeRate_settlesFees() public {
         uint256 totalShares = 100_000e18;
         vault.setTotalSupply(totalShares);
 
-        // Prime snapshot: totalSharesLastSettle was 0 at init, so first settle
-        // uses min(100k, 0) = 0 but updates totalSharesLastSettle to 100k.
-        vm.warp(block.timestamp + 1);
-        vm.prank(executor);
-        accountant.settleManagementFee();
-        assertEq(vault.totalFeeMintCalls(), 0, "First settle should mint 0 (snapshot was 0)");
+        _skipCooldown();
+
+        // First update: totalSharesLastSettle was 0 at init → min(100k, 0) = 0 → no mint
+        _doUpdate(1.005e18);
+        assertEq(vault.totalFeeMintCalls(), 0, "First update should mint 0 (snapshot was 0)");
+        assertEq(accountant.totalSharesLastSettle(), totalShares);
 
         _skipCooldown();
 
@@ -451,144 +446,92 @@ contract AccountantTest is Test {
         vm.expectEmit(false, false, false, true);
         emit Accountant.FeesDistributed(expectedShares);
 
-        vm.prank(executor);
-        accountant.settleManagementFee();
+        _doUpdate(1.009e18);
 
         assertEq(vault.lastFeeShares(), expectedShares);
         assertEq(vault.totalFeeMintCalls(), 1);
     }
 
-    function test_settleManagementFee_noFeeWhenZeroSupply() public {
+    function test_updateExchangeRate_noFeeWhenZeroSupply() public {
         vault.setTotalSupply(0);
 
         _skipCooldown();
-
-        vm.prank(executor);
-        accountant.settleManagementFee();
+        _doUpdate(1.005e18);
 
         assertEq(vault.totalFeeMintCalls(), 0);
     }
 
-    function test_settleManagementFee_noFeeWhenZeroFeeRate() public {
+    function test_updateExchangeRate_noFeeWhenZeroFeeRate() public {
         vm.prank(admin);
         accountant.setManagementFeeRate(0);
 
         vault.setTotalSupply(100_000e18);
 
         _skipCooldown();
-
-        vm.prank(executor);
-        accountant.settleManagementFee();
+        _doUpdate(1.005e18);
 
         assertEq(vault.totalFeeMintCalls(), 0);
     }
 
-    function test_settleManagementFee_accumulatesOverTime() public {
+    function test_updateExchangeRate_feeAccumulatesOverMultipleUpdates() public {
         uint256 totalShares = 1_000_000e18;
         vault.setTotalSupply(totalShares);
 
-        // Prime snapshot
-        vm.warp(block.timestamp + 1);
-        vm.prank(executor);
-        accountant.settleManagementFee();
-
+        // First update primes the snapshot
         _skipCooldown();
+        _doUpdate(1.005e18);
 
-        vm.prank(executor);
-        accountant.settleManagementFee();
+        // Second update should mint fees
+        _skipCooldown();
+        _doUpdate(1.009e18);
         uint256 firstFee = vault.lastFeeShares();
         assertTrue(firstFee > 0);
 
+        // Third update should also mint fees
         _skipCooldown();
-
-        vm.prank(executor);
-        accountant.settleManagementFee();
+        _doUpdate(1.005e18);
         uint256 secondFee = vault.lastFeeShares();
         assertTrue(secondFee > 0);
 
         assertEq(vault.totalFeeMintCalls(), 2);
     }
 
-    function test_settleManagementFee_oneYearFullPeriod() public {
-        uint256 totalShares = 10_000e18;
-        vault.setTotalSupply(totalShares);
-
-        // Prime snapshot
-        vm.warp(block.timestamp + 1);
-        vm.prank(executor);
-        accountant.settleManagementFee();
-
-        vm.warp(block.timestamp + 365 days);
-
-        vm.prank(executor);
-        accountant.settleManagementFee();
-
-        uint256 expectedShares = (totalShares * MANAGEMENT_FEE_BPS * 365 days) / (10_000 * 365 days);
-        assertEq(vault.lastFeeShares(), expectedShares);
-        assertEq(expectedShares, 50e18);
-    }
-
-    function test_settleManagementFee_noopWhenCalledTwiceInSameBlock() public {
-        uint256 totalShares = 100_000e18;
-        vault.setTotalSupply(totalShares);
-
-        // Prime snapshot
-        vm.warp(block.timestamp + 1);
-        vm.prank(executor);
-        accountant.settleManagementFee();
-
-        _skipCooldown();
-
-        vm.prank(executor);
-        accountant.settleManagementFee();
-        assertEq(vault.totalFeeMintCalls(), 1);
-
-        vm.prank(executor);
-        accountant.settleManagementFee();
-        assertEq(vault.totalFeeMintCalls(), 1, "Second call in same block should be a no-op");
-    }
-
-    function test_settleManagementFee_usesMinOfCurrentAndLastShares() public {
+    function test_updateExchangeRate_feeUsesMinOfCurrentAndLastShares() public {
         vault.setTotalSupply(100_000e18);
 
-        // Prime snapshot with 100k
-        vm.warp(block.timestamp + 1);
-        vm.prank(executor);
-        accountant.settleManagementFee();
+        // First update primes snapshot with 100k
+        _skipCooldown();
+        _doUpdate(1.005e18);
         assertEq(accountant.totalSharesLastSettle(), 100_000e18);
 
-        // Supply surges to 500k between settlements
+        // Supply surges to 500k between updates
         vault.setTotalSupply(500_000e18);
 
         _skipCooldown();
         uint256 timeElapsed = block.timestamp - accountant.lastFeeSettleTimestamp();
 
-        vm.prank(executor);
-        accountant.settleManagementFee();
+        _doUpdate(1.009e18);
 
         // Fee should be based on min(500k, 100k) = 100k, not 500k
         uint256 expectedShares = (100_000e18 * uint256(MANAGEMENT_FEE_BPS) * timeElapsed) / (10_000 * 365 days);
         assertEq(vault.lastFeeShares(), expectedShares);
-        // Snapshot updated to 500k
         assertEq(accountant.totalSharesLastSettle(), 500_000e18);
     }
 
-    function test_settleManagementFee_usesCurrentWhenSupplyDrops() public {
+    function test_updateExchangeRate_feeUsesCurrentWhenSupplyDrops() public {
         vault.setTotalSupply(500_000e18);
 
-        // Prime snapshot with 500k
-        vm.warp(block.timestamp + 1);
-        vm.prank(executor);
-        accountant.settleManagementFee();
+        // First update primes snapshot with 500k
+        _skipCooldown();
+        _doUpdate(1.005e18);
 
-        // Supply drops to 100k (large redemptions)
+        // Supply drops to 100k
         vault.setTotalSupply(100_000e18);
 
         _skipCooldown();
         uint256 timeElapsed = block.timestamp - accountant.lastFeeSettleTimestamp();
 
-        vm.prank(executor);
-        accountant.settleManagementFee();
+        _doUpdate(1.009e18);
 
         // Fee should be based on min(100k, 500k) = 100k
         uint256 expectedShares = (100_000e18 * uint256(MANAGEMENT_FEE_BPS) * timeElapsed) / (10_000 * 365 days);
@@ -596,51 +539,47 @@ contract AccountantTest is Test {
         assertEq(accountant.totalSharesLastSettle(), 100_000e18);
     }
 
-    function test_settleManagementFee_revertsWhenNotExecutor() public {
-        bytes32 role = accountant.EXECUTOR_ROLE();
-        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user, role));
-        vm.prank(user);
-        accountant.settleManagementFee();
+    // =============================================================
+    //                    getRate / getRateSafe
+    // =============================================================
+
+    function test_getRate_returnsCurrentRate() public view {
+        assertEq(accountant.getRate(), INITIAL_RATE);
     }
 
-    function test_settleManagementFee_revertsWhenPaused() public {
+    function test_getRate_updatesAfterExchangeRateChange() public {
+        _skipCooldown();
+        uint64 newRate = 1.005e18;
+        _doUpdate(newRate);
+        assertEq(accountant.getRate(), newRate);
+    }
+
+    function test_getRate_worksWhenPaused() public {
+        vm.prank(admin);
+        accountant.pause();
+        assertEq(accountant.getRate(), INITIAL_RATE);
+    }
+
+    function test_getRateSafe_returnsCurrentRate() public view {
+        assertEq(accountant.getRateSafe(), INITIAL_RATE);
+    }
+
+    function test_getRateSafe_revertsWhenPaused() public {
         vm.prank(admin);
         accountant.pause();
 
         vm.expectRevert();
-        vm.prank(executor);
-        accountant.settleManagementFee();
+        accountant.getRateSafe();
     }
 
-    function test_settleManagementFee_independentFromRateUpdate() public {
-        uint256 totalShares = 100_000e18;
-        vault.setTotalSupply(totalShares);
+    function test_getRateSafe_worksAfterUnpause() public {
+        vm.prank(admin);
+        accountant.pause();
 
-        // Prime snapshot
-        vm.warp(block.timestamp + 1);
-        vm.prank(executor);
-        accountant.settleManagementFee();
+        vm.prank(admin);
+        accountant.unpause();
 
-        _skipCooldown();
-
-        // Settle fees — now totalSharesLastSettle is primed
-        vm.prank(executor);
-        accountant.settleManagementFee();
-        assertEq(vault.totalFeeMintCalls(), 1);
-
-        // Then update rate — should not mint any fees
-        _doUpdate(1.005e18);
-        assertEq(vault.totalFeeMintCalls(), 1, "updateExchangeRate should not mint fees");
-    }
-
-    function test_updateExchangeRate_doesNotMintFees() public {
-        uint256 totalShares = 100_000e18;
-        vault.setTotalSupply(totalShares);
-
-        _skipCooldown();
-        _doUpdate(1.005e18);
-
-        assertEq(vault.totalFeeMintCalls(), 0, "updateExchangeRate should not trigger fee minting");
+        assertEq(accountant.getRateSafe(), INITIAL_RATE);
     }
 
     // =============================================================
@@ -990,25 +929,24 @@ contract AccountantTest is Test {
         assertEq(accountant.minUpdateInterval(), interval);
     }
 
-    function testFuzz_feeCalculation(uint256 totalShares, uint256 feeBps, uint256 elapsed) public {
+    function testFuzz_feeCalculation(uint256 totalShares, uint256 feeBps) public {
         totalShares = bound(totalShares, 1e18, 1_000_000_000e18);
         feeBps = bound(feeBps, 1, accountant.MAX_MANAGEMENT_FEE_BPS());
-        elapsed = bound(elapsed, 1, 365 days);
 
         vault.setTotalSupply(totalShares);
 
         vm.prank(admin);
         accountant.setManagementFeeRate(uint32(feeBps));
 
-        // Prime snapshot so totalSharesLastSettle = totalShares
-        vm.warp(block.timestamp + 1);
-        vm.prank(executor);
-        accountant.settleManagementFee();
+        // First update primes snapshot
+        _skipCooldown();
+        _doUpdate(1.005e18);
 
-        vm.warp(block.timestamp + elapsed);
+        // Second update settles fees
+        _skipCooldown();
+        uint256 elapsed = block.timestamp - accountant.lastFeeSettleTimestamp();
 
-        vm.prank(executor);
-        accountant.settleManagementFee();
+        _doUpdate(1.009e18);
 
         uint256 expectedShares = (totalShares * feeBps * elapsed) / (10_000 * 365 days);
 
@@ -1142,33 +1080,6 @@ contract AccountantExecutorTest is Test {
         assertEq(mockAccountant.lastNewRate(), 1.002e18);
         assertEq(mockAccountant.lastComputeTimestamp(), block.timestamp + 1);
         assertEq(mockAccountant.callCount(), 2);
-    }
-
-    // =============================================================
-    //              EXECUTE SETTLE FEES TESTS
-    // =============================================================
-
-    function test_executeSettleManagementFee_succeeds() public {
-        vm.prank(bot);
-        executor.executeSettleManagementFee();
-
-        assertEq(mockAccountant.settleManagementFeeCallCount(), 1);
-    }
-
-    function test_executeSettleManagementFee_emitsEvent() public {
-        vm.expectEmit(true, false, false, false);
-        emit AccountantExecutor.ManagementFeeSettled(bot);
-
-        vm.prank(bot);
-        executor.executeSettleManagementFee();
-    }
-
-    function test_executeSettleManagementFee_revertsWhenNotBotRole() public {
-        bytes32 role = executor.BOT_ROLE();
-
-        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user, role));
-        vm.prank(user);
-        executor.executeSettleManagementFee();
     }
 
     // =============================================================
@@ -1483,18 +1394,20 @@ contract AccountantExecutorIntegrationTest is Test {
     }
 
     // =============================================================
-    //                    FEE SETTLEMENT
+    //                    FEE SETTLEMENT (via updateExchangeRate)
     // =============================================================
 
-    function test_integration_feeSharesMintedToTreasury() public {
+    function test_integration_feeSettledDuringRateUpdate() public {
         uint256 totalShares = 100_000e18;
         vault.setTotalSupply(totalShares);
 
-        // Prime snapshot
-        vm.warp(block.timestamp + 1);
-        vm.prank(bot);
-        executor.executeSettleManagementFee();
+        // First update primes snapshot
+        _skipCooldown();
+        _executeUpdate(1.005e18);
+        assertEq(vault.totalFeeMintCalls(), 0, "First update primes snapshot, no mint (snapshot was 0)");
+        assertEq(accountant.totalSharesLastSettle(), totalShares);
 
+        // Second update should settle fees
         _skipCooldown();
 
         uint256 timeElapsed = block.timestamp - accountant.lastFeeSettleTimestamp();
@@ -1503,33 +1416,22 @@ contract AccountantExecutorIntegrationTest is Test {
         vm.expectEmit(false, false, false, true);
         emit Accountant.FeesDistributed(expectedShares);
 
-        vm.prank(bot);
-        executor.executeSettleManagementFee();
+        _executeUpdate(1.009e18);
 
         assertEq(vault.lastFeeShares(), expectedShares);
         assertEq(vault.totalFeeMintCalls(), 1);
     }
 
-    function test_integration_zeroFeeWhenManagementFeeIsZero() public {
+    function test_integration_noFeeWhenManagementFeeIsZero() public {
         vm.prank(admin);
         accountant.setManagementFeeRate(0);
 
-        _skipCooldown();
-
-        vm.prank(bot);
-        executor.executeSettleManagementFee();
-
-        assertEq(vault.totalFeeMintCalls(), 0, "No fee shares should be minted when fee rate is 0");
-    }
-
-    function test_integration_updateRateDoesNotMintFees() public {
-        uint256 totalShares = 100_000e18;
-        vault.setTotalSupply(totalShares);
+        vault.setTotalSupply(100_000e18);
 
         _skipCooldown();
         _executeUpdate(1.005e18);
 
-        assertEq(vault.totalFeeMintCalls(), 0, "updateExchangeRate should not mint fees");
+        assertEq(vault.totalFeeMintCalls(), 0, "No fee shares should be minted when fee rate is 0");
     }
 
     // =============================================================

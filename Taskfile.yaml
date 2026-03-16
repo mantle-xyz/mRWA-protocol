@@ -1,4 +1,5 @@
 version: 3
+dotenv: ['.env']
 env:
   ROOT_DIR: "{{ .ROOT_DIR }}"
   CONFIG_YAML: 
@@ -23,7 +24,7 @@ tasks:
     # silent: true
     cmds: 
       - |
-        export $(yq '.envs | ... comments="" | to_entries | .[] | .key + "=" + (.value|tostring)' {{.CONFIG_YAML}})
+        export $(yq '.envs | ... comments="" | to_entries | .[] | select((.value|tostring) != "") | .key + "=" + (.value|tostring)' {{.CONFIG_YAML}})
         source {{.ROOT_DIR}}/lib/func.sh
         if [[ -z "${NETWORK}" ]]; then
           log_error "NETWORK env is empty: NETWORK=anvil task yourTask"
@@ -36,7 +37,7 @@ tasks:
     internal: true
     cmds: 
       - |
-        export $(yq '.envs | ... comments="" | to_entries | .[] | .key + "=" + (.value|tostring)' {{.CONFIG_YAML}})
+        export $(yq '.envs | ... comments="" | to_entries | .[] | select((.value|tostring) != "") | .key + "=" + (.value|tostring)' {{.CONFIG_YAML}})
         source {{.ROOT_DIR}}/lib/func.sh
         forge_test {{.EXTRA_ARGS}}
   #InitAnvilNetwork:
@@ -50,10 +51,17 @@ tasks:
     # silent: true
     cmds:
       - |
-        export $(yq '.envs | ... comments="" | to_entries | .[] | .key + "=" + (.value|tostring)' {{.CONFIG_YAML}})
+        export $(yq '.envs | ... comments="" | to_entries | .[] | select((.value|tostring) != "") | .key + "=" + (.value|tostring)' {{.CONFIG_YAML}})
         source {{.ROOT_DIR}}/lib/func.sh
         sender_impersonate_safe_signer_on_forked_network deployerSafeAddress
   
+  DeployAll:
+    cmds:
+      - task: _script
+        vars:
+          EXTRA_ARGS: ${ROOT_DIR}/script/DeployAll.s.sol {{.CLI_ARGS}}
+
+
   DeployAccountant:
     cmds:
       - task: _script

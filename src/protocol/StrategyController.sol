@@ -171,11 +171,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         }
 
         strategyInfo[adapter] = StrategyInfo({
-            targetWeightBps: targetWeightBps,
-            priority: priority,
-            isAsync: isAsync,
-            isActive: isActive,
-            exists: true
+            targetWeightBps: targetWeightBps, priority: priority, isAsync: isAsync, isActive: isActive, exists: true
         });
 
         _validateCurrentOrderInvariant();
@@ -380,8 +376,14 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
             revert CooldownNotElapsed();
         }
 
-        (uint256 totalCash, uint256 locked, uint256 freeCash, uint256 netAssets, uint256 targetCash, uint256 threshold)
-        = _readRebalanceState();
+        (
+            uint256 totalCash,
+            uint256 locked,
+            uint256 freeCash,
+            uint256 netAssets,
+            uint256 targetCash,
+            uint256 threshold
+        ) = _readRebalanceState();
         emit RebalanceEvaluated(totalCash, locked, freeCash, netAssets, targetCash, threshold);
 
         if (freeCash > targetCash + threshold) {

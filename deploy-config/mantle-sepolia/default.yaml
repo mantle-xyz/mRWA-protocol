@@ -26,8 +26,8 @@ envs:
   F_MANAGEMENT_FEE_BPS: "50"           # 0.5%
 
   # ── StrategyController params ────────────────────────────────
-  F_BUFFER_TARGET_BPS: "500"           # 5%
-  F_REBALANCE_THRESHOLD_BPS: "100"     # 1%
+  F_BUFFER_TARGET_BPS: "0"           # 0%
+  F_REBALANCE_THRESHOLD_BPS: "10"     # 0.1%
   F_REBALANCE_COOLDOWN: "3600"         # 1 hour
 
   # ── Vault params ─────────────────────────────────────────────
@@ -36,4 +36,4 @@ envs:
   F_REDEMPTION_FEE_BPS: "10"           # 0.1%
   F_MIN_REDEEM_AMOUNT: "1000000"       # 1 USDC (6 decimals)
   F_MIN_DEPOSIT_AMOUNT: "1000000"      # 1 USDC (6 decimals)
-  F_SYNC_REDEEM_DISABLED: "false"
+  F_SYNC_REDEEM_DISABLED: "true"
