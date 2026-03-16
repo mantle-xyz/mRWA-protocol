@@ -1,11 +1,21 @@
 #!/bin/sh
-# Pre-commit: run forge fmt and re-stage changed .sol files (this repo only).
+# Pre-commit: check Foundry >= 1.4.1, run forge fmt, re-stage changed .sol files.
 # One-time enable: git config core.hooksPath .githooks
 
 set -e
 cd "$(git rev-parse --show-toplevel)"
 
-command -v forge >/dev/null 2>&1 || { echo "githooks: forge not found"; exit 0; }
+MIN_VERSION="1.4.1"
+
+command -v forge >/dev/null 2>&1 || { echo "pre-commit: forge not found, skipping"; exit 0; }
+
+cur=$(forge --version | head -1 | sed 's/^[^0-9]*//' | cut -d- -f1)
+if [ -z "$cur" ]; then
+  echo "pre-commit: cannot detect forge version"; exit 1
+fi
+if [ "$(printf '%s\n' "$MIN_VERSION" "$cur" | sort -V | head -1)" != "$MIN_VERSION" ]; then
+  echo "pre-commit: forge $cur < $MIN_VERSION — run: foundryup -i v${MIN_VERSION}"; exit 1
+fi
 
 forge fmt
 

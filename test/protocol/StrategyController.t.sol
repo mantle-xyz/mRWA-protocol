@@ -271,17 +271,18 @@ contract MockControllerVault {
         )
     {
         InFlight memory f = flights[inFlightId];
-        return (
-            f.id,
-            f.adapter,
-            f.assetAddr,
-            f.tokenAmount,
-            f.usdcAmount,
-            f.settledAmount,
-            f.isInvest,
-            f.timestamp,
-            f.status
-        );
+        return
+            (
+                f.id,
+                f.adapter,
+                f.assetAddr,
+                f.tokenAmount,
+                f.usdcAmount,
+                f.settledAmount,
+                f.isInvest,
+                f.timestamp,
+                f.status
+            );
     }
 }
 
