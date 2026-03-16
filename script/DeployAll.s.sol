@@ -7,12 +7,16 @@ import {AccountantFactory} from "../src/accountant/AccountantFactory.sol";
 import {SanctionsOracle} from "../src/compliance/SanctionsOracle.sol";
 import {SanctionsOracleFactory} from "../src/compliance/SanctionsOracleFactory.sol";
 
+import {ISanctionsOracle} from "../src/interfaces/compliance/ISanctionsOracle.sol";
+import {IMantleVaultGateway} from "../src/interfaces/vault/IMantleVaultGateway.sol";
 import {IMantleYieldVault} from "../src/interfaces/vault/IMantleYieldVault.sol";
 
 import {MockERC20Mintable} from "../src/mocks/token/MockERC20Mintable.sol";
 import {OperatorExecutor} from "../src/protocol/OperatorExecutor.sol";
 import {StrategyController} from "../src/protocol/StrategyController.sol";
 import {StrategyControllerFactory} from "../src/protocol/StrategyControllerFactory.sol";
+import {GatewayFactory} from "../src/vault/GatewayFactory.sol";
+import {MantleVaultGateway} from "../src/vault/MantleVaultGateway.sol";
 import {MantleYieldVault} from "../src/vault/MantleYieldVault.sol";
 import {VaultFactory} from "../src/vault/VaultFactory.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
@@ -41,7 +45,7 @@ import {Script, console2} from "forge-std/Script.sol";
 ///         │  AccountantExecutor  → UUPS proxy (init: accountant)           │
 ///         └─────────────────────────────────────────────────────────────────┘
 ///         ┌─ Phase 3: Deferred BeaconProxy initialization ─────────────────┐
-///         │  MantleYieldVault.initialize(oracle, controller, accountant)   │
+///         │  MantleYieldVault.initialize(..., gateway, ...)               │
 ///         │  StrategyController.initialize(vault, opExec, ...)             │
 ///         │  (Vault first: Controller reads vault.asset() during init)     │
 ///         └─────────────────────────────────────────────────────────────────┘
@@ -59,7 +63,7 @@ import {Script, console2} from "forge-std/Script.sol";
 ///   F_SIGNER_ADDRESS             – OperatorExecutor SIGNER_ROLE (initial signer)
 ///   F_STRATEGY_MANAGER_ADDRESS   – StrategyController STRATEGY_MANAGER_ROLE
 ///   F_TREASURY_ADDRESS           – fee share recipient
-///   (also used as sanctionSafe in vault init)
+///   (also used as gateway sanctionSafe init)
 ///   F_PAUSER_ADDRESS             – Vault PAUSER_ROLE
 ///   F_INITIAL_RATE               – Accountant starting exchange rate (e.g. 1e18)
 ///   F_MANAGEMENT_FEE_BPS         – Accountant management fee in bps (e.g. 50)
@@ -67,21 +71,22 @@ import {Script, console2} from "forge-std/Script.sol";
 ///   F_REBALANCE_THRESHOLD_BPS    – StrategyController rebalance threshold
 ///   F_REBALANCE_COOLDOWN         – StrategyController rebalance cooldown (seconds)
 ///   F_MAX_REDEMPTION_FEE_BPS     – Vault max redemption fee cap
-///   F_MAX_RATE_CHANGE_BPS        – Vault max rate change cap
 ///   F_REDEMPTION_FEE_BPS         – Vault initial redemption fee
 ///   F_MIN_REDEEM_AMOUNT          – Vault minimum redeem amount
 ///   F_MIN_DEPOSIT_AMOUNT         – Vault minimum deposit amount
-///   F_SYNC_REDEEM_DISABLED       – Vault sync redeem disabled flag (true/false)
+///   F_SYNC_REDEEM_DISABLED       – Gateway sync redeem disabled flag (true/false)
 contract DeployAll is Script {
     struct Deployed {
         // Factories
         SanctionsOracleFactory oracleFactory;
         VaultFactory vaultFactory;
+        GatewayFactory gatewayFactory;
         AccountantFactory accountantFactory;
         StrategyControllerFactory controllerFactory;
         // Proxies (user-facing)
         SanctionsOracle oracle;
         MantleYieldVault vault;
+        MantleVaultGateway gateway;
         Accountant accountant;
         AccountantExecutor accountantExecutor;
         StrategyController controller;
@@ -130,6 +135,9 @@ contract DeployAll is Script {
         MantleYieldVault vaultImpl = new MantleYieldVault();
         d.vaultFactory = new VaultFactory(address(vaultImpl), admin);
 
+        MantleVaultGateway gatewayImpl = new MantleVaultGateway();
+        d.gatewayFactory = new GatewayFactory(address(gatewayImpl), admin);
+
         Accountant accountantImpl = new Accountant();
         d.accountantFactory = new AccountantFactory(address(accountantImpl), admin);
 
@@ -143,6 +151,7 @@ contract DeployAll is Script {
         console2.log("[Phase 1] Implementations + Factories");
         console2.log("  OracleFactory      :", address(d.oracleFactory));
         console2.log("  VaultFactory       :", address(d.vaultFactory));
+        console2.log("  GatewayFactory     :", address(d.gatewayFactory));
         console2.log("  AccountantFactory  :", address(d.accountantFactory));
         console2.log("  ControllerFactory  :", address(d.controllerFactory));
         console2.log("  AcctExecutor impl  :", address(accountantExecImpl));
@@ -172,15 +181,19 @@ contract DeployAll is Script {
         // 2b. Vault — UNINIT BeaconProxy (needs controller + accountant)
         address vaultAddr = d.vaultFactory.deployVault();
 
-        // 2c. Controller — UNINIT BeaconProxy (needs vault + opExec)
+        // 2c. Gateway — UNINIT BeaconProxy (needs vault + oracle + sanctionSafe)
+        address gatewayAddr = d.gatewayFactory.deployGateway();
+        d.gateway = MantleVaultGateway(gatewayAddr);
+
+        // 2d. Controller — UNINIT BeaconProxy (needs vault + opExec)
         address controllerAddr = d.controllerFactory.deployController();
 
-        // 2d. Accountant — init now (vault address is known)
+        // 2e. Accountant — init now (vault address is known)
         address accountantAddr =
             d.accountantFactory.deployAndInitAccountant(vaultAddr, initialRate, managementFeeBps, admin);
         d.accountant = Accountant(accountantAddr);
 
-        // 2e. OperatorExecutor — UUPS, init now (controller BeaconProxy already has code)
+        // 2f. OperatorExecutor — UUPS, init now (controller BeaconProxy already has code)
         address opExecAddr = address(
             new ERC1967Proxy(
                 address(operatorExecImpl), abi.encodeCall(OperatorExecutor.initialize, (controllerAddr, admin, signer))
@@ -188,7 +201,7 @@ contract DeployAll is Script {
         );
         d.operatorExecutor = OperatorExecutor(opExecAddr);
 
-        // 2f. AccountantExecutor — UUPS, init now (accountant address is known)
+        // 2g. AccountantExecutor — UUPS, init now (accountant address is known)
         address acctExecAddr = address(
             new ERC1967Proxy(
                 address(accountantExecImpl), abi.encodeCall(AccountantExecutor.initialize, (accountantAddr, admin))
@@ -200,6 +213,7 @@ contract DeployAll is Script {
         console2.log("[Phase 2] Proxies deployed");
         console2.log("  Oracle             :", oracleAddr);
         console2.log("  Vault (uninit)     :", vaultAddr);
+        console2.log("  Gateway (uninit)   :", gatewayAddr);
         console2.log("  Controller (uninit):", controllerAddr);
         console2.log("  Accountant         :", accountantAddr);
         console2.log("  OpExecutor (UUPS)  :", opExecAddr);
@@ -219,21 +233,30 @@ contract DeployAll is Script {
                     name: "Mantle RWA Vault",
                     symbol: "mRWA",
                     admin: admin,
-                    sanctionsOracle: oracleAddr,
+                    gateway: gatewayAddr,
                     controller: controllerAddr,
                     accountant: accountantAddr,
                     treasury: treasury,
-                    sanctionSafe: treasury,
                     maxRedemptionFeeBps: vm.envUint("F_MAX_REDEMPTION_FEE_BPS"),
-                    maxRateChangeBps: vm.envUint("F_MAX_RATE_CHANGE_BPS"),
                     redemptionFeeBps: vm.envUint("F_REDEMPTION_FEE_BPS"),
                     minRedeemAmount: vm.envUint("F_MIN_REDEEM_AMOUNT"),
-                    minDepositAmount: vm.envUint("F_MIN_DEPOSIT_AMOUNT"),
+                    minDepositAmount: vm.envUint("F_MIN_DEPOSIT_AMOUNT")
+                })
+            );
+
+        // 3b. Gateway.initialize
+        d.gateway
+            .initialize(
+                IMantleVaultGateway.InitParams({
+                    vault: vaultAddr,
+                    sanctionsOracle: ISanctionsOracle(oracleAddr),
+                    sanctionSafe: admin,
+                    admin: admin,
                     syncRedeemDisabled: vm.envBool("F_SYNC_REDEEM_DISABLED")
                 })
             );
 
-        // 3b. StrategyController.initialize (reads vault.asset(), so vault must be init'd)
+        // 3c. StrategyController.initialize (reads vault.asset(), so vault must be init'd)
         d.controller = StrategyController(controllerAddr);
         d.controller
             .initialize(
@@ -242,6 +265,7 @@ contract DeployAll is Script {
 
         console2.log("");
         console2.log("[Phase 3] Deferred proxies initialized");
+        console2.log("  Vault Gateway      :", address(d.gateway));
 
         // ═════════════════════════════════════════════════════════════
         //  Phase 4: Wire roles
@@ -274,6 +298,7 @@ contract DeployAll is Script {
         console2.log("  Exchange rate:   ", d.vault.exchangeRate());
         console2.log("  Has ADMIN:       ", d.vault.hasRole(d.vault.DEFAULT_ADMIN_ROLE(), admin));
         console2.log("  Has PAUSER:      ", d.vault.hasRole(d.vault.PAUSER_ROLE(), pauser));
+        console2.log("  Gateway:         ", d.vault.gateway());
         console2.log("");
         console2.log("--- Accountant ---");
         console2.log("  Vault:           ", address(d.accountant.vault()));

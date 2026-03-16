@@ -181,6 +181,16 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
         return _getAccountantStorage().maxComputeAge;
     }
 
+    /// @notice Returns the current exchange rate (always accessible).
+    function getRate() external view returns (uint64) {
+        return _getAccountantStorage().lastExchangeRate;
+    }
+
+    /// @notice Returns the current exchange rate; reverts when the contract is paused.
+    function getRateSafe() external view whenNotPaused returns (uint64) {
+        return _getAccountantStorage().lastExchangeRate;
+    }
+
     // =============================================================
     //                   EXECUTOR FUNCTIONS
     // =============================================================
@@ -206,35 +216,14 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
         }
 
         uint256 oldRate = s.lastExchangeRate;
-        s.vault.updateExchangeRate(newRate);
+
+        _settleManagementFee(s);
 
         s.lastExchangeRate = newRate;
         s.lastUpdateTimestamp = block.timestamp.toUint64();
         s.lastComputeTimestamp = computeTimestamp;
 
         emit ExchangeRateUpdated(oldRate, newRate, block.timestamp);
-    }
-
-    /// @notice Settle accrued management fees by minting vault shares to the treasury.
-    ///         Uses min(currentSupply, lastSettleSupply) as the fee base to prevent
-    ///         overcharging when share supply changes drastically between settlements.
-    function settleManagementFee() external onlyRole(EXECUTOR_ROLE) whenNotPaused nonReentrant {
-        AccountantStorage storage s = _getAccountantStorage();
-
-        uint256 timeElapsed = block.timestamp - s.lastFeeSettleTimestamp;
-        if (timeElapsed == 0) return;
-
-        uint256 currentTotalShares = s.vault.totalSupply();
-        uint256 shareBase = currentTotalShares < s.totalSharesLastSettle ? currentTotalShares : s.totalSharesLastSettle;
-        uint256 sharesToMint = (shareBase * s.managementFeeRate * timeElapsed) / (MAX_BPS * 365 days);
-
-        s.lastFeeSettleTimestamp = block.timestamp.toUint64();
-        s.totalSharesLastSettle = currentTotalShares;
-
-        if (sharesToMint > 0) {
-            s.vault.mintFeeShares(sharesToMint);
-            emit FeesDistributed(sharesToMint);
-        }
     }
 
     // =============================================================
@@ -297,6 +286,26 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
         }
         if (block.timestamp - computeTimestamp > s.maxComputeAge) {
             revert ComputeTimestampTooOld(computeTimestamp, block.timestamp, s.maxComputeAge);
+        }
+    }
+
+    /// @dev Settle accrued management fees by minting vault shares to the treasury.
+    ///      Uses min(currentSupply, lastSettleSupply) as the fee base to prevent
+    ///      overcharging when share supply changes drastically between settlements.
+    function _settleManagementFee(AccountantStorage storage s) internal {
+        uint256 timeElapsed = block.timestamp - s.lastFeeSettleTimestamp;
+        if (timeElapsed == 0) return;
+
+        uint256 currentTotalShares = s.vault.totalSupply();
+        uint256 shareBase = currentTotalShares < s.totalSharesLastSettle ? currentTotalShares : s.totalSharesLastSettle;
+        uint256 sharesToMint = (shareBase * s.managementFeeRate * timeElapsed) / (MAX_BPS * 365 days);
+
+        s.lastFeeSettleTimestamp = block.timestamp.toUint64();
+        s.totalSharesLastSettle = currentTotalShares;
+
+        if (sharesToMint > 0) {
+            s.vault.mintFeeShares(sharesToMint);
+            emit FeesDistributed(sharesToMint);
         }
     }
 

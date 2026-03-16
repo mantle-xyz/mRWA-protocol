@@ -228,7 +228,7 @@ contract MockControllerVault {
         }
     }
 
-    function confirmInFlight(uint256 inFlightId, uint256 actualAmount) external {
+    function confirmInFlight(uint256 inFlightId, uint256 actualAmount, bool) external {
         InFlight storage f = flights[inFlightId];
         f.settledAmount = actualAmount;
         f.status = IMantleYieldVault.InFlightStatus.CONFIRMED;
