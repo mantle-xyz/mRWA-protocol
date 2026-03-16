@@ -175,7 +175,11 @@ contract MantleVaultGateway is
         if (isSanctioned(account)) revert IMantleYieldVault.Vault__Sanctioned(account);
     }
 
-    function _isSubscribeRedeemPaused() internal view returns (bool) {
-        return IAccountant(vault.accountant()).getPauseStatus();
+    function _isSubscribeRedeemPaused() internal view returns (bool paused_) {
+        try IAccountant(vault.accountant()).getRateSafe() returns (uint64) {
+            return false;
+        } catch {
+            return true;
+        }
     }
 }

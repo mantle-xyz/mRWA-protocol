@@ -121,14 +121,17 @@ contract MockStrategyAdapter is IStrategyAdapter {
 
 contract MockAccountant {
     bool public pauseStatus;
-    uint256 public exchangeRate = 1e18;
-    uint256 public managementFeeRate = 100;
+    uint64 public exchangeRate = 1e18;
+    uint32 public managementFeeRate = 100;
 
-    function getPauseStatus() external view returns (bool) {
-        return pauseStatus;
+    error EnforcedPause();
+
+    function getRate() external view returns (uint64) {
+        return exchangeRate;
     }
 
-    function getExchangeRate() external view returns (uint256) {
+    function getRateSafe() external view returns (uint64) {
+        if (pauseStatus) revert EnforcedPause();
         return exchangeRate;
     }
 
@@ -137,11 +140,11 @@ contract MockAccountant {
     }
 
     function setExchangeRate(uint256 newRate) external {
-        exchangeRate = newRate;
+        exchangeRate = uint64(newRate);
     }
 
     function setManagementFeeRate(uint256 newRate) external {
-        managementFeeRate = newRate;
+        managementFeeRate = uint32(newRate);
     }
 }
 

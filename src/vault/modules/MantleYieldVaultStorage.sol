@@ -112,7 +112,7 @@ abstract contract MantleYieldVaultStorage is
     }
 
     function _currentExchangeRate() internal view returns (uint256 rate) {
-        rate = _accountant().getExchangeRate();
+        rate = _accountant().getRate();
         if (rate == 0) revert Vault__ZeroExchangeRate();
     }
 
