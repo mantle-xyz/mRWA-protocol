@@ -5,8 +5,9 @@ import {IStrategyAdapter} from "../interfaces/adapters/IStrategyAdapter.sol";
 
 import {ISanctionsOracle} from "../interfaces/compliance/ISanctionsOracle.sol";
 import {IERC7540Redeem, IMantleYieldVault} from "../interfaces/vault/IMantleYieldVault.sol";
-import {AccessControlDefaultAdminRulesUpgradeable} from
-    "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlDefaultAdminRulesUpgradeable.sol";
+import {
+    AccessControlDefaultAdminRulesUpgradeable
+} from "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlDefaultAdminRulesUpgradeable.sol";
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {ERC4626Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC4626Upgradeable.sol";
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";

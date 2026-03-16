@@ -29,10 +29,7 @@ import {Script, console2} from "forge-std/Script.sol";
 ///   F_MIN_DEPOSIT_AMOUNT      – minimum deposit amount
 ///   F_SYNC_REDEEM_DISABLED    – whether sync redeem is disabled (true/false)
 contract DeployVault is Script {
-    function run()
-        external
-        returns (MantleYieldVault vaultImpl, VaultFactory factory, MantleYieldVault vault)
-    {
+    function run() external returns (MantleYieldVault vaultImpl, VaultFactory factory, MantleYieldVault vault) {
         address admin = vm.envAddress("F_ADMIN_ADDRESS");
         address pauser = vm.envAddress("F_PAUSER_ADDRESS");
 

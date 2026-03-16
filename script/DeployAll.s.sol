@@ -6,13 +6,13 @@ import {AccountantExecutor} from "../src/accountant/AccountantExecutor.sol";
 import {AccountantFactory} from "../src/accountant/AccountantFactory.sol";
 import {SanctionsOracle} from "../src/compliance/SanctionsOracle.sol";
 import {SanctionsOracleFactory} from "../src/compliance/SanctionsOracleFactory.sol";
+import {IMantleYieldVault} from "../src/interfaces/vault/IMantleYieldVault.sol";
+import {MockERC20Mintable} from "../src/mocks/token/MockERC20Mintable.sol";
 import {OperatorExecutor} from "../src/protocol/OperatorExecutor.sol";
 import {StrategyController} from "../src/protocol/StrategyController.sol";
 import {StrategyControllerFactory} from "../src/protocol/StrategyControllerFactory.sol";
-import {IMantleYieldVault} from "../src/interfaces/vault/IMantleYieldVault.sol";
 import {MantleYieldVault} from "../src/vault/MantleYieldVault.sol";
 import {VaultFactory} from "../src/vault/VaultFactory.sol";
-import {MockERC20Mintable} from "../src/mocks/token/MockERC20Mintable.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Script, console2} from "forge-std/Script.sol";
@@ -173,14 +173,14 @@ contract DeployAll is Script {
         address controllerAddr = d.controllerFactory.deployController();
 
         // 2d. Accountant — init now (vault address is known)
-        address accountantAddr = d.accountantFactory.deployAndInitAccountant(vaultAddr, initialRate, managementFeeBps, admin);
+        address accountantAddr =
+            d.accountantFactory.deployAndInitAccountant(vaultAddr, initialRate, managementFeeBps, admin);
         d.accountant = Accountant(accountantAddr);
 
         // 2e. OperatorExecutor — UUPS, init now (controller BeaconProxy already has code)
         address opExecAddr = address(
             new ERC1967Proxy(
-                address(operatorExecImpl),
-                abi.encodeCall(OperatorExecutor.initialize, (controllerAddr, admin, signer))
+                address(operatorExecImpl), abi.encodeCall(OperatorExecutor.initialize, (controllerAddr, admin, signer))
             )
         );
         d.operatorExecutor = OperatorExecutor(opExecAddr);
@@ -209,30 +209,32 @@ contract DeployAll is Script {
 
         // 3a. Vault.initialize (only stores addresses, no external calls)
         d.vault = MantleYieldVault(vaultAddr);
-        d.vault.initialize(
-            IMantleYieldVault.InitParams({
-                asset: IERC20(usdc),
-                name: "Mantle RWA Vault",
-                symbol: "mRWA",
-                admin: admin,
-                sanctionsOracle: oracleAddr,
-                controller: controllerAddr,
-                accountant: accountantAddr,
-                treasury: treasury,
-                maxRedemptionFeeBps: vm.envUint("F_MAX_REDEMPTION_FEE_BPS"),
-                maxRateChangeBps: vm.envUint("F_MAX_RATE_CHANGE_BPS"),
-                redemptionFeeBps: vm.envUint("F_REDEMPTION_FEE_BPS"),
-                minRedeemAmount: vm.envUint("F_MIN_REDEEM_AMOUNT"),
-                minDepositAmount: vm.envUint("F_MIN_DEPOSIT_AMOUNT"),
-                syncRedeemDisabled: vm.envBool("F_SYNC_REDEEM_DISABLED")
-            })
-        );
+        d.vault
+            .initialize(
+                IMantleYieldVault.InitParams({
+                    asset: IERC20(usdc),
+                    name: "Mantle RWA Vault",
+                    symbol: "mRWA",
+                    admin: admin,
+                    sanctionsOracle: oracleAddr,
+                    controller: controllerAddr,
+                    accountant: accountantAddr,
+                    treasury: treasury,
+                    maxRedemptionFeeBps: vm.envUint("F_MAX_REDEMPTION_FEE_BPS"),
+                    maxRateChangeBps: vm.envUint("F_MAX_RATE_CHANGE_BPS"),
+                    redemptionFeeBps: vm.envUint("F_REDEMPTION_FEE_BPS"),
+                    minRedeemAmount: vm.envUint("F_MIN_REDEEM_AMOUNT"),
+                    minDepositAmount: vm.envUint("F_MIN_DEPOSIT_AMOUNT"),
+                    syncRedeemDisabled: vm.envBool("F_SYNC_REDEEM_DISABLED")
+                })
+            );
 
         // 3b. StrategyController.initialize (reads vault.asset(), so vault must be init'd)
         d.controller = StrategyController(controllerAddr);
-        d.controller.initialize(
-            vaultAddr, admin, strategyManager, opExecAddr, bufferTargetBps, rebalanceThresholdBps, rebalanceCooldown
-        );
+        d.controller
+            .initialize(
+                vaultAddr, admin, strategyManager, opExecAddr, bufferTargetBps, rebalanceThresholdBps, rebalanceCooldown
+            );
 
         console2.log("");
         console2.log("[Phase 3] Deferred proxies initialized");
@@ -271,7 +273,9 @@ contract DeployAll is Script {
         console2.log("");
         console2.log("--- Accountant ---");
         console2.log("  Vault:           ", address(d.accountant.vault()));
-        console2.log("  Has EXECUTOR:    ", d.accountant.hasRole(d.accountant.EXECUTOR_ROLE(), address(d.accountantExecutor)));
+        console2.log(
+            "  Has EXECUTOR:    ", d.accountant.hasRole(d.accountant.EXECUTOR_ROLE(), address(d.accountantExecutor))
+        );
         console2.log("");
         console2.log("--- AccountantExecutor ---");
         console2.log("  Accountant:      ", address(d.accountantExecutor.accountant()));

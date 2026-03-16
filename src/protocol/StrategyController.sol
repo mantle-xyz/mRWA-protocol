@@ -171,11 +171,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         }
 
         strategyInfo[adapter] = StrategyInfo({
-            targetWeightBps: targetWeightBps,
-            priority: priority,
-            isAsync: isAsync,
-            isActive: isActive,
-            exists: true
+            targetWeightBps: targetWeightBps, priority: priority, isAsync: isAsync, isActive: isActive, exists: true
         });
 
         _validateCurrentOrderInvariant();
@@ -306,9 +302,13 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         }
     }
 
-    function _applyStrategyUpdate(address adapter, uint16 targetWeightBps, uint16 priority, bool isAsync, bool isActive)
-        internal
-    {
+    function _applyStrategyUpdate(
+        address adapter,
+        uint16 targetWeightBps,
+        uint16 priority,
+        bool isAsync,
+        bool isActive
+    ) internal {
         if (targetWeightBps > BPS_DENOMINATOR) {
             revert InvalidBps();
         }
@@ -380,8 +380,14 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
             revert CooldownNotElapsed();
         }
 
-        (uint256 totalCash, uint256 locked, uint256 freeCash, uint256 netAssets, uint256 targetCash, uint256 threshold)
-        = _readRebalanceState();
+        (
+            uint256 totalCash,
+            uint256 locked,
+            uint256 freeCash,
+            uint256 netAssets,
+            uint256 targetCash,
+            uint256 threshold
+        ) = _readRebalanceState();
         emit RebalanceEvaluated(totalCash, locked, freeCash, netAssets, targetCash, threshold);
 
         if (freeCash > targetCash + threshold) {
@@ -539,7 +545,8 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     // =============================================================
 
     function _invest(uint256 excessCash) internal {
-        uint256 totalAssets = asset.balanceOf(address(vault)) + _totalStrategyValue() + vault.totalInvestInFlight()
+        uint256 totalAssets =
+            asset.balanceOf(address(vault)) + _totalStrategyValue() + vault.totalInvestInFlight()
             + vault.totalRedeemInFlight();
         uint256 requested = excessCash;
         uint256 remaining = excessCash;

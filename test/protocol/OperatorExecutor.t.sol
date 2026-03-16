@@ -31,11 +31,7 @@ contract MockStrategyController is IStrategyControllerExecutor {
         rebalanceCount++;
     }
 
-    function processRedeemBatch(uint256[] calldata ids, uint256 batchTotalAsset)
-        external
-        override
-        onlyExecutorGateway
-    {
+    function processRedeemBatch(uint256[] calldata ids, uint256 batchTotalAsset) external override onlyExecutorGateway {
         lastProcessHash = keccak256(abi.encode(ids, batchTotalAsset));
     }
 
@@ -60,8 +56,9 @@ contract MockStrategyController is IStrategyControllerExecutor {
         uint256[] calldata investInFlightIds,
         uint256[] calldata redeemInFlightIds
     ) external override onlyExecutorGateway {
-        lastSettleBatchHash =
-            keccak256(abi.encode(adapters, posAmounts, assetAmounts, investInFlightIds, redeemInFlightIds));
+        lastSettleBatchHash = keccak256(
+            abi.encode(adapters, posAmounts, assetAmounts, investInFlightIds, redeemInFlightIds)
+        );
     }
 }
 
@@ -110,10 +107,7 @@ contract OperatorExecutorTest is Test {
         ids[1] = 3;
 
         OperatorExecutor.Command memory cmd = OperatorExecutor.Command({
-            action: 1,
-            data: abi.encode(ids, uint256(500)),
-            nonce: 0,
-            deadline: uint64(block.timestamp + 1 hours)
+            action: 1, data: abi.encode(ids, uint256(500)), nonce: 0, deadline: uint64(block.timestamp + 1 hours)
         });
 
         bytes memory sig = _sign(cmd, signerPk);
@@ -127,10 +121,7 @@ contract OperatorExecutorTest is Test {
         ids[0] = 9;
 
         OperatorExecutor.Command memory cmd = OperatorExecutor.Command({
-            action: 2,
-            data: abi.encode(ids),
-            nonce: 0,
-            deadline: uint64(block.timestamp + 1 hours)
+            action: 2, data: abi.encode(ids), nonce: 0, deadline: uint64(block.timestamp + 1 hours)
         });
 
         bytes memory sig = _sign(cmd, signerPk);

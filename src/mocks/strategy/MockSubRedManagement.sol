@@ -59,10 +59,7 @@ contract MockSubRedManagement is ISubRedManagement, Ownable {
     }
 
     /// @notice Simulate async subscribe settlement by minting ST token to adapter.
-    function settleSubscribe(address adapter, address stToken, address receiver, uint256 mintedPos)
-        external
-        onlyOwner
-    {
+    function settleSubscribe(address adapter, address stToken, address receiver, uint256 mintedPos) external onlyOwner {
         PendingFlow storage flow = pending[adapter][stToken];
         if (flow.subscribeAsset == 0) revert("NO_SUBSCRIBE_PENDING");
         flow.subscribeAsset = 0;

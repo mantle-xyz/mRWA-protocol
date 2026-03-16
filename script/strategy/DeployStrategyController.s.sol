@@ -54,7 +54,13 @@ contract DeployStrategyController is Script {
 
         // ---- 3. Deploy StrategyController instance via BeaconProxy ----
         address controllerAddr = factory.deployAndInitController(
-            vaultAddr, admin, strategyManager, executorGateway, bufferTargetBps, rebalanceThresholdBps, rebalanceCooldown
+            vaultAddr,
+            admin,
+            strategyManager,
+            executorGateway,
+            bufferTargetBps,
+            rebalanceThresholdBps,
+            rebalanceCooldown
         );
         controller = StrategyController(controllerAddr);
         console2.log("[3/3] Controller (proxy) :", controllerAddr);
@@ -67,7 +73,9 @@ contract DeployStrategyController is Script {
         console2.log("Beacon -> impl:          ", factory.implementation());
         console2.log("Factory controller cnt:  ", factory.controllerCount());
         console2.log("Has ADMIN_ROLE:          ", controller.hasRole(controller.DEFAULT_ADMIN_ROLE(), admin));
-        console2.log("Has STRATEGY_MANAGER:    ", controller.hasRole(controller.STRATEGY_MANAGER_ROLE(), strategyManager));
+        console2.log(
+            "Has STRATEGY_MANAGER:    ", controller.hasRole(controller.STRATEGY_MANAGER_ROLE(), strategyManager)
+        );
         console2.log("Has EXECUTOR_ROLE:       ", controller.hasRole(controller.EXECUTOR_ROLE(), executorGateway));
         console2.log("Buffer target bps:       ", controller.bufferTargetBps());
         console2.log("Rebalance threshold bps: ", controller.rebalanceThresholdBps());
