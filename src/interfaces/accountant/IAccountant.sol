@@ -7,5 +7,7 @@ interface IAccountant {
     function initialize(address vault_, uint64 initialRate, uint32 managementFeeRate_, address admin) external;
 
     function updateExchangeRate(uint64 newRate, uint64 computeTimestamp) external;
-    function settleManagementFee() external;
+
+    function getRate() external view returns (uint64);
+    function getRateSafe() external view returns (uint64);
 }

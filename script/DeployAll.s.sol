@@ -212,31 +212,33 @@ contract DeployAll is Script {
 
         // 3a. Vault.initialize (only stores addresses, no external calls)
         d.vault = MantleYieldVault(vaultAddr);
-        d.vault.initialize(
-            IMantleYieldVault.InitParams({
-                asset: IERC20(usdc),
-                name: "Mantle RWA Vault",
-                symbol: "mRWA",
-                admin: admin,
-                sanctionsOracle: oracleAddr,
-                controller: controllerAddr,
-                accountant: accountantAddr,
-                treasury: treasury,
-                sanctionSafe: treasury,
-                maxRedemptionFeeBps: vm.envUint("F_MAX_REDEMPTION_FEE_BPS"),
-                maxRateChangeBps: vm.envUint("F_MAX_RATE_CHANGE_BPS"),
-                redemptionFeeBps: vm.envUint("F_REDEMPTION_FEE_BPS"),
-                minRedeemAmount: vm.envUint("F_MIN_REDEEM_AMOUNT"),
-                minDepositAmount: vm.envUint("F_MIN_DEPOSIT_AMOUNT"),
-                syncRedeemDisabled: vm.envBool("F_SYNC_REDEEM_DISABLED")
-            })
-        );
+        d.vault
+            .initialize(
+                IMantleYieldVault.InitParams({
+                    asset: IERC20(usdc),
+                    name: "Mantle RWA Vault",
+                    symbol: "mRWA",
+                    admin: admin,
+                    sanctionsOracle: oracleAddr,
+                    controller: controllerAddr,
+                    accountant: accountantAddr,
+                    treasury: treasury,
+                    sanctionSafe: admin,
+                    maxRedemptionFeeBps: vm.envUint("F_MAX_REDEMPTION_FEE_BPS"),
+                    maxRateChangeBps: vm.envUint("F_MAX_RATE_CHANGE_BPS"),
+                    redemptionFeeBps: vm.envUint("F_REDEMPTION_FEE_BPS"),
+                    minRedeemAmount: vm.envUint("F_MIN_REDEEM_AMOUNT"),
+                    minDepositAmount: vm.envUint("F_MIN_DEPOSIT_AMOUNT"),
+                    syncRedeemDisabled: vm.envBool("F_SYNC_REDEEM_DISABLED")
+                })
+            );
 
         // 3b. StrategyController.initialize (reads vault.asset(), so vault must be init'd)
         d.controller = StrategyController(controllerAddr);
-        d.controller.initialize(
-            vaultAddr, admin, strategyManager, opExecAddr, bufferTargetBps, rebalanceThresholdBps, rebalanceCooldown
-        );
+        d.controller
+            .initialize(
+                vaultAddr, admin, strategyManager, opExecAddr, bufferTargetBps, rebalanceThresholdBps, rebalanceCooldown
+            );
 
         console2.log("");
         console2.log("[Phase 3] Deferred proxies initialized");
