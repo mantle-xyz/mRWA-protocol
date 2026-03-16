@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {ISanctionsOracle} from "../interfaces/compliance/ISanctionsOracle.sol";
 import {IAccountant} from "../interfaces/accountant/IAccountant.sol";
+import {ISanctionsOracle} from "../interfaces/compliance/ISanctionsOracle.sol";
 import {IMantleVaultGateway} from "../interfaces/vault/IMantleVaultGateway.sol";
 import {IMantleYieldVault} from "../interfaces/vault/IMantleYieldVault.sol";
-import {AccessControlDefaultAdminRulesUpgradeable} from
-    "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlDefaultAdminRulesUpgradeable.sol";
+import {
+    AccessControlDefaultAdminRulesUpgradeable
+} from "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlDefaultAdminRulesUpgradeable.sol";
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
@@ -35,8 +36,8 @@ contract MantleVaultGateway is
 
     function initialize(InitParams calldata params) external override initializer {
         if (
-            params.vault == address(0) || address(params.sanctionsOracle) == address(0) || params.sanctionSafe == address(0)
-                || params.admin == address(0)
+            params.vault == address(0) || address(params.sanctionsOracle) == address(0)
+                || params.sanctionSafe == address(0) || params.admin == address(0)
         ) {
             revert IMantleYieldVault.Vault__ZeroAddress();
         }
@@ -113,7 +114,12 @@ contract MantleVaultGateway is
         _requireNotSanctioned(to);
     }
 
-    function resolveRedemptionReceiver(address owner) external view override returns (address receiver, bool sanctioned) {
+    function resolveRedemptionReceiver(address owner)
+        external
+        view
+        override
+        returns (address receiver, bool sanctioned)
+    {
         _onlyVault();
         sanctioned = isSanctioned(owner);
         receiver = sanctioned ? sanctionSafe : owner;

@@ -231,7 +231,9 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     // =============================================================
 
     function depositFor(address caller, uint256 assets, address receiver) external returns (uint256 shares);
-    function redeemFor(address caller, uint256 shares, address receiver, address owner) external returns (uint256 assets);
+    function redeemFor(address caller, uint256 shares, address receiver, address owner)
+        external
+        returns (uint256 assets);
     function requestRedeemFor(address caller, address owner, uint256 shares) external returns (uint256 requestId);
     function routeSanctionedShares(address caller, address owner, uint256 shares) external;
 

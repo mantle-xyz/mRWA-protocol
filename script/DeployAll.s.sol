@@ -15,8 +15,8 @@ import {MockERC20Mintable} from "../src/mocks/token/MockERC20Mintable.sol";
 import {OperatorExecutor} from "../src/protocol/OperatorExecutor.sol";
 import {StrategyController} from "../src/protocol/StrategyController.sol";
 import {StrategyControllerFactory} from "../src/protocol/StrategyControllerFactory.sol";
-import {MantleVaultGateway} from "../src/vault/MantleVaultGateway.sol";
 import {GatewayFactory} from "../src/vault/GatewayFactory.sol";
+import {MantleVaultGateway} from "../src/vault/MantleVaultGateway.sol";
 import {MantleYieldVault} from "../src/vault/MantleYieldVault.sol";
 import {VaultFactory} from "../src/vault/VaultFactory.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
@@ -226,33 +226,35 @@ contract DeployAll is Script {
 
         // 3a. Vault.initialize (only stores addresses, no external calls)
         d.vault = MantleYieldVault(vaultAddr);
-        d.vault.initialize(
-            IMantleYieldVault.InitParams({
-                asset: IERC20(usdc),
-                name: "Mantle RWA Vault",
-                symbol: "mRWA",
-                admin: admin,
-                gateway: gatewayAddr,
-                controller: controllerAddr,
-                accountant: accountantAddr,
-                treasury: treasury,
-                maxRedemptionFeeBps: vm.envUint("F_MAX_REDEMPTION_FEE_BPS"),
-                redemptionFeeBps: vm.envUint("F_REDEMPTION_FEE_BPS"),
-                minRedeemAmount: vm.envUint("F_MIN_REDEEM_AMOUNT"),
-                minDepositAmount: vm.envUint("F_MIN_DEPOSIT_AMOUNT")
-            })
-        );
+        d.vault
+            .initialize(
+                IMantleYieldVault.InitParams({
+                    asset: IERC20(usdc),
+                    name: "Mantle RWA Vault",
+                    symbol: "mRWA",
+                    admin: admin,
+                    gateway: gatewayAddr,
+                    controller: controllerAddr,
+                    accountant: accountantAddr,
+                    treasury: treasury,
+                    maxRedemptionFeeBps: vm.envUint("F_MAX_REDEMPTION_FEE_BPS"),
+                    redemptionFeeBps: vm.envUint("F_REDEMPTION_FEE_BPS"),
+                    minRedeemAmount: vm.envUint("F_MIN_REDEEM_AMOUNT"),
+                    minDepositAmount: vm.envUint("F_MIN_DEPOSIT_AMOUNT")
+                })
+            );
 
         // 3b. Gateway.initialize
-        d.gateway.initialize(
-            IMantleVaultGateway.InitParams({
-                vault: vaultAddr,
-                sanctionsOracle: ISanctionsOracle(oracleAddr),
-                sanctionSafe: admin,
-                admin: admin,
-                syncRedeemDisabled: vm.envBool("F_SYNC_REDEEM_DISABLED")
-            })
-        );
+        d.gateway
+            .initialize(
+                IMantleVaultGateway.InitParams({
+                    vault: vaultAddr,
+                    sanctionsOracle: ISanctionsOracle(oracleAddr),
+                    sanctionSafe: admin,
+                    admin: admin,
+                    syncRedeemDisabled: vm.envBool("F_SYNC_REDEEM_DISABLED")
+                })
+            );
 
         // 3c. StrategyController.initialize (reads vault.asset(), so vault must be init'd)
         d.controller = StrategyController(controllerAddr);

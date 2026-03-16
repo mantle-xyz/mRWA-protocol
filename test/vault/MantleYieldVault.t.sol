@@ -246,7 +246,10 @@ abstract contract VaultTestBase is Test {
 // =============================================================
 
 contract InitializeTest is VaultTestBase {
-    function _deployUninitializedVaultAndGateway() internal returns (MantleYieldVault target, MantleVaultGateway targetGateway) {
+    function _deployUninitializedVaultAndGateway()
+        internal
+        returns (MantleYieldVault target, MantleVaultGateway targetGateway)
+    {
         address targetAddr = factory.deployVault();
         address targetGatewayAddr = gatewayFactory.deployGateway();
         target = MantleYieldVault(targetAddr);
@@ -288,7 +291,8 @@ contract InitializeTest is VaultTestBase {
 
     function test_cannotInitializeWithZeroController() public {
         (MantleYieldVault target, MantleVaultGateway targetGateway) = _deployUninitializedVaultAndGateway();
-        IMantleYieldVault.InitParams memory p = _paramsWithOverride(address(usdc), address(0), accountantAddr, treasuryAddr, 500, 0);
+        IMantleYieldVault.InitParams memory p =
+            _paramsWithOverride(address(usdc), address(0), accountantAddr, treasuryAddr, 500, 0);
         p.gateway = address(targetGateway);
 
         vm.expectRevert(IMantleYieldVault.Vault__ZeroAddress.selector);

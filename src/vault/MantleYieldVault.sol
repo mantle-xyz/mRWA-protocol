@@ -5,10 +5,11 @@ import {IStrategyAdapter} from "../interfaces/adapters/IStrategyAdapter.sol";
 import {IMantleVaultGateway} from "../interfaces/vault/IMantleVaultGateway.sol";
 import {MantleYieldVaultAdminModule} from "./modules/MantleYieldVaultAdminModule.sol";
 import {MantleYieldVaultControllerModule} from "./modules/MantleYieldVaultControllerModule.sol";
-import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
-import {AccessControlDefaultAdminRulesUpgradeable} from
-    "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlDefaultAdminRulesUpgradeable.sol";
+import {
+    AccessControlDefaultAdminRulesUpgradeable
+} from "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlDefaultAdminRulesUpgradeable.sol";
 import {ERC4626Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC4626Upgradeable.sol";
+import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
