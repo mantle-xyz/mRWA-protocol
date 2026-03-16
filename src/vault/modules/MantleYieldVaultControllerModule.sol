@@ -57,10 +57,8 @@ abstract contract MantleYieldVaultControllerModule is MantleYieldVaultStorage {
         for (uint256 i = 0; i < ids.length; i++) {
             uint256 id = ids[i];
             RequestStatus current = requests[id].status;
-            if (
-                current == RequestStatus.NONE || current == RequestStatus.DONE
-                    || (current == RequestStatus.PROCESSING && newStatus == RequestStatus.PENDING)
-            ) {
+            // Request status is strictly monotonic: transitions must move forward only.
+            if (current == RequestStatus.NONE || uint8(newStatus) <= uint8(current)) {
                 revert Vault__InvalidState(id, current);
             }
             requests[id].status = newStatus;

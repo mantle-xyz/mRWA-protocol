@@ -648,6 +648,41 @@ contract UpdateRequestBatchTest is VaultTestBase {
         vm.expectRevert(IMantleYieldVault.Vault__OnlyController.selector);
         vault.updateRequestBatch(ids, IMantleYieldVault.RequestStatus.PROCESSING);
     }
+
+    function test_revertsOnBackwardTransition() public {
+        vm.prank(alice);
+        uint256 id = gateway.requestRedeem(500e6, alice, alice);
+
+        uint256[] memory ids = new uint256[](1);
+        ids[0] = id;
+
+        vm.prank(controllerAddr);
+        vault.updateRequestBatch(ids, IMantleYieldVault.RequestStatus.PROCESSING);
+
+        vm.prank(controllerAddr);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IMantleYieldVault.Vault__InvalidState.selector, id, IMantleYieldVault.RequestStatus.PROCESSING
+            )
+        );
+        vault.updateRequestBatch(ids, IMantleYieldVault.RequestStatus.PENDING);
+    }
+
+    function test_revertsOnSameStatusTransition() public {
+        vm.prank(alice);
+        uint256 id = gateway.requestRedeem(500e6, alice, alice);
+
+        uint256[] memory ids = new uint256[](1);
+        ids[0] = id;
+
+        vm.prank(controllerAddr);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IMantleYieldVault.Vault__InvalidState.selector, id, IMantleYieldVault.RequestStatus.PENDING
+            )
+        );
+        vault.updateRequestBatch(ids, IMantleYieldVault.RequestStatus.PENDING);
+    }
 }
 
 // =============================================================
