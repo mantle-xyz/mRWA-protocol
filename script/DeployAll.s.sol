@@ -41,7 +41,7 @@ import {Script, console2} from "forge-std/Script.sol";
 ///         │  MantleYieldVault    → BeaconProxy (UNINIT — deferred)         │
 ///         │  StrategyController  → BeaconProxy (UNINIT — deferred)         │
 ///         │  Accountant          → BeaconProxy (init: vault)               │
-///         │  OperatorExecutor    → UUPS proxy (init: controller)           │
+///         │  OperatorExecutor    → UUPS proxy (init: admin, signer)        │
 ///         │  AccountantExecutor  → UUPS proxy (init: accountant)           │
 ///         └─────────────────────────────────────────────────────────────────┘
 ///         ┌─ Phase 3: Deferred BeaconProxy initialization ─────────────────┐
@@ -193,11 +193,9 @@ contract DeployAll is Script {
             d.accountantFactory.deployAndInitAccountant(vaultAddr, initialRate, managementFeeBps, admin);
         d.accountant = Accountant(accountantAddr);
 
-        // 2f. OperatorExecutor — UUPS, init now (controller BeaconProxy already has code)
+        // 2f. OperatorExecutor — UUPS, init now (independent of controller address)
         address opExecAddr = address(
-            new ERC1967Proxy(
-                address(operatorExecImpl), abi.encodeCall(OperatorExecutor.initialize, (controllerAddr, admin, signer))
-            )
+            new ERC1967Proxy(address(operatorExecImpl), abi.encodeCall(OperatorExecutor.initialize, (admin, signer)))
         );
         d.operatorExecutor = OperatorExecutor(opExecAddr);
 
@@ -317,7 +315,7 @@ contract DeployAll is Script {
         console2.log("  Has STR_MANAGER: ", d.controller.hasRole(d.controller.STRATEGY_MANAGER_ROLE(), strategyManager));
         console2.log("");
         console2.log("--- OperatorExecutor ---");
-        console2.log("  Controller:      ", address(d.operatorExecutor.controller()));
+        console2.log("  Controller:      ", "from signed payload");
         console2.log("  Has SIGNER:      ", d.operatorExecutor.hasRole(d.operatorExecutor.SIGNER_ROLE(), signer));
         console2.log("");
         console2.log("========== Deployment Complete ==========");

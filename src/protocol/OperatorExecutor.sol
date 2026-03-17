@@ -16,51 +16,86 @@ contract OperatorExecutor is AccessControlUpgradeable, UUPSUpgradeable, EIP712Up
 
     bytes32 public constant SIGNER_ROLE = keccak256("SIGNER_ROLE");
 
-    bytes32 public constant COMMAND_TYPEHASH =
-        keccak256("Command(uint8 action,bytes32 dataHash,uint256 nonce,uint64 deadline)");
-
-    uint8 public constant ACTION_REBALANCE = 0;
-    uint8 public constant ACTION_PROCESS_REDEEM_BATCH = 1;
-    uint8 public constant ACTION_FINALIZE_REDEEM_BATCH = 2;
-    uint8 public constant ACTION_SETTLE_ADAPTER = 3;
-    uint8 public constant ACTION_SETTLE_ADAPTERS = 4;
-
-    IStrategyControllerExecutor public controller;
+    bytes32 public constant REBALANCE_TYPEHASH =
+        keccak256("Rebalance(address controller,uint256 nonce,uint64 deadline)");
+    bytes32 public constant PROCESS_REDEEM_BATCH_TYPEHASH = keccak256(
+        "ProcessRedeemBatch(address controller,bytes32 idsHash,uint256 batchTotalAsset,uint256 nonce,uint64 deadline)"
+    );
+    bytes32 public constant FINALIZE_REDEEM_BATCH_TYPEHASH =
+        keccak256("FinalizeRedeemBatch(address controller,bytes32 idsHash,uint256 nonce,uint64 deadline)");
+    bytes32 public constant SETTLE_ADAPTER_TYPEHASH = keccak256(
+        "SettleAdapter(address controller,address adapter,uint256 posAmount,uint256 assetAmount,bytes32 investInFlightIdsHash,bytes32 redeemInFlightIdsHash,uint256 nonce,uint64 deadline)"
+    );
+    bytes32 public constant SETTLE_ADAPTERS_TYPEHASH = keccak256(
+        "SettleAdapters(address controller,bytes32 adaptersHash,bytes32 posAmountsHash,bytes32 assetAmountsHash,bytes32 investInFlightIdsHash,bytes32 redeemInFlightIdsHash,uint256 nonce,uint64 deadline)"
+    );
 
     mapping(address => uint256) public nonces;
 
-    struct Command {
-        uint8 action;
-        bytes data;
-        uint256 nonce;
-        uint64 deadline;
-    }
-
-    event CommandExecuted(
-        address indexed signer, address indexed relayer, uint8 indexed action, uint256 nonce, bytes32 commandHash
+    event RebalanceExecuted(
+        address indexed signer, address indexed relayer, address indexed controller, uint256 nonce, bytes32 commandHash
+    );
+    event ProcessRedeemBatchExecuted(
+        address indexed signer,
+        address indexed relayer,
+        address indexed controller,
+        uint256 nonce,
+        bytes32 idsHash,
+        uint256 batchTotalAsset,
+        bytes32 commandHash
+    );
+    event FinalizeRedeemBatchExecuted(
+        address indexed signer,
+        address indexed relayer,
+        address indexed controller,
+        uint256 nonce,
+        bytes32 idsHash,
+        bytes32 commandHash
+    );
+    event SettleAdapterExecuted(
+        address indexed signer,
+        address indexed relayer,
+        address indexed controller,
+        uint256 nonce,
+        address adapter,
+        uint256 posAmount,
+        uint256 assetAmount,
+        bytes32 investInFlightIdsHash,
+        bytes32 redeemInFlightIdsHash,
+        bytes32 commandHash
+    );
+    event SettleAdaptersExecuted(
+        address indexed signer,
+        address indexed relayer,
+        address indexed controller,
+        uint256 nonce,
+        bytes32 adaptersHash,
+        bytes32 posAmountsHash,
+        bytes32 assetAmountsHash,
+        bytes32 investInFlightIdsHash,
+        bytes32 redeemInFlightIdsHash,
+        bytes32 commandHash
     );
     event SignerUpdated(address indexed signer, bool allowed);
 
     error InvalidAddress();
+    error InvalidController(address controller);
     error DeadlineExpired(uint64 deadline, uint256 blockTs);
     error InvalidSignature();
     error InvalidNonce(address signer, uint256 expected, uint256 provided);
-    error InvalidAction(uint8 action);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
         _disableInitializers();
     }
 
-    function initialize(address controller_, address admin, address initialSigner) external initializer {
-        if (controller_ == address(0) || admin == address(0) || initialSigner == address(0)) {
+    function initialize(address admin, address initialSigner) external initializer {
+        if (admin == address(0) || initialSigner == address(0)) {
             revert InvalidAddress();
         }
 
         __AccessControl_init();
         __EIP712_init("OperatorExecutor", "1");
-
-        controller = IStrategyControllerExecutor(controller_);
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(SIGNER_ROLE, initialSigner);
@@ -78,58 +113,183 @@ contract OperatorExecutor is AccessControlUpgradeable, UUPSUpgradeable, EIP712Up
         emit SignerUpdated(signer, allowed);
     }
 
-    function execute(Command calldata command, bytes calldata signature) external {
-        if (command.deadline != 0 && block.timestamp > command.deadline) {
-            revert DeadlineExpired(command.deadline, block.timestamp);
-        }
+    function executeRebalance(address controller_, uint256 nonce, uint64 deadline, bytes calldata signature) external {
+        bytes32 structHash = keccak256(abi.encode(REBALANCE_TYPEHASH, controller_, nonce, deadline));
+        (address signer, bytes32 commandHash) = _verifyAndConsume(structHash, nonce, deadline, signature);
 
-        bytes32 commandHash = _hashTypedDataV4(
-            keccak256(
-                abi.encode(COMMAND_TYPEHASH, command.action, keccak256(command.data), command.nonce, command.deadline)
+        IStrategyControllerExecutor targetController = _controllerOf(controller_);
+        targetController.rebalance();
+        emit RebalanceExecuted(signer, msg.sender, controller_, nonce, commandHash);
+    }
+
+    function executeProcessRedeemBatch(
+        address controller_,
+        uint256[] calldata ids,
+        uint256 batchTotalAsset,
+        uint256 nonce,
+        uint64 deadline,
+        bytes calldata signature
+    ) external {
+        bytes32 idsHash = _hashUint256Array(ids);
+        bytes32 structHash = keccak256(
+            abi.encode(PROCESS_REDEEM_BATCH_TYPEHASH, controller_, idsHash, batchTotalAsset, nonce, deadline)
+        );
+        (address signer, bytes32 commandHash) = _verifyAndConsume(structHash, nonce, deadline, signature);
+
+        IStrategyControllerExecutor targetController = _controllerOf(controller_);
+        targetController.processRedeemBatch(ids, batchTotalAsset);
+        emit ProcessRedeemBatchExecuted(signer, msg.sender, controller_, nonce, idsHash, batchTotalAsset, commandHash);
+    }
+
+    function executeFinalizeRedeemBatch(
+        address controller_,
+        uint256[] calldata ids,
+        uint256 nonce,
+        uint64 deadline,
+        bytes calldata signature
+    ) external {
+        bytes32 idsHash = _hashUint256Array(ids);
+        bytes32 structHash =
+            keccak256(abi.encode(FINALIZE_REDEEM_BATCH_TYPEHASH, controller_, idsHash, nonce, deadline));
+        (address signer, bytes32 commandHash) = _verifyAndConsume(structHash, nonce, deadline, signature);
+
+        IStrategyControllerExecutor targetController = _controllerOf(controller_);
+        targetController.finalizeRedeemBatch(ids);
+        emit FinalizeRedeemBatchExecuted(signer, msg.sender, controller_, nonce, idsHash, commandHash);
+    }
+
+    function executeSettleAdapter(
+        address controller_,
+        address adapter,
+        uint256 posAmount,
+        uint256 assetAmount,
+        uint256[] calldata investInFlightIds,
+        uint256[] calldata redeemInFlightIds,
+        uint256 nonce,
+        uint64 deadline,
+        bytes calldata signature
+    ) external {
+        bytes32 investInFlightIdsHash = _hashUint256Array(investInFlightIds);
+        bytes32 redeemInFlightIdsHash = _hashUint256Array(redeemInFlightIds);
+        bytes32 structHash = keccak256(
+            abi.encode(
+                SETTLE_ADAPTER_TYPEHASH,
+                controller_,
+                adapter,
+                posAmount,
+                assetAmount,
+                investInFlightIdsHash,
+                redeemInFlightIdsHash,
+                nonce,
+                deadline
             )
         );
-        address signer = commandHash.recover(signature);
+        (address signer, bytes32 commandHash) = _verifyAndConsume(structHash, nonce, deadline, signature);
+
+        IStrategyControllerExecutor targetController = _controllerOf(controller_);
+        targetController.settleAdapter(adapter, posAmount, assetAmount, investInFlightIds, redeemInFlightIds);
+        emit SettleAdapterExecuted(
+            signer,
+            msg.sender,
+            controller_,
+            nonce,
+            adapter,
+            posAmount,
+            assetAmount,
+            investInFlightIdsHash,
+            redeemInFlightIdsHash,
+            commandHash
+        );
+    }
+
+    function executeSettleAdapters(
+        address controller_,
+        address[] calldata adapters,
+        uint256[] calldata posAmounts,
+        uint256[] calldata assetAmounts,
+        uint256[] calldata investInFlightIds,
+        uint256[] calldata redeemInFlightIds,
+        uint256 nonce,
+        uint64 deadline,
+        bytes calldata signature
+    ) external {
+        bytes32 adaptersHash = _hashAddressArray(adapters);
+        bytes32 posAmountsHash = _hashUint256Array(posAmounts);
+        bytes32 assetAmountsHash = _hashUint256Array(assetAmounts);
+        bytes32 investInFlightIdsHash = _hashUint256Array(investInFlightIds);
+        bytes32 redeemInFlightIdsHash = _hashUint256Array(redeemInFlightIds);
+        bytes32 structHash = keccak256(
+            abi.encode(
+                SETTLE_ADAPTERS_TYPEHASH,
+                controller_,
+                adaptersHash,
+                posAmountsHash,
+                assetAmountsHash,
+                investInFlightIdsHash,
+                redeemInFlightIdsHash,
+                nonce,
+                deadline
+            )
+        );
+        (address signer, bytes32 commandHash) = _verifyAndConsume(structHash, nonce, deadline, signature);
+
+        IStrategyControllerExecutor targetController = _controllerOf(controller_);
+        targetController.settleAdapters(adapters, posAmounts, assetAmounts, investInFlightIds, redeemInFlightIds);
+        emit SettleAdaptersExecuted(
+            signer,
+            msg.sender,
+            controller_,
+            nonce,
+            adaptersHash,
+            posAmountsHash,
+            assetAmountsHash,
+            investInFlightIdsHash,
+            redeemInFlightIdsHash,
+            commandHash
+        );
+    }
+
+    function _verifyAndConsume(bytes32 structHash, uint256 nonce, uint64 deadline, bytes calldata signature)
+        internal
+        returns (address signer, bytes32 commandHash)
+    {
+        _checkDeadline(deadline);
+
+        commandHash = _hashTypedDataV4(structHash);
+        signer = commandHash.recover(signature);
         if (!hasRole(SIGNER_ROLE, signer)) {
             revert InvalidSignature();
         }
 
         uint256 expectedNonce = nonces[signer];
-        if (command.nonce != expectedNonce) {
-            revert InvalidNonce(signer, expectedNonce, command.nonce);
+        if (nonce != expectedNonce) {
+            revert InvalidNonce(signer, expectedNonce, nonce);
         }
         nonces[signer] = expectedNonce + 1;
+    }
 
-        if (command.action == ACTION_REBALANCE) {
-            controller.rebalance();
-        } else if (command.action == ACTION_PROCESS_REDEEM_BATCH) {
-            (uint256[] memory ids, uint256 batchTotalAsset) = abi.decode(command.data, (uint256[], uint256));
-            controller.processRedeemBatch(ids, batchTotalAsset);
-        } else if (command.action == ACTION_FINALIZE_REDEEM_BATCH) {
-            uint256[] memory ids = abi.decode(command.data, (uint256[]));
-            controller.finalizeRedeemBatch(ids);
-        } else if (command.action == ACTION_SETTLE_ADAPTER) {
-            (
-                address adapter,
-                uint256 posAmount,
-                uint256 assetAmount,
-                uint256[] memory investInFlightIds,
-                uint256[] memory redeemInFlightIds
-            ) = abi.decode(command.data, (address, uint256, uint256, uint256[], uint256[]));
-            controller.settleAdapter(adapter, posAmount, assetAmount, investInFlightIds, redeemInFlightIds);
-        } else if (command.action == ACTION_SETTLE_ADAPTERS) {
-            (
-                address[] memory adapters,
-                uint256[] memory posAmounts,
-                uint256[] memory assetAmounts,
-                uint256[] memory investInFlightIds,
-                uint256[] memory redeemInFlightIds
-            ) = abi.decode(command.data, (address[], uint256[], uint256[], uint256[], uint256[]));
-            controller.settleAdapters(adapters, posAmounts, assetAmounts, investInFlightIds, redeemInFlightIds);
-        } else {
-            revert InvalidAction(command.action);
+    function _controllerOf(address controller_) internal view returns (IStrategyControllerExecutor targetController) {
+        if (controller_ == address(0)) {
+            revert InvalidAddress();
         }
+        if (controller_.code.length == 0) {
+            revert InvalidController(controller_);
+        }
+        targetController = IStrategyControllerExecutor(controller_);
+    }
 
-        emit CommandExecuted(signer, msg.sender, command.action, command.nonce, commandHash);
+    function _checkDeadline(uint64 deadline) internal view {
+        if (deadline != 0 && block.timestamp > deadline) {
+            revert DeadlineExpired(deadline, block.timestamp);
+        }
+    }
+
+    function _hashUint256Array(uint256[] calldata arr) internal pure returns (bytes32) {
+        return keccak256(abi.encodePacked(arr));
+    }
+
+    function _hashAddressArray(address[] calldata arr) internal pure returns (bytes32) {
+        return keccak256(abi.encodePacked(arr));
     }
 
     // =============================================================
