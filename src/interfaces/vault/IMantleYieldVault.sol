@@ -120,7 +120,6 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
 
     event SactionSafeIn(address indexed account, address indexed token, uint256 amount);
     event RedemptionDone(address indexed account, address indexed receiver, uint256 shares, uint256 assets);
-    event ExchangeRateUpdated(uint256 oldRate, uint256 newRate);
     event RedemptionFeeUpdated(uint256 oldFeeBps, uint256 newFeeBps);
     event MinRedeemAmountUpdated(uint256 oldAmount, uint256 newAmount);
     event MinDepositAmountUpdated(uint256 oldAmount, uint256 newAmount);

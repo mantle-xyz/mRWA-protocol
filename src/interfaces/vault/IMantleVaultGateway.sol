@@ -19,6 +19,9 @@ interface IMantleVaultGateway {
 
     function initialize(InitParams calldata params) external;
 
+    function vault() external view returns (IMantleYieldVault);
+    function deposit(uint256 assets, address receiver) external returns (uint256 shares);
+    function redeem(uint256 shares, address receiver, address owner) external returns (uint256 assets);
     function requestRedeem(uint256 shares, address controller, address owner) external returns (uint256 requestId);
     function syncRedeemDisabled() external view returns (bool);
     function sanctionsOracle() external view returns (ISanctionsOracle);
