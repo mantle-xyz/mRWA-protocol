@@ -125,7 +125,7 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     event MinDepositAmountUpdated(uint256 oldAmount, uint256 newAmount);
     event AdapterRegistered(address indexed adapter);
     event AdapterRemoved(address indexed adapter);
-    event AdapterApproved(address indexed adapter, address indexed token, uint256 amount);
+    event AdapterTransferred(address indexed adapter, address indexed token, uint256 amount);
     event RequestBatchUpdated(uint256[] ids, RequestStatus newStatus);
     event InFlightCreated(
         uint256 indexed inFlightId,
@@ -242,7 +242,7 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
 
     function registerAdapter(address adapter) external;
     function removeAdapter(address adapter) external;
-    function approveToAdapter(address adapter, address token, uint256 amount) external;
+    function transferToAdapter(address adapter, address token, uint256 amount) external;
     function updateRequestBatch(uint256[] calldata ids, RequestStatus newStatus) external;
     function markRequestsDone(uint256[] calldata ids, uint256[] calldata settledAssets) external;
     function createInFlight(address adapter, address token, uint256 tokenAmount, uint256 usdcAmount, bool isInvest)

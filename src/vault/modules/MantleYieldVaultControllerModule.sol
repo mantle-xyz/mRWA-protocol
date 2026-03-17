@@ -26,7 +26,6 @@ abstract contract MantleYieldVaultControllerModule is MantleYieldVaultStorage {
         if (adapterInvestInFlightTokens[adapter] > 0 || adapterRedeemInFlightUsdc[adapter] > 0) {
             revert Vault__AdapterHasInFlight(adapter);
         }
-        IERC20(asset()).forceApprove(adapter, 0);
         isAdapter[adapter] = false;
         uint256 len = adapters.length;
         for (uint256 i = 0; i < len; i++) {
@@ -43,10 +42,10 @@ abstract contract MantleYieldVaultControllerModule is MantleYieldVaultStorage {
         return adapters;
     }
 
-    function approveToAdapter(address adapter, address token, uint256 amount) external onlyController {
+    function transferToAdapter(address adapter, address token, uint256 amount) external onlyController {
         if (!isAdapter[adapter]) revert Vault__AdapterNotRegistered(adapter);
-        IERC20(token).forceApprove(adapter, amount);
-        emit AdapterApproved(adapter, token, amount);
+        IERC20(token).safeTransfer(adapter, amount);
+        emit AdapterTransferred(adapter, token, amount);
     }
 
     function updateRequestBatch(uint256[] calldata ids, RequestStatus newStatus) external onlyController {
