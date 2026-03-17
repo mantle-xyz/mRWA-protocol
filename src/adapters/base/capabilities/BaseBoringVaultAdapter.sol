@@ -9,8 +9,8 @@ abstract contract BaseBoringVaultAdapter is BaseAdapter {
 
     error BoringVaultCallFailed(bytes data);
 
-    constructor(address vault_, address boringVault, address admin, address controller)
-        BaseAdapter(vault_, admin, controller, address(0))
+    constructor(address vault_, address boringVault, address admin, address controller, address accountant)
+        BaseAdapter(vault_, admin, controller, accountant, address(0))
     {
         BORING_VAULT = boringVault;
     }

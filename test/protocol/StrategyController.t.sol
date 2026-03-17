@@ -338,6 +338,15 @@ contract StrategyControllerUnitTest is Test {
         vm.stopPrank();
     }
 
+    function _registerSingleSyncStrategy() internal {
+        vm.startPrank(manager);
+        controller.registerStrategy(address(syncAdapter), 10_000, 1, false, true);
+        address[] memory ordered = new address[](1);
+        ordered[0] = address(syncAdapter);
+        controller.setStrategyOrder(ordered);
+        vm.stopPrank();
+    }
+
     function test_RevertWhen_InitializeWithNonContractExecutor() public {
         StrategyController implementation = new StrategyController();
         bytes memory initData = abi.encodeCall(
@@ -648,6 +657,14 @@ contract StrategyControllerUnitTest is Test {
 
         assertEq(syncAdapter.depositCount(), 1);
         assertEq(asyncAdapter.depositCount(), 1);
+        assertEq(syncAdapter.claimCount(), 0);
+        assertEq(vault.inFlightIdCursor(), 2);
+        (,,,,,, bool firstIsInvest,, IMantleYieldVault.InFlightStatus firstStatus) = vault.inFlightRecords(1);
+        assertTrue(firstIsInvest);
+        assertEq(uint8(firstStatus), uint8(IMantleYieldVault.InFlightStatus.PENDING));
+        (,,,,,, bool secondIsInvest,, IMantleYieldVault.InFlightStatus secondStatus) = vault.inFlightRecords(2);
+        assertTrue(secondIsInvest);
+        assertEq(uint8(secondStatus), uint8(IMantleYieldVault.InFlightStatus.PENDING));
     }
 
     function test_RebalanceDivestPath_ExecutesSyncAndAsync() public {
@@ -661,7 +678,14 @@ contract StrategyControllerUnitTest is Test {
 
         assertEq(syncAdapter.withdrawCount(), 1);
         assertEq(asyncAdapter.asyncCount(), 1);
-        assertGt(vault.inFlightIdCursor(), 0);
+        assertEq(syncAdapter.claimCount(), 0);
+        assertEq(vault.inFlightIdCursor(), 2);
+        (,,,,,, bool firstIsInvest,, IMantleYieldVault.InFlightStatus firstStatus) = vault.inFlightRecords(1);
+        assertFalse(firstIsInvest);
+        assertEq(uint8(firstStatus), uint8(IMantleYieldVault.InFlightStatus.PENDING));
+        (,,,,,, bool secondIsInvest,, IMantleYieldVault.InFlightStatus secondStatus) = vault.inFlightRecords(2);
+        assertFalse(secondIsInvest);
+        assertEq(uint8(secondStatus), uint8(IMantleYieldVault.InFlightStatus.PENDING));
     }
 
     function test_Rebalance_DivestSkipsFailingStrategy() public {
@@ -869,6 +893,35 @@ contract StrategyControllerUnitTest is Test {
         // New in-flight = 460e18 (860 target invest request - 400 pending coverage estimate).
         assertEq(vault.inFlightIdCursor(), 2);
         assertEq(vault.investInFlightTotal(), 860e18);
+    }
+
+    function test_RebalanceInvestSync_DoesNotCreateDuplicateInFlightWhenPendingExists() public {
+        _registerSingleSyncStrategy();
+        vault.createInFlight(address(syncAdapter), address(posToken), 1_000e18, 1_000e18, true);
+        asset.mint(address(vault), 1_000e18);
+
+        vm.warp(2 hours);
+        vm.prank(address(executorGateway));
+        controller.rebalance();
+
+        assertEq(syncAdapter.depositCount(), 0);
+        assertEq(vault.inFlightIdCursor(), 1);
+        assertEq(vault.investInFlightTotal(), 1_000e18);
+    }
+
+    function test_RebalanceDivestSync_SkipsWhenCoveredByPendingRedeem() public {
+        _registerSingleSyncStrategy();
+        syncAdapter.setTotalValue(500e18);
+        vault.createInFlight(address(syncAdapter), address(posToken), 50e18, 300e18, false);
+
+        uint256[] memory ids = new uint256[](1);
+        ids[0] = 901;
+        vm.prank(address(executorGateway));
+        controller.processRedeemBatch(ids, 300e18);
+
+        assertEq(syncAdapter.withdrawCount(), 0);
+        assertEq(vault.inFlightIdCursor(), 1);
+        assertEq(vault.redeemInFlightTotal(), 300e18);
     }
 
     function test_SettleAdapter_RedeemFlow_ClaimsAndConfirms() public {

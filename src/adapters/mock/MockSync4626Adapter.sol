@@ -11,8 +11,8 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 contract MockSync4626Adapter is BaseSync4626Adapter {
     using SafeERC20 for IERC20;
 
-    constructor(address vault_, address target4626, address admin, address controller)
-        BaseSync4626Adapter(vault_, target4626, admin, controller)
+    constructor(address vault_, address target4626, address admin, address controller, address accountant)
+        BaseSync4626Adapter(vault_, target4626, admin, controller, accountant)
     {}
 
     function name() external pure override returns (string memory) {
@@ -29,7 +29,8 @@ contract MockSync4626Adapter is BaseSync4626Adapter {
 
     function totalValue() external view override returns (uint256) {
         uint256 idle = ASSET.balanceOf(address(this));
-        uint256 shares = IERC20(address(TARGET_4626)).balanceOf(address(this));
+        uint256 shares =
+            IERC20(address(TARGET_4626)).balanceOf(address(this)) + IERC20(address(TARGET_4626)).balanceOf(VAULT);
         uint256 deployed = IERC4626(address(TARGET_4626)).convertToAssets(shares);
         return idle + deployed;
     }
@@ -55,6 +56,6 @@ contract MockSync4626Adapter is BaseSync4626Adapter {
         returns (uint256 actualUSDC)
     {
         if (amount == 0) revert InvalidAmount();
-        (actualUSDC,) = _erc4626Withdraw(amount, receiver, address(this));
+        (actualUSDC,) = _erc4626Withdraw(amount, receiver, VAULT);
     }
 }
