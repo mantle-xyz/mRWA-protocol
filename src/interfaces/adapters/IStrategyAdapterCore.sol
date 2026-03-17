@@ -7,7 +7,7 @@ interface IStrategyAdapterCore {
     function posToken() external view returns (address);
     function priceOracle() external view returns (address);
     /// @notice Position-token quote in 1e18 precision (asset per 1 pos token).
-    /// @dev Returns 1e18 when no oracle is configured; returns 0 when oracle price is invalid.
+    /// @dev Priority: oracle valid price > manual written price > default 1e18.
     function getPosTokenPrice() external view returns (uint256);
     function estimatePosAmount(uint256 assetAmount) external view returns (uint256 positionAmount);
     function vault() external view returns (address);

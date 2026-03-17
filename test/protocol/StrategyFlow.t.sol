@@ -247,10 +247,22 @@ contract StrategyFlowTest is Test {
         uMINTToken = new MockSTTokenFlow("uMINT", "uMINT");
 
         adapterISNR = new SubRedManagementAdapter(
-            address(vault), address(subRedISNR), address(iSNRToken), address(this), address(controller), address(0)
+            address(vault),
+            address(subRedISNR),
+            address(iSNRToken),
+            address(this),
+            address(controller),
+            address(this),
+            address(0)
         );
         adapterUMINT = new SubRedManagementAdapter(
-            address(vault), address(subRedUMINT), address(uMINTToken), address(this), address(controller), address(0)
+            address(vault),
+            address(subRedUMINT),
+            address(uMINTToken),
+            address(this),
+            address(controller),
+            address(this),
+            address(0)
         );
 
         controller.registerStrategy(address(adapterISNR), 5000, 1, true, true);

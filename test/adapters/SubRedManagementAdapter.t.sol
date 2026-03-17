@@ -111,10 +111,16 @@ contract SubRedManagementAdapterTest is Test {
         oracle = new MockDFeedPriceOracle(2 * 10 ** 8, 8);
 
         adapter = new SubRedManagementAdapter(
-            address(vault), address(subRed), address(stToken), address(this), address(this), address(0)
+            address(vault), address(subRed), address(stToken), address(this), address(this), address(this), address(0)
         );
         adapterWithOracle = new SubRedManagementAdapter(
-            address(vault), address(subRed), address(stToken6), address(this), address(this), address(oracle)
+            address(vault),
+            address(subRed),
+            address(stToken6),
+            address(this),
+            address(this),
+            address(this),
+            address(oracle)
         );
     }
 
@@ -199,7 +205,7 @@ contract SubRedManagementAdapterTest is Test {
     function test_TotalValue_UsesOraclePrice() public {
         // stToken6 has 6 decimals; mint 500 tokens => 500e6 raw.
         // with price=2 and oracle decimals 8, asset value should be 1000e18.
-        stToken6.mint(address(adapterWithOracle), 500e6);
+        stToken6.mint(address(vault), 500e6);
         uint256 value = adapterWithOracle.totalValue();
         assertEq(value, 1000e18);
     }
@@ -210,5 +216,21 @@ contract SubRedManagementAdapterTest is Test {
         uint256 amountAsset = 2000e18;
         uint256 pos = adapterWithOracle.estimatePosAmount(amountAsset);
         assertEq(pos, 2_000_000_000); // 2000 * 1e6
+    }
+
+    function test_RevertWhen_SetManualPosTokenPrice_WithOracleConfigured() public {
+        vm.expectRevert();
+        adapterWithOracle.setManualPosTokenPrice(5e18);
+    }
+
+    function test_SetManualPosTokenPrice_AfterDisablingOracle() public {
+        adapterWithOracle.setPriceOracle(address(0));
+        adapterWithOracle.setManualPosTokenPrice(4e18);
+        assertEq(adapterWithOracle.getPosTokenPrice(), 4e18);
+    }
+
+    function test_GetPosTokenPrice_UsesManualWhenNoOracleConfigured() public {
+        adapter.setManualPosTokenPrice(4e18);
+        assertEq(adapter.getPosTokenPrice(), 4e18);
     }
 }

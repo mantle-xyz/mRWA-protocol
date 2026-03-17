@@ -522,7 +522,12 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         totalCash = asset.balanceOf(address(vault));
         freeCash = vault.getFreeCash();
         locked = totalCash > freeCash ? totalCash - freeCash : 0;
+        // Net assets uses a unified accounting base:
+        // vault cash + deployed strategy value + both sides of pending in-flight.
+        // This avoids underestimating AUM during settlement latency.
         netAssets = totalCash + _totalStrategyValue() + vault.totalInvestInFlight() + vault.totalRedeemInFlight();
+        // targetCash is the desired free-cash buffer; threshold is hysteresis band.
+        // Rebalance only triggers outside [targetCash - threshold, targetCash + threshold].
         targetCash = (netAssets * bufferTargetBps) / BPS_DENOMINATOR;
         threshold = (netAssets * rebalanceThresholdBps) / BPS_DENOMINATOR;
     }
@@ -580,37 +585,31 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
             if (alloc == 0) {
                 continue;
             }
-            // Approximate pending async invest coverage in pos-token units and only invest the uncovered delta.
-            if (info.isAsync) {
-                uint256 originalAlloc = alloc;
-                uint256 pendingInvestPos = vault.adapterInvestInFlightTokens(adapter);
-                if (pendingInvestPos > 0) {
-                    uint256 estimatedPosForAlloc = _estimatePosAmount(adapter, alloc, alloc);
-                    if (pendingInvestPos >= estimatedPosForAlloc) {
-                        emit InvestSkipped(adapter, originalAlloc);
-                        continue;
-                    }
+            // Pending invest (sync/async) already covers part of target gap; only invest uncovered delta.
+            uint256 originalAlloc = alloc;
+            uint256 pendingInvestPos = vault.adapterInvestInFlightTokens(adapter);
+            if (pendingInvestPos > 0) {
+                uint256 estimatedPosForAlloc = _estimatePosAmount(adapter, alloc, alloc);
+                if (pendingInvestPos >= estimatedPosForAlloc) {
+                    emit InvestSkipped(adapter, originalAlloc);
+                    continue;
+                }
 
-                    alloc = Math.mulDiv(originalAlloc, estimatedPosForAlloc - pendingInvestPos, estimatedPosForAlloc);
-                    if (alloc == 0) {
-                        emit InvestSkipped(adapter, originalAlloc);
-                        continue;
-                    }
+                alloc = Math.mulDiv(originalAlloc, estimatedPosForAlloc - pendingInvestPos, estimatedPosForAlloc);
+                if (alloc == 0) {
+                    emit InvestSkipped(adapter, originalAlloc);
+                    continue;
                 }
             }
 
             vault.approveToAdapter(adapter, address(asset), alloc);
             try IStrategyAdapter(adapter).deposit(alloc, adapter) returns (uint256 sharesOrPos) {
-                if (info.isAsync) {
-                    uint256 posAmount = _estimatePosAmount(adapter, alloc, sharesOrPos);
-                    if (posAmount == 0) {
-                        posAmount = alloc;
-                    }
-                    if (posAmount != 0) {
-                        address token = _posToken(adapter);
-                        vault.createInFlight(adapter, token, posAmount, alloc, true);
-                    }
+                uint256 posAmount = _estimatePosAmount(adapter, alloc, sharesOrPos);
+                if (posAmount == 0) {
+                    posAmount = sharesOrPos == 0 ? alloc : sharesOrPos;
                 }
+
+                _recordInvestInFlight(adapter, alloc, posAmount);
 
                 emit InvestExecuted(adapter, alloc, sharesOrPos);
                 remaining -= alloc;
@@ -650,20 +649,24 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
 
             // Asset-denominated amount (e.g. USDC/USDT), not position-token amount.
             uint256 toWithdrawAsset = remaining < value ? remaining : value;
+            // Avoid duplicate redeem requests for both sync/async paths: only withdraw uncovered delta.
+            uint256 pendingRedeemAsset = vault.adapterRedeemInFlightUsdc(adapter);
+            uint256 coveredByPending = pendingRedeemAsset >= toWithdrawAsset ? toWithdrawAsset : pendingRedeemAsset;
+            uint256 requestAsset = toWithdrawAsset - coveredByPending;
+            if (requestAsset == 0) {
+                remaining -= toWithdrawAsset;
+                continue;
+            }
+
             if (info.isAsync) {
                 address token = _posToken(adapter);
                 if (token == address(0)) {
-                    emit DivestSkipped(adapter, toWithdrawAsset);
-                    continue;
-                }
-
-                // Prevent duplicate async requests on repeated rebalance:
-                // only request the delta that is not already in redeem in-flight for this adapter.
-                uint256 pendingRedeemAsset = vault.adapterRedeemInFlightUsdc(adapter);
-                uint256 coveredByPending = pendingRedeemAsset >= toWithdrawAsset ? toWithdrawAsset : pendingRedeemAsset;
-                uint256 requestAsset = toWithdrawAsset - coveredByPending;
-                if (requestAsset == 0) {
-                    remaining -= toWithdrawAsset;
+                    emit DivestSkipped(adapter, requestAsset);
+                    if (coveredByPending >= remaining) {
+                        remaining = 0;
+                    } else {
+                        remaining -= coveredByPending;
+                    }
                     continue;
                 }
 
@@ -678,6 +681,11 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
                 catch {
                     vault.approveToAdapter(adapter, token, 0);
                     emit DivestSkipped(adapter, requestAsset);
+                    if (coveredByPending >= remaining) {
+                        remaining = 0;
+                    } else {
+                        remaining -= coveredByPending;
+                    }
                     continue;
                 }
                 vault.approveToAdapter(adapter, token, 0);
@@ -688,15 +696,38 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
                 continue;
             }
 
-            try IStrategyAdapter(adapter).withdrawSync(toWithdrawAsset, address(vault)) returns (uint256 received) {
-                emit DivestExecuted(adapter, toWithdrawAsset, received);
-                if (received >= remaining) {
+            address syncPosToken = _posToken(adapter);
+            uint256 syncPosAllowance;
+            if (syncPosToken != address(0)) {
+                syncPosAllowance = _estimatePosAmount(adapter, requestAsset, requestAsset);
+                if (syncPosAllowance == 0) {
+                    syncPosAllowance = requestAsset;
+                }
+                vault.approveToAdapter(adapter, syncPosToken, syncPosAllowance);
+            }
+
+            try IStrategyAdapter(adapter).withdrawSync(requestAsset, adapter) returns (uint256 received) {
+                _recordSyncRedeemInFlight(adapter, requestAsset, received);
+                if (syncPosToken != address(0)) {
+                    vault.approveToAdapter(adapter, syncPosToken, 0);
+                }
+                emit DivestExecuted(adapter, requestAsset, received);
+                uint256 cleared = coveredByPending + received;
+                if (cleared >= remaining) {
                     remaining = 0;
                 } else {
-                    remaining -= received;
+                    remaining -= cleared;
                 }
             } catch {
-                emit DivestSkipped(adapter, toWithdrawAsset);
+                if (syncPosToken != address(0)) {
+                    vault.approveToAdapter(adapter, syncPosToken, 0);
+                }
+                emit DivestSkipped(adapter, requestAsset);
+                if (coveredByPending >= remaining) {
+                    remaining = 0;
+                } else {
+                    remaining -= coveredByPending;
+                }
             }
         }
 
@@ -874,6 +905,31 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
             }
         }
         return false;
+    }
+
+    /// @dev Invest path records pending position tokens and waits for off-chain settlement.
+    function _recordInvestInFlight(address adapter, uint256 assetAmount, uint256 expectedPos) internal {
+        if (assetAmount == 0 || expectedPos == 0) {
+            return;
+        }
+
+        address token = _posToken(adapter);
+        vault.createInFlight(adapter, token, expectedPos, assetAmount, true);
+    }
+
+    /// @dev Sync redeem path records pending USDC on adapter and waits for off-chain settlement.
+    function _recordSyncRedeemInFlight(address adapter, uint256 requestedAsset, uint256 receivedAsset) internal {
+        if (requestedAsset == 0 || receivedAsset == 0) {
+            return;
+        }
+
+        uint256 posAmount = _estimatePosAmount(adapter, requestedAsset, requestedAsset);
+        if (posAmount == 0) {
+            posAmount = requestedAsset;
+        }
+
+        address token = _posToken(adapter);
+        vault.createInFlight(adapter, token, posAmount, receivedAsset, false);
     }
 
     function _estimatePosAmount(address adapter, uint256 assetAmount, uint256 fallbackAmount)

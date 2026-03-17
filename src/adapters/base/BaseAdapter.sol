@@ -15,26 +15,37 @@ abstract contract BaseAdapter is IStrategyAdapter, AccessControl, ReentrancyGuar
     using SafeERC20 for IERC20;
 
     bytes32 public constant CONTROLLER_ROLE = keccak256("CONTROLLER_ROLE");
+    bytes32 public constant ACCOUNTANT_ROLE = keccak256("ACCOUNTANT_ROLE");
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
 
     IERC20 public immutable ASSET;
     address public immutable VAULT;
-    address public immutable priceOracle;
+    address public priceOracle;
+    uint256 public manualPosTokenPrice;
     bool public paused;
 
     error PausedError();
     error InvalidAmount();
     error InvalidAddress();
-    error NotController();
     error Unsupported();
-    error NotPauser();
     error SweepProtectedToken(address token);
     error InvalidToken(address token);
 
+    event ManualPosTokenPriceUpdated(uint256 oldPriceE18, uint256 newPriceE18, address indexed updater);
+    event PriceOracleUpdated(address indexed oldOracle, address indexed newOracle, address indexed updater);
+
     modifier onlyController() {
-        if (!hasRole(CONTROLLER_ROLE, msg.sender)) {
-            revert NotController();
-        }
+        _checkRole(CONTROLLER_ROLE, msg.sender);
+        _;
+    }
+
+    modifier onlyPauser() {
+        _checkRole(PAUSER_ROLE, msg.sender);
+        _;
+    }
+
+    modifier onlyAccountant() {
+        _checkRole(ACCOUNTANT_ROLE, msg.sender);
         _;
     }
 
@@ -45,8 +56,8 @@ abstract contract BaseAdapter is IStrategyAdapter, AccessControl, ReentrancyGuar
         _;
     }
 
-    constructor(address vault_, address admin, address controller, address priceOracle_) {
-        if (vault_ == address(0) || admin == address(0) || controller == address(0)) {
+    constructor(address vault_, address admin, address controller, address accountant, address priceOracle_) {
+        if (vault_ == address(0) || admin == address(0) || controller == address(0) || accountant == address(0)) {
             revert InvalidAddress();
         }
         VAULT = vault_;
@@ -56,6 +67,7 @@ abstract contract BaseAdapter is IStrategyAdapter, AccessControl, ReentrancyGuar
             revert InvalidAddress();
         }
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
+        _grantRole(ACCOUNTANT_ROLE, accountant);
         _grantRole(CONTROLLER_ROLE, controller);
         _grantRole(PAUSER_ROLE, admin);
         _grantRole(PAUSER_ROLE, controller);
@@ -78,17 +90,22 @@ abstract contract BaseAdapter is IStrategyAdapter, AccessControl, ReentrancyGuar
     }
 
     /// @notice Position-token quote in 1e18 precision (asset per 1 pos token).
-    /// @dev Returns 1e18 when no oracle is configured; returns 0 when oracle price is invalid.
+    /// @dev Priority: oracle valid price > manual written price.
+    ///      Fallback: no valid source -> 1e18.
     function getPosTokenPrice() public view virtual override returns (uint256) {
-        if (priceOracle == address(0)) {
-            return 1e18;
+        if (priceOracle != address(0)) {
+            uint256 rawPrice = IDFeedPriceOracle(priceOracle).getPrice();
+            if (rawPrice > 0) {
+                uint8 dec = IDFeedPriceOracle(priceOracle).decimals();
+                return Math.mulDiv(rawPrice, 1e18, 10 ** dec, Math.Rounding.Floor);
+            }
         }
-        uint256 rawPrice = IDFeedPriceOracle(priceOracle).getPrice();
-        if (rawPrice == 0) {
-            return 0;
+
+        if (manualPosTokenPrice > 0) {
+            return manualPosTokenPrice;
         }
-        uint8 dec = IDFeedPriceOracle(priceOracle).decimals();
-        return Math.mulDiv(rawPrice, 1e18, 10 ** dec, Math.Rounding.Floor);
+
+        return 1e18;
     }
 
     function vault() external view virtual override returns (address) {
@@ -122,12 +139,26 @@ abstract contract BaseAdapter is IStrategyAdapter, AccessControl, ReentrancyGuar
     // Admin Actions
     // =============================================================
 
-    function setPaused(bool paused_) external virtual override {
-        if (!hasRole(PAUSER_ROLE, msg.sender) && !hasRole(DEFAULT_ADMIN_ROLE, msg.sender)) {
-            revert NotPauser();
-        }
+    function setPaused(bool paused_) external virtual override onlyPauser {
         paused = paused_;
         emit AdapterPaused(address(this), paused_);
+    }
+
+    /// @notice Set manual position-token price (1e18 precision). Set to 0 to clear manual override.
+    function setManualPosTokenPrice(uint256 priceE18) external virtual onlyAccountant {
+        if (priceOracle != address(0)) {
+            revert Unsupported();
+        }
+        uint256 oldPrice = manualPosTokenPrice;
+        manualPosTokenPrice = priceE18;
+        emit ManualPosTokenPriceUpdated(oldPrice, priceE18, msg.sender);
+    }
+
+    /// @notice Update oracle address. Set to address(0) to disable oracle and use manual/default pricing.
+    function setPriceOracle(address newOracle) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        address oldOracle = priceOracle;
+        priceOracle = newOracle;
+        emit PriceOracleUpdated(oldOracle, newOracle, msg.sender);
     }
 
     /// @notice Emergency sweep: transfer all of a token to receiver (admin only)

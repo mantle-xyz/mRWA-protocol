@@ -20,6 +20,7 @@ import {Script, console2} from "forge-std/Script.sol";
 /// - MOCK_VAULT
 /// - MOCK_ADMIN
 /// - MOCK_CONTROLLER
+/// - MOCK_ACCOUNTANT
 ///
 /// Optional env:
 /// - MOCK_ASSET (if empty, deploy MockERC20Mintable with 6 decimals)
@@ -35,6 +36,7 @@ contract DeployMockStrategies is Script {
         address vault_ = vm.envAddress("MOCK_VAULT");
         address admin = vm.envAddress("MOCK_ADMIN");
         address controller = vm.envAddress("MOCK_CONTROLLER");
+        address accountant = vm.envAddress("MOCK_ACCOUNTANT");
 
         vm.startBroadcast(deployerPk);
 
@@ -51,14 +53,15 @@ contract DeployMockStrategies is Script {
             vm.envOr("MOCK_4626_NAME", string("Mock 4626 Position")),
             vm.envOr("MOCK_4626_SYMBOL", string("m4626"))
         );
-        MockSync4626Adapter syncAdapter = new MockSync4626Adapter(vault_, address(mock4626), admin, controller);
+        MockSync4626Adapter syncAdapter =
+            new MockSync4626Adapter(vault_, address(mock4626), admin, controller, accountant);
 
         MockERC20Mintable mockStToken = new MockERC20Mintable(
             vm.envOr("MOCK_ST_NAME", string("Mock ST")), vm.envOr("MOCK_ST_SYMBOL", string("mST")), 18
         );
         MockSubRedManagement mockSubRed = new MockSubRedManagement(admin);
         SubRedManagementAdapter asyncAdapter = new SubRedManagementAdapter(
-            vault_, address(mockSubRed), address(mockStToken), admin, controller, address(0)
+            vault_, address(mockSubRed), address(mockStToken), admin, controller, accountant, address(0)
         );
 
         vm.stopBroadcast();

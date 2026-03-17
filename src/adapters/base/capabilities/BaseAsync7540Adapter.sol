@@ -8,8 +8,8 @@ import {BaseAdapter} from "../BaseAdapter.sol";
 abstract contract BaseAsync7540Adapter is BaseAdapter {
     uint256 public redeemNonce;
 
-    constructor(address vault_, address admin, address controller, address priceOracle_)
-        BaseAdapter(vault_, admin, controller, priceOracle_)
+    constructor(address vault_, address admin, address controller, address accountant, address priceOracle_)
+        BaseAdapter(vault_, admin, controller, accountant, priceOracle_)
     {}
 
     /// @notice Async strategies generally do not support atomic withdraw.

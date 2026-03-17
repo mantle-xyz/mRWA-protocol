@@ -14,6 +14,7 @@ import {Script, console2} from "forge-std/Script.sol";
 /// - ADAPTER_ST_TOKEN
 /// - ADAPTER_ADMIN
 /// - ADAPTER_CONTROLLER
+/// - ADAPTER_ACCOUNTANT
 ///
 /// Optional env:
 /// - ADAPTER_PRICE_ORACLE                 (default: address(0))
@@ -26,18 +27,21 @@ contract DeploySubRedManagementAdapter is Script {
         address stToken = vm.envAddress("ADAPTER_ST_TOKEN");
         address admin = vm.envAddress("ADAPTER_ADMIN");
         address controllerAddr = vm.envAddress("ADAPTER_CONTROLLER");
+        address accountantAddr = vm.envAddress("ADAPTER_ACCOUNTANT");
         address priceOracle = vm.envOr("ADAPTER_PRICE_ORACLE", address(0));
 
         vm.startBroadcast(deployerPk);
 
-        SubRedManagementAdapter adapter =
-            new SubRedManagementAdapter(vault_, subRedManagement, stToken, admin, controllerAddr, priceOracle);
+        SubRedManagementAdapter adapter = new SubRedManagementAdapter(
+            vault_, subRedManagement, stToken, admin, controllerAddr, accountantAddr, priceOracle
+        );
 
         vm.stopBroadcast();
 
         console2.log("subred adapter:", address(adapter));
         console2.log("vault:", vault_);
         console2.log("controller:", controllerAddr);
+        console2.log("accountant:", accountantAddr);
         console2.log("st token:", stToken);
         console2.log("subred management:", subRedManagement);
         console2.log("price oracle:", priceOracle);

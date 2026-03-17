@@ -29,6 +29,7 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
      * @param stToken Target security token (e.g. iSNR, uMINT).
      * @param admin Adapter admin role address.
      * @param controller StrategyController role address.
+     * @param accountant Accountant role address for manual price updates.
      * @param priceOracle_ Optional DFeedPriceOracle for ST token (e.g. 0xb5d9870e... for uMINT). Pass address(0) for 1:1 estimate.
      */
     constructor(
@@ -37,8 +38,9 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
         address stToken,
         address admin,
         address controller,
+        address accountant,
         address priceOracle_
-    ) BaseAsync7540Adapter(vault_, admin, controller, priceOracle_) {
+    ) BaseAsync7540Adapter(vault_, admin, controller, accountant, priceOracle_) {
         if (subRedManagement == address(0) || stToken == address(0)) {
             revert InvalidAddress();
         }
@@ -63,7 +65,7 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
 
     /**
      * @notice Estimate ST token amount (in ST raw units) for a given asset amount.
-     * @dev Uses getPosTokenPrice() in 1e18 precision. Falls back to 1:1 human scaling when price is invalid (0).
+     * @dev Uses getPosTokenPrice() in 1e18 precision. Falls back to 1:1 human scaling when price source is invalid.
      */
     function estimatePosAmount(uint256 amountAsset) external view override returns (uint256 positionAmount) {
         uint8 assetDecimals = IERC20Metadata(address(ASSET)).decimals();
@@ -130,7 +132,7 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
     function totalValue() external view override returns (uint256) {
         uint8 assetDecimals = IERC20Metadata(address(ASSET)).decimals();
         uint8 stDecimals = IERC20Metadata(ST_TOKEN).decimals();
-        uint256 posBalance = IERC20(ST_TOKEN).balanceOf(address(this)) + IERC20(ST_TOKEN).balanceOf(VAULT);
+        uint256 posBalance = IERC20(ST_TOKEN).balanceOf(VAULT);
         uint256 posValue = _estimateAssetAmount(posBalance, assetDecimals, stDecimals);
         return ASSET.balanceOf(address(this)) + posValue;
     }
