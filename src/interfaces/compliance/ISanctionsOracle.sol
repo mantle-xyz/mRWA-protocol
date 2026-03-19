@@ -23,6 +23,18 @@ interface ISanctionsOracle {
     /// @param sanctioned  The target status applied to the batch.
     event BatchSanctionUpdated(uint256 indexed batchId, uint256 processed, uint256 changed, bool sanctioned);
 
+    /// @notice Fired for every individual address whose whitelist status actually changes.
+    /// @param account     The affected address.
+    /// @param whitelisted `true` = newly whitelisted, `false` = removed.
+    event WhitelistStatusUpdated(address indexed account, bool whitelisted);
+
+    /// @notice Fired once per `updateWhitelistStatusBatch` call (including no-ops).
+    /// @param batchId     Monotonically increasing counter for reliable off-chain correlation.
+    /// @param processed   Total addresses submitted in the call.
+    /// @param changed     How many actually flipped state (≤ processed).
+    /// @param whitelisted The target status applied to the batch.
+    event BatchWhitelistUpdated(uint256 indexed batchId, uint256 processed, uint256 changed, bool whitelisted);
+
     // ─────────────────────────────────────────────────────────────
     //                          ERRORS
     // ─────────────────────────────────────────────────────────────
@@ -54,8 +66,16 @@ interface ISanctionsOracle {
     /// @return `true` if the address is currently sanctioned.
     function isSanctioned(address account) external view returns (bool);
 
+    /// @notice Check whether an address is whitelisted — O(1) single SLOAD.
+    /// @param account Address to query.
+    /// @return `true` if the address is currently whitelisted.
+    function isWhitelisted(address account) external view returns (bool);
+
     /// @notice Number of addresses that are currently sanctioned.
     function totalSanctionedCount() external view returns (uint256);
+
+    /// @notice Number of addresses that are currently whitelisted.
+    function totalWhitelistedCount() external view returns (uint256);
 
     /// @notice Block timestamp of the last state-mutating update (used for liveness monitoring).
     function lastUpdateTimestamp() external view returns (uint256);
@@ -79,4 +99,14 @@ interface ISanctionsOracle {
     /// @param accounts   Array of addresses to update (length ≤ MAX_BATCH_SIZE).
     /// @param sanctioned `true` to ban all, `false` to lift all.
     function updateSanctionStatusBatch(address[] calldata accounts, bool sanctioned) external;
+
+    /// @notice Update a single address whitelist status.
+    /// @param account     The address to whitelist / un-whitelist.
+    /// @param whitelisted `true` to add, `false` to remove.
+    function updateWhitelistStatus(address account, bool whitelisted) external;
+
+    /// @notice Batch whitelist update.
+    /// @param accounts    Array of addresses to update (length ≤ MAX_BATCH_SIZE).
+    /// @param whitelisted `true` to add all, `false` to remove all.
+    function updateWhitelistStatusBatch(address[] calldata accounts, bool whitelisted) external;
 }

@@ -31,6 +31,7 @@ contract MockUSDC is ERC20 {
 
 contract MockSanctionsOracle is ISanctionsOracle {
     mapping(address => bool) public sanctioned;
+    mapping(address => bool) public whitelisted;
 
     function initialize(address, address) external override {}
 
@@ -38,11 +39,23 @@ contract MockSanctionsOracle is ISanctionsOracle {
         return sanctioned[account];
     }
 
+    function isWhitelisted(address account) external view override returns (bool) {
+        return whitelisted[account];
+    }
+
     function setSanctioned(address account, bool status) external {
         sanctioned[account] = status;
     }
 
+    function setWhitelisted(address account, bool status) external {
+        whitelisted[account] = status;
+    }
+
     function totalSanctionedCount() external pure override returns (uint256) {
+        return 0;
+    }
+
+    function totalWhitelistedCount() external pure override returns (uint256) {
         return 0;
     }
 
@@ -60,6 +73,8 @@ contract MockSanctionsOracle is ISanctionsOracle {
 
     function updateSanctionStatus(address, bool) external override {}
     function updateSanctionStatusBatch(address[] calldata, bool) external override {}
+    function updateWhitelistStatus(address, bool) external override {}
+    function updateWhitelistStatusBatch(address[] calldata, bool) external override {}
 }
 
 contract MockStrategyAdapter is IStrategyAdapter {

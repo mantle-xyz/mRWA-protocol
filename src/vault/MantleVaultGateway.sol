@@ -28,6 +28,7 @@ contract MantleVaultGateway is
     ISanctionsOracle public sanctionsOracle;
     address public sanctionSafe;
     bool public syncRedeemDisabled;
+    bool public whitelistEnabled;
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -49,36 +50,34 @@ contract MantleVaultGateway is
         syncRedeemDisabled = params.syncRedeemDisabled;
     }
 
-    function deposit(uint256 assets, address receiver) external nonReentrant returns (uint256 shares) {
+    function deposit(uint256 assets) external nonReentrant returns (uint256 shares) {
         if (_isSubscribeRedeemPaused()) revert EnforcedPause();
         _requireNotSanctioned(msg.sender);
-        _requireNotSanctioned(receiver);
-        return vault.depositFor(msg.sender, assets, receiver);
+        _requireWhitelisted(msg.sender);
+        return vault.depositFor(msg.sender, assets, msg.sender);
     }
 
-    function redeem(uint256 shares, address receiver, address owner) external nonReentrant returns (uint256 assets) {
+    function redeem(uint256 shares) external nonReentrant returns (uint256 assets) {
         if (syncRedeemDisabled) revert IMantleYieldVault.Vault__SyncRedeemDisabled();
         if (_isSubscribeRedeemPaused()) revert EnforcedPause();
         _requireNotSanctioned(msg.sender);
-        _requireNotSanctioned(owner);
-        _requireNotSanctioned(receiver);
-        return vault.redeemFor(msg.sender, shares, receiver, owner);
+        _requireWhitelisted(msg.sender);
+        return vault.redeemFor(msg.sender, shares, msg.sender, msg.sender);
     }
 
-    function requestRedeem(uint256 shares, address controller, address owner)
+    function requestRedeem(uint256 shares)
         external
         override
         nonReentrant
         returns (uint256 requestId)
     {
-        if (controller != msg.sender) revert IMantleYieldVault.Vault__NotAuthorized();
         if (_isSubscribeRedeemPaused()) revert EnforcedPause();
-        if (isSanctioned(owner)) {
-            vault.routeSanctionedShares(msg.sender, owner, shares);
+        if (isSanctioned(msg.sender)) {
+            vault.routeSanctionedShares(msg.sender, msg.sender, shares);
             return 0;
         }
         _requireNotSanctioned(msg.sender);
-        return vault.requestRedeemFor(msg.sender, owner, shares);
+        return vault.requestRedeemFor(msg.sender, msg.sender, shares);
     }
 
     function setSyncRedeemDisabled(bool disabled) external override onlyRole(DEFAULT_ADMIN_ROLE) {
@@ -100,12 +99,21 @@ contract MantleVaultGateway is
         emit SanctionSafeUpdated(old, newSanctionSafe);
     }
 
+    function setWhitelistEnabled(bool enabled) external override onlyRole(DEFAULT_ADMIN_ROLE) {
+        whitelistEnabled = enabled;
+        emit WhitelistEnabledUpdated(enabled);
+    }
+
     function isSanctionSafe(address account) external view override returns (bool) {
         return account == sanctionSafe;
     }
 
     function isSanctioned(address account) public view override returns (bool) {
         return sanctionsOracle.isSanctioned(account);
+    }
+
+    function isWhitelisted(address account) public view override returns (bool) {
+        return sanctionsOracle.isWhitelisted(account);
     }
 
     function enforceShareTransfer(address from, address to) external view override {
@@ -173,6 +181,12 @@ contract MantleVaultGateway is
 
     function _requireNotSanctioned(address account) internal view {
         if (isSanctioned(account)) revert IMantleYieldVault.Vault__Sanctioned(account);
+    }
+
+    function _requireWhitelisted(address account) internal view {
+        if (whitelistEnabled && !isWhitelisted(account)) {
+            revert Gateway__NotWhitelisted(account);
+        }
     }
 
     function _isSubscribeRedeemPaused() internal view returns (bool paused_) {

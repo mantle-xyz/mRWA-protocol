@@ -36,6 +36,10 @@ contract SanctionsOracle is ISanctionsOracle, AccessControlUpgradeable {
         uint256 _lastUpdateTimestamp;
         /// @dev Monotonically increasing counter; incremented on every batch call.
         uint256 _batchNonce;
+        /// @dev Whitelist mapping: `true` ⇒ address is currently whitelisted.
+        mapping(address account => bool whitelisted) _whitelisted;
+        /// @dev Running count of distinct whitelisted addresses.
+        uint256 _totalWhitelistedCount;
     }
 
     // keccak256(abi.encode(uint256(keccak256("mrwa.storage.SanctionsOracle")) - 1)) & ~bytes32(uint256(0xff))
@@ -90,8 +94,18 @@ contract SanctionsOracle is ISanctionsOracle, AccessControlUpgradeable {
     }
 
     /// @inheritdoc ISanctionsOracle
+    function isWhitelisted(address account) external view override returns (bool) {
+        return _getStorage()._whitelisted[account];
+    }
+
+    /// @inheritdoc ISanctionsOracle
     function totalSanctionedCount() external view override returns (uint256) {
         return _getStorage()._totalSanctionedCount;
+    }
+
+    /// @inheritdoc ISanctionsOracle
+    function totalWhitelistedCount() external view override returns (uint256) {
+        return _getStorage()._totalWhitelistedCount;
     }
 
     /// @inheritdoc ISanctionsOracle
@@ -208,5 +222,97 @@ contract SanctionsOracle is ISanctionsOracle, AccessControlUpgradeable {
             nonce = s._batchNonce++;
         }
         emit BatchSanctionUpdated(nonce, len, effectiveChanges, sanctioned);
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    //                   WHITELIST WRITE FUNCTIONS
+    // ─────────────────────────────────────────────────────────────
+
+    /// @inheritdoc ISanctionsOracle
+    function updateWhitelistStatus(address account, bool whitelisted) external onlyRole(COMPLIANCE_ROLE) {
+        if (account == address(0)) revert Oracle__ZeroAddress();
+
+        SanctionsOracleStorage storage s = _getStorage();
+        uint256 changed;
+
+        if (s._whitelisted[account] != whitelisted) {
+            s._whitelisted[account] = whitelisted;
+
+            if (whitelisted) {
+                unchecked {
+                    ++s._totalWhitelistedCount;
+                }
+            } else {
+                unchecked {
+                    --s._totalWhitelistedCount;
+                }
+            }
+
+            s._lastUpdateTimestamp = block.timestamp;
+            changed = 1;
+
+            emit WhitelistStatusUpdated(account, whitelisted);
+        }
+
+        uint256 nonce;
+        unchecked {
+            nonce = s._batchNonce++;
+        }
+        emit BatchWhitelistUpdated(nonce, 1, changed, whitelisted);
+    }
+
+    /// @inheritdoc ISanctionsOracle
+    function updateWhitelistStatusBatch(address[] calldata accounts, bool whitelisted)
+        external
+        onlyRole(COMPLIANCE_ROLE)
+    {
+        uint256 len = accounts.length;
+        if (len == 0) revert Oracle__EmptyArray();
+        if (len > MAX_BATCH_SIZE) revert Oracle__BatchTooLarge(len, MAX_BATCH_SIZE);
+
+        SanctionsOracleStorage storage s = _getStorage();
+
+        uint256 cachedCount = s._totalWhitelistedCount;
+        uint256 effectiveChanges;
+
+        for (uint256 i; i < len;) {
+            address account = accounts[i];
+            if (account == address(0)) revert Oracle__ZeroAddress();
+
+            if (s._whitelisted[account] != whitelisted) {
+                s._whitelisted[account] = whitelisted;
+
+                if (whitelisted) {
+                    unchecked {
+                        ++cachedCount;
+                    }
+                } else {
+                    unchecked {
+                        --cachedCount;
+                    }
+                }
+
+                emit WhitelistStatusUpdated(account, whitelisted);
+
+                unchecked {
+                    ++effectiveChanges;
+                }
+            }
+
+            unchecked {
+                ++i;
+            }
+        }
+
+        if (effectiveChanges > 0) {
+            s._totalWhitelistedCount = cachedCount;
+            s._lastUpdateTimestamp = block.timestamp;
+        }
+
+        uint256 nonce;
+        unchecked {
+            nonce = s._batchNonce++;
+        }
+        emit BatchWhitelistUpdated(nonce, len, effectiveChanges, whitelisted);
     }
 }

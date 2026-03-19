@@ -13,16 +13,19 @@ interface IMantleVaultGateway {
         bool syncRedeemDisabled;
     }
 
+    error Gateway__NotWhitelisted(address account);
+
     event SyncRedeemDisabledUpdated(bool disabled);
     event SanctionsOracleUpdated(address indexed oldOracle, address indexed newOracle);
     event SanctionSafeUpdated(address indexed oldSanctionSafe, address indexed newSanctionSafe);
+    event WhitelistEnabledUpdated(bool enabled);
 
     function initialize(InitParams calldata params) external;
 
     function vault() external view returns (IMantleYieldVault);
-    function deposit(uint256 assets, address receiver) external returns (uint256 shares);
-    function redeem(uint256 shares, address receiver, address owner) external returns (uint256 assets);
-    function requestRedeem(uint256 shares, address controller, address owner) external returns (uint256 requestId);
+    function deposit(uint256 assets) external returns (uint256 shares);
+    function redeem(uint256 shares) external returns (uint256 assets);
+    function requestRedeem(uint256 shares) external returns (uint256 requestId);
     function syncRedeemDisabled() external view returns (bool);
     function sanctionsOracle() external view returns (ISanctionsOracle);
     function sanctionSafe() external view returns (address);
@@ -31,6 +34,9 @@ interface IMantleVaultGateway {
     function setSanctionSafe(address newSanctionSafe) external;
     function isSanctionSafe(address account) external view returns (bool);
     function isSanctioned(address account) external view returns (bool);
+    function isWhitelisted(address account) external view returns (bool);
+    function whitelistEnabled() external view returns (bool);
+    function setWhitelistEnabled(bool enabled) external;
     function enforceShareTransfer(address from, address to) external view;
     function resolveRedemptionReceiver(address owner) external view returns (address receiver, bool sanctioned);
 
