@@ -74,9 +74,9 @@ contract DeployStrategyController is Script {
         console2.log("Factory controller cnt:  ", factory.controllerCount());
         console2.log("Has ADMIN_ROLE:          ", controller.hasRole(controller.DEFAULT_ADMIN_ROLE(), admin));
         console2.log(
-            "Has STRATEGY_MANAGER:    ", controller.hasRole(controller.STRATEGY_MANAGER_ROLE(), strategyManager)
+            "Has OP_EXECUTOR_ROLE:    ", controller.hasRole(controller.OPERATOR_EXECUTOR_ROLE(), strategyManager)
         );
-        console2.log("Has EXECUTOR_ROLE:       ", controller.hasRole(controller.EXECUTOR_ROLE(), executorGateway));
+        console2.log("Has PAUSER_ROLE:         ", controller.hasRole(controller.PAUSER_ROLE(), executorGateway));
         console2.log("Buffer target bps:       ", controller.bufferTargetBps());
         console2.log("Rebalance threshold bps: ", controller.rebalanceThresholdBps());
         console2.log("Rebalance cooldown:      ", controller.rebalanceCooldown());

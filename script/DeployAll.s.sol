@@ -311,8 +311,8 @@ contract DeployAll is Script {
         console2.log("--- StrategyController ---");
         console2.log("  Vault:           ", address(d.controller.vault()));
         console2.log("  Has ADMIN:       ", d.controller.hasRole(d.controller.DEFAULT_ADMIN_ROLE(), admin));
-        console2.log("  Has EXECUTOR:    ", d.controller.hasRole(d.controller.EXECUTOR_ROLE(), opExecAddr));
-        console2.log("  Has STR_MANAGER: ", d.controller.hasRole(d.controller.STRATEGY_MANAGER_ROLE(), strategyManager));
+        console2.log("  Has OP_EXECUTOR: ", d.controller.hasRole(d.controller.OPERATOR_EXECUTOR_ROLE(), opExecAddr));
+        console2.log("  Has PAUSER:      ", d.controller.hasRole(d.controller.PAUSER_ROLE(), opExecAddr));
         console2.log("");
         console2.log("--- OperatorExecutor ---");
         console2.log("  Controller:      ", "from signed payload");

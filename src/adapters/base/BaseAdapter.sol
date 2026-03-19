@@ -15,7 +15,7 @@ abstract contract BaseAdapter is IStrategyAdapter, AccessControl, ReentrancyGuar
     using SafeERC20 for IERC20;
 
     bytes32 public constant CONTROLLER_ROLE = keccak256("CONTROLLER_ROLE");
-    bytes32 public constant ACCOUNTANT_ROLE = keccak256("ACCOUNTANT_ROLE");
+    bytes32 public constant ACCOUNTANT_EXECUTOR_ROLE = keccak256("ACCOUNTANT_EXECUTOR_ROLE");
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
 
     IERC20 public immutable ASSET;
@@ -34,6 +34,11 @@ abstract contract BaseAdapter is IStrategyAdapter, AccessControl, ReentrancyGuar
     event ManualPosTokenPriceUpdated(uint256 oldPriceE18, uint256 newPriceE18, address indexed updater);
     event PriceOracleUpdated(address indexed oldOracle, address indexed newOracle, address indexed updater);
 
+    modifier onlyAdmin() {
+        _checkRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        _;
+    }
+
     modifier onlyController() {
         _checkRole(CONTROLLER_ROLE, msg.sender);
         _;
@@ -44,8 +49,8 @@ abstract contract BaseAdapter is IStrategyAdapter, AccessControl, ReentrancyGuar
         _;
     }
 
-    modifier onlyAccountant() {
-        _checkRole(ACCOUNTANT_ROLE, msg.sender);
+    modifier onlyAccountantExecutor() {
+        _checkRole(ACCOUNTANT_EXECUTOR_ROLE, msg.sender);
         _;
     }
 
@@ -56,8 +61,17 @@ abstract contract BaseAdapter is IStrategyAdapter, AccessControl, ReentrancyGuar
         _;
     }
 
-    constructor(address vault_, address admin, address controller, address accountant, address priceOracle_) {
-        if (vault_ == address(0) || admin == address(0) || controller == address(0) || accountant == address(0)) {
+    constructor(
+        address vault_,
+        address admin_,
+        address controller_,
+        address accountantExecutor_,
+        address priceOracle_
+    ) {
+        if (
+            vault_ == address(0) || admin_ == address(0) || controller_ == address(0)
+                || accountantExecutor_ == address(0)
+        ) {
             revert InvalidAddress();
         }
         VAULT = vault_;
@@ -66,11 +80,10 @@ abstract contract BaseAdapter is IStrategyAdapter, AccessControl, ReentrancyGuar
         if (address(ASSET) == address(0)) {
             revert InvalidAddress();
         }
-        _grantRole(DEFAULT_ADMIN_ROLE, admin);
-        _grantRole(ACCOUNTANT_ROLE, accountant);
-        _grantRole(CONTROLLER_ROLE, controller);
-        _grantRole(PAUSER_ROLE, admin);
-        _grantRole(PAUSER_ROLE, controller);
+        _grantRole(DEFAULT_ADMIN_ROLE, admin_);
+        _grantRole(ACCOUNTANT_EXECUTOR_ROLE, accountantExecutor_);
+        _grantRole(CONTROLLER_ROLE, controller_);
+        _grantRole(PAUSER_ROLE, controller_);
     }
 
     // =============================================================
@@ -145,7 +158,7 @@ abstract contract BaseAdapter is IStrategyAdapter, AccessControl, ReentrancyGuar
     }
 
     /// @notice Set manual position-token price (1e18 precision). Set to 0 to clear manual override.
-    function setManualPosTokenPrice(uint256 priceE18) external virtual onlyAccountant {
+    function setManualPosTokenPrice(uint256 priceE18) external virtual onlyAccountantExecutor {
         if (priceOracle != address(0)) {
             revert Unsupported();
         }
@@ -155,14 +168,14 @@ abstract contract BaseAdapter is IStrategyAdapter, AccessControl, ReentrancyGuar
     }
 
     /// @notice Update oracle address. Set to address(0) to disable oracle and use manual/default pricing.
-    function setPriceOracle(address newOracle) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function setPriceOracle(address newOracle) external onlyAdmin {
         address oldOracle = priceOracle;
         priceOracle = newOracle;
         emit PriceOracleUpdated(oldOracle, newOracle, msg.sender);
     }
 
     /// @notice Emergency sweep: transfer all of a token to receiver (admin only)
-    function sweep(address token, address receiver) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function sweep(address token, address receiver) external onlyAdmin {
         if (token == address(0)) {
             revert InvalidToken(token);
         }

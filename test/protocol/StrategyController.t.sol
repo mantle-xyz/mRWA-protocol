@@ -118,6 +118,7 @@ contract MockControllerVault {
     uint256 public inFlightIdCursor;
     mapping(address => uint256) public investInFlightByAdapter;
     mapping(address => uint256) public redeemInFlightByAdapter;
+    mapping(address => bool) public isAdapterRegistry;
 
     struct Req {
         uint256 estimatedAssets;
@@ -188,6 +189,19 @@ contract MockControllerVault {
 
     function approveToAdapter(address adapter, address approveToken, uint256 amount) external {
         ERC20(approveToken).approve(adapter, amount);
+    }
+
+    function isAdapter(address adapter) external view returns (bool) {
+        return isAdapterRegistry[adapter];
+    }
+
+    function registerAdapter(address adapter) external {
+        isAdapterRegistry[adapter] = true;
+    }
+
+    function removeAdapter(address adapter) external {
+        require(investInFlightByAdapter[adapter] == 0 && redeemInFlightByAdapter[adapter] == 0, "HAS_IN_FLIGHT");
+        isAdapterRegistry[adapter] = false;
     }
 
     function updateRequestBatch(uint256[] calldata ids, IMantleYieldVault.RequestStatus newStatus) external {
@@ -310,7 +324,7 @@ contract StrategyControllerUnitTest is Test {
         StrategyController implementation = new StrategyController();
         bytes memory initData = abi.encodeCall(
             StrategyController.initialize,
-            (address(vault), admin, manager, address(executorGateway), 1000, 200, 1 hours)
+            (address(vault), manager, address(executorGateway), manager, 1000, 200, 1 hours)
         );
         controller = StrategyController(address(new ERC1967Proxy(address(implementation), initData)));
 
@@ -320,8 +334,10 @@ contract StrategyControllerUnitTest is Test {
 
     function _registerTwoStrategies() internal {
         vm.startPrank(manager);
-        controller.registerStrategy(address(syncAdapter), 5000, 1, false, true);
-        controller.registerStrategy(address(asyncAdapter), 5000, 2, true, true);
+        controller.registerStrategy(address(syncAdapter), 5000, 1, false);
+        controller.activateStrategy(address(syncAdapter));
+        controller.registerStrategy(address(asyncAdapter), 5000, 2, true);
+        controller.activateStrategy(address(asyncAdapter));
         address[] memory ordered = new address[](2);
         ordered[0] = address(syncAdapter);
         ordered[1] = address(asyncAdapter);
@@ -331,7 +347,8 @@ contract StrategyControllerUnitTest is Test {
 
     function _registerSingleAsyncStrategy() internal {
         vm.startPrank(manager);
-        controller.registerStrategy(address(asyncAdapter), 10_000, 1, true, true);
+        controller.registerStrategy(address(asyncAdapter), 10_000, 1, true);
+        controller.activateStrategy(address(asyncAdapter));
         address[] memory ordered = new address[](1);
         ordered[0] = address(asyncAdapter);
         controller.setStrategyOrder(ordered);
@@ -340,7 +357,8 @@ contract StrategyControllerUnitTest is Test {
 
     function _registerSingleSyncStrategy() internal {
         vm.startPrank(manager);
-        controller.registerStrategy(address(syncAdapter), 10_000, 1, false, true);
+        controller.registerStrategy(address(syncAdapter), 10_000, 1, false);
+        controller.activateStrategy(address(syncAdapter));
         address[] memory ordered = new address[](1);
         ordered[0] = address(syncAdapter);
         controller.setStrategyOrder(ordered);
@@ -350,7 +368,7 @@ contract StrategyControllerUnitTest is Test {
     function test_RevertWhen_InitializeWithNonContractExecutor() public {
         StrategyController implementation = new StrategyController();
         bytes memory initData = abi.encodeCall(
-            StrategyController.initialize, (address(vault), admin, manager, makeAddr("eoa"), 1000, 200, 1 hours)
+            StrategyController.initialize, (address(vault), manager, makeAddr("eoa"), manager, 1000, 200, 1 hours)
         );
         vm.expectRevert();
         new ERC1967Proxy(address(implementation), initData);
@@ -363,15 +381,16 @@ contract StrategyControllerUnitTest is Test {
 
     function test_RevertWhen_RegisterDuplicateStrategy() public {
         vm.startPrank(manager);
-        controller.registerStrategy(address(syncAdapter), 5000, 1, false, true);
+        controller.registerStrategy(address(syncAdapter), 5000, 1, false);
         vm.expectRevert();
-        controller.registerStrategy(address(syncAdapter), 5000, 1, false, true);
+        controller.registerStrategy(address(syncAdapter), 5000, 1, false);
         vm.stopPrank();
     }
 
     function test_RevertWhen_SetStrategyOrderDuplicate() public {
         vm.startPrank(manager);
-        controller.registerStrategy(address(syncAdapter), 10000, 1, false, true);
+        controller.registerStrategy(address(syncAdapter), 10000, 1, false);
+        controller.activateStrategy(address(syncAdapter));
         address[] memory ordered = new address[](2);
         ordered[0] = address(syncAdapter);
         ordered[1] = address(syncAdapter);
@@ -382,7 +401,8 @@ contract StrategyControllerUnitTest is Test {
 
     function test_RevertWhen_SetStrategyOrderWeightNot10000() public {
         vm.startPrank(manager);
-        controller.registerStrategy(address(syncAdapter), 7000, 1, false, true);
+        controller.registerStrategy(address(syncAdapter), 7000, 1, false);
+        controller.activateStrategy(address(syncAdapter));
         address[] memory ordered = new address[](1);
         ordered[0] = address(syncAdapter);
         vm.expectRevert();
@@ -392,8 +412,10 @@ contract StrategyControllerUnitTest is Test {
 
     function test_RevertWhen_SetStrategyOrderPriorityInvalid() public {
         vm.startPrank(manager);
-        controller.registerStrategy(address(syncAdapter), 5000, 2, false, true);
-        controller.registerStrategy(address(asyncAdapter), 5000, 1, true, true);
+        controller.registerStrategy(address(syncAdapter), 5000, 2, false);
+        controller.activateStrategy(address(syncAdapter));
+        controller.registerStrategy(address(asyncAdapter), 5000, 1, true);
+        controller.activateStrategy(address(asyncAdapter));
         address[] memory ordered = new address[](2);
         ordered[0] = address(syncAdapter);
         ordered[1] = address(asyncAdapter);
@@ -413,12 +435,10 @@ contract StrategyControllerUnitTest is Test {
         priorities[0] = 1;
         bool[] memory asyncFlags = new bool[](1);
         asyncFlags[0] = false;
-        bool[] memory activeFlags = new bool[](1);
-        activeFlags[0] = true;
 
         vm.prank(manager);
         vm.expectRevert();
-        controller.updateStrategies(adapters, weights, priorities, asyncFlags, activeFlags);
+        controller.updateStrategies(adapters, weights, priorities, asyncFlags);
     }
 
     function test_RevertWhen_UpdateStrategiesSingleAdapterBreaksPriorityInvariant() public {
@@ -432,12 +452,10 @@ contract StrategyControllerUnitTest is Test {
         priorities[0] = 0;
         bool[] memory asyncFlags = new bool[](1);
         asyncFlags[0] = true;
-        bool[] memory activeFlags = new bool[](1);
-        activeFlags[0] = true;
 
         vm.prank(manager);
         vm.expectRevert();
-        controller.updateStrategies(adapters, weights, priorities, asyncFlags, activeFlags);
+        controller.updateStrategies(adapters, weights, priorities, asyncFlags);
     }
 
     function test_UpdateStrategies_AllowsAtomicWeightShift() public {
@@ -459,12 +477,8 @@ contract StrategyControllerUnitTest is Test {
         asyncFlags[0] = false;
         asyncFlags[1] = true;
 
-        bool[] memory activeFlags = new bool[](2);
-        activeFlags[0] = true;
-        activeFlags[1] = true;
-
         vm.prank(manager);
-        controller.updateStrategies(adapters, weights, priorities, asyncFlags, activeFlags);
+        controller.updateStrategies(adapters, weights, priorities, asyncFlags);
 
         (uint16 syncWeight, uint16 syncPriority, bool syncIsAsync, bool syncIsActive, bool syncExists) =
             controller.strategyInfo(address(syncAdapter));
@@ -496,13 +510,9 @@ contract StrategyControllerUnitTest is Test {
         asyncFlags[0] = false;
         asyncFlags[1] = true;
 
-        bool[] memory activeFlags = new bool[](2);
-        activeFlags[0] = true;
-        activeFlags[1] = true;
-
         vm.prank(manager);
         vm.expectRevert(StrategyController.UpdateStrategiesLengthMismatch.selector);
-        controller.updateStrategies(adapters, weights, priorities, asyncFlags, activeFlags);
+        controller.updateStrategies(adapters, weights, priorities, asyncFlags);
     }
 
     function test_RevertWhen_UpdateStrategiesDuplicateAdapter() public {
@@ -524,15 +534,11 @@ contract StrategyControllerUnitTest is Test {
         asyncFlags[0] = false;
         asyncFlags[1] = false;
 
-        bool[] memory activeFlags = new bool[](2);
-        activeFlags[0] = true;
-        activeFlags[1] = true;
-
         vm.prank(manager);
         vm.expectRevert(
             abi.encodeWithSelector(StrategyController.DuplicateStrategyUpdate.selector, address(syncAdapter))
         );
-        controller.updateStrategies(adapters, weights, priorities, asyncFlags, activeFlags);
+        controller.updateStrategies(adapters, weights, priorities, asyncFlags);
     }
 
     function test_UpdateStrategiesAndOrder_AllowsAtomicPriorityAndOrderShift() public {
@@ -554,20 +560,16 @@ contract StrategyControllerUnitTest is Test {
         asyncFlags[0] = false;
         asyncFlags[1] = true;
 
-        bool[] memory activeFlags = new bool[](2);
-        activeFlags[0] = true;
-        activeFlags[1] = true;
-
         vm.prank(manager);
         vm.expectRevert(abi.encodeWithSelector(StrategyController.InvalidPriorityOrder.selector, address(asyncAdapter)));
-        controller.updateStrategies(adapters, weights, priorities, asyncFlags, activeFlags);
+        controller.updateStrategies(adapters, weights, priorities, asyncFlags);
 
         address[] memory ordered = new address[](2);
         ordered[0] = address(asyncAdapter);
         ordered[1] = address(syncAdapter);
 
         vm.prank(manager);
-        controller.updateStrategiesAndOrder(adapters, weights, priorities, asyncFlags, activeFlags, ordered);
+        controller.updateStrategiesAndOrder(adapters, weights, priorities, asyncFlags, ordered);
 
         assertEq(controller.strategyOrder(0), address(asyncAdapter));
         assertEq(controller.strategyOrder(1), address(syncAdapter));
@@ -596,17 +598,13 @@ contract StrategyControllerUnitTest is Test {
         asyncFlags[0] = false;
         asyncFlags[1] = true;
 
-        bool[] memory activeFlags = new bool[](2);
-        activeFlags[0] = true;
-        activeFlags[1] = true;
-
         address[] memory ordered = new address[](2);
         ordered[0] = address(syncAdapter);
         ordered[1] = address(asyncAdapter);
 
         vm.prank(manager);
         vm.expectRevert(StrategyController.UpdateStrategiesLengthMismatch.selector);
-        controller.updateStrategiesAndOrder(adapters, weights, priorities, asyncFlags, activeFlags, ordered);
+        controller.updateStrategiesAndOrder(adapters, weights, priorities, asyncFlags, ordered);
     }
 
     function test_RevertWhen_RebalanceBeforeCooldown() public {
@@ -622,9 +620,84 @@ contract StrategyControllerUnitTest is Test {
         controller.rebalance();
     }
 
+    function test_GetRebalanceState_ReturnsExpectedAccountingState() public {
+        _registerSingleSyncStrategy();
+        syncAdapter.setTotalValue(2_000e18);
+        asset.mint(address(vault), 1_000e18);
+        vault.setLocked(200e18);
+        vault.createInFlight(address(syncAdapter), address(posToken), 10e18, 300e18, true);
+        vault.createInFlight(address(syncAdapter), address(posToken), 10e18, 100e18, false);
+
+        (
+            uint256 totalCash,
+            uint256 locked,
+            uint256 freeCash,
+            uint256 netAssets,
+            uint256 targetCash,
+            uint256 threshold
+        ) = controller.getRebalanceState();
+
+        assertEq(totalCash, 1_000e18);
+        assertEq(locked, 200e18);
+        assertEq(freeCash, 800e18);
+        assertEq(netAssets, 3_400e18);
+        assertEq(targetCash, 340e18);
+        assertEq(threshold, 68e18);
+    }
+
+    function test_PreviewRebalance_ReturnsNoneWithinThresholdBand() public {
+        asset.mint(address(vault), 1_000e18);
+        vault.setLocked(900e18);
+
+        vm.warp(2 hours);
+        (bool shouldRebalance, uint8 action, uint256 amount) = controller.previewRebalance();
+
+        assertFalse(shouldRebalance);
+        assertEq(action, controller.REBALANCE_ACTION_NONE());
+        assertEq(amount, 0);
+    }
+
+    function test_PreviewRebalance_ReturnsInvestDecision() public {
+        asset.mint(address(vault), 1_000e18);
+
+        vm.warp(2 hours);
+        (bool shouldRebalance, uint8 action, uint256 amount) = controller.previewRebalance();
+
+        assertTrue(shouldRebalance);
+        assertEq(action, controller.REBALANCE_ACTION_INVEST());
+        assertEq(amount, 900e18);
+    }
+
+    function test_PreviewRebalance_ReturnsDivestDecision() public {
+        _registerSingleSyncStrategy();
+        syncAdapter.setTotalValue(3_000e18);
+        asset.mint(address(vault), 1_000e18);
+        vault.setLocked(900e18);
+
+        vm.warp(2 hours);
+        (bool shouldRebalance, uint8 action, uint256 amount) = controller.previewRebalance();
+
+        assertTrue(shouldRebalance);
+        assertEq(action, controller.REBALANCE_ACTION_DIVEST());
+        assertEq(amount, 300e18);
+    }
+
+    function test_PreviewRebalance_ReturnsNoneInsideCooldown() public {
+        asset.mint(address(vault), 1_000e18);
+
+        vm.warp(2 hours);
+        vm.prank(address(executorGateway));
+        controller.rebalance();
+
+        (bool shouldRebalance, uint8 action, uint256 amount) = controller.previewRebalance();
+        assertFalse(shouldRebalance);
+        assertEq(action, controller.REBALANCE_ACTION_NONE());
+        assertEq(amount, 0);
+    }
+
     function test_ExecutorRoleBoundToExecutorGateway() public view {
-        assertTrue(controller.hasRole(controller.EXECUTOR_ROLE(), address(executorGateway)));
-        assertFalse(controller.hasRole(controller.EXECUTOR_ROLE(), manager));
+        assertTrue(controller.hasRole(controller.OPERATOR_EXECUTOR_ROLE(), address(executorGateway)));
+        assertFalse(controller.hasRole(controller.OPERATOR_EXECUTOR_ROLE(), manager));
     }
 
     function test_RevertWhen_RebalanceCalledByNonExecutor() public {
