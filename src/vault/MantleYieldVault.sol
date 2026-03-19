@@ -179,13 +179,13 @@ contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultA
             IERC20(asset()).balanceOf(address(this)) + totalRedeemInFlight,
             IERC20(asset()).balanceOf(address(this)) + totalRedeemInFlight
         );
-        for (uint256 i = 1; i < len; i++) {
-            IStrategyAdapter adapter = IStrategyAdapter(adapters[i-1]);
+        for (uint256 i = 0; i < len; i++) {
+            IStrategyAdapter adapter = IStrategyAdapter(adapters[i]);
             IERC20 token = IERC20(adapter.posToken());
-            uint256 tokenAmount = adapterInvestInFlightTokens[adapters[i-1]] + token.balanceOf(address(this));
+            uint256 tokenAmount = adapterInvestInFlightTokens[adapters[i]] + token.balanceOf(address(this));
             uint256 priceE18 = adapter.getPosTokenPrice();
             uint256 usdcAmount = tokenAmount.mulDiv(priceE18, 1e18, Math.Rounding.Floor);
-            infos[i] = tokenInfo(adapter.posToken(), tokenAmount, usdcAmount);
+            infos[i + 1] = tokenInfo(adapter.posToken(), tokenAmount, usdcAmount);
         }
         return infos;
     }

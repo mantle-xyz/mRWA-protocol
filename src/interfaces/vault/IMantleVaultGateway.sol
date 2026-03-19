@@ -34,12 +34,10 @@ interface IMantleVaultGateway {
     function enforceShareTransfer(address from, address to) external view;
     function resolveRedemptionReceiver(address owner) external view returns (address receiver, bool sanctioned);
 
-    function maxMint(address owner) external view returns (uint256);
-    function maxRedeem(address owner) external view returns (uint256);
-    function previewRedeem(uint256 shares) external view returns (uint256);
-    function previewWithdraw(uint256 assets) external view returns (uint256);
     function maxDeposit(address owner) external view returns (uint256);
-    function maxWithdraw(address owner) external view returns (uint256);
+    function maxRedeem(address owner) external view returns (uint256);
+    function previewDeposit(uint256 assets) external view returns (uint256);
+    function previewRedeem(uint256 shares) external view returns (uint256);
     function managementFeeRate() external view returns (uint256);
     function redemptionFeeBps() external view returns (uint256);
     function exchangeRate() external view returns (uint256);

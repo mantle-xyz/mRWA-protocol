@@ -125,11 +125,6 @@ contract MantleVaultGateway is
         receiver = sanctioned ? sanctionSafe : owner;
     }
 
-    function maxMint(address owner) external view override returns (uint256) {
-        if (_isSubscribeRedeemPaused() || isSanctioned(owner)) return 0;
-        return vault.maxMint(owner);
-    }
-
     function maxRedeem(address owner) external view override returns (uint256) {
         if (_isSubscribeRedeemPaused() || isSanctioned(owner)) return 0;
         return vault.maxRedeem(owner);
@@ -139,18 +134,13 @@ contract MantleVaultGateway is
         return vault.previewRedeem(shares);
     }
 
-    function previewWithdraw(uint256 assets) external view override returns (uint256) {
-        return vault.previewWithdraw(assets);
+    function previewDeposit(uint256 assets) external view override returns (uint256) {
+        return vault.previewDeposit(assets);
     }
 
     function maxDeposit(address owner) external view override returns (uint256) {
         if (_isSubscribeRedeemPaused() || isSanctioned(owner)) return 0;
         return vault.maxDeposit(owner);
-    }
-
-    function maxWithdraw(address owner) external view override returns (uint256) {
-        if (_isSubscribeRedeemPaused() || isSanctioned(owner)) return 0;
-        return vault.maxWithdraw(owner);
     }
 
     function managementFeeRate() external view override returns (uint256) {
