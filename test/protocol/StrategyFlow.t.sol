@@ -42,6 +42,7 @@ contract MockSubRedManagementFlow is ISubRedManagement {
 
 contract MockVaultFlow {
     ERC20 public immutable usdc;
+    uint256 public mockedExchangeRate = 1e18;
 
     uint256 public lockedTotal;
     uint256 public investInFlightTotal;
@@ -94,6 +95,10 @@ contract MockVaultFlow {
 
     function totalLockedLiabilities() external view returns (uint256) {
         return lockedTotal;
+    }
+
+    function exchangeRate() external view returns (uint256) {
+        return mockedExchangeRate;
     }
 
     function totalInvestInFlight() external view returns (uint256) {
@@ -199,7 +204,15 @@ contract MockVaultFlow {
         uint256 assets = liabilities[requestId];
         IMantleYieldVault.RequestStatus status = requestStatus[requestId];
         return
-            (requestId, address(0), 0, assets, status == IMantleYieldVault.RequestStatus.DONE ? assets : 0, 0, status);
+            (
+                requestId,
+                address(0),
+                assets,
+                assets,
+                status == IMantleYieldVault.RequestStatus.DONE ? assets : 0,
+                0,
+                status
+            );
     }
 
     function inFlightRecords(uint256 inFlightId)
@@ -323,7 +336,7 @@ contract StrategyFlowTest is Test {
         vault.setLockedTotal(300e18);
 
         uint256 inFlightBefore = vault.inFlightIdCursor();
-        controller.processRedeemBatch(ids, 300e18);
+        controller.processRedeemBatch(ids);
         uint256 inFlightAfter = vault.inFlightIdCursor();
 
         // PROCESSING
@@ -345,8 +358,11 @@ contract StrategyFlowTest is Test {
         adapters[1] = address(adapterUMINT);
         uint256[] memory posAmounts = new uint256[](2);
         uint256[] memory assetAmounts = new uint256[](2);
+        uint256[] memory settledAssets = new uint256[](2);
+        settledAssets[0] = 150e18;
+        settledAssets[1] = 150e18;
         controller.settleAdapters(adapters, posAmounts, assetAmounts, new uint256[](0), inFlightIds);
-        controller.finalizeRedeemBatch(ids);
+        controller.finalizeRedeemBatch(ids, settledAssets);
 
         // DONE
         assertEq(uint8(vault.requestStatus(ids[0])), uint8(IMantleYieldVault.RequestStatus.DONE));

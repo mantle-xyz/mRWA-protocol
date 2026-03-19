@@ -31,12 +31,16 @@ contract MockStrategyController is IStrategyControllerExecutor {
         rebalanceCount++;
     }
 
-    function processRedeemBatch(uint256[] calldata ids, uint256 batchTotalAsset) external override onlyExecutorGateway {
-        lastProcessHash = keccak256(abi.encode(ids, batchTotalAsset));
+    function processRedeemBatch(uint256[] calldata ids) external override onlyExecutorGateway {
+        lastProcessHash = keccak256(abi.encode(ids));
     }
 
-    function finalizeRedeemBatch(uint256[] calldata ids) external override onlyExecutorGateway {
-        lastAllocateHash = keccak256(abi.encode(ids));
+    function finalizeRedeemBatch(uint256[] calldata ids, uint256[] calldata settledAssets)
+        external
+        override
+        onlyExecutorGateway
+    {
+        lastAllocateHash = keccak256(abi.encode(ids, settledAssets));
     }
 
     function settleAdapter(
@@ -67,11 +71,11 @@ contract OperatorExecutorTest is Test {
         keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
     bytes32 internal constant REBALANCE_TYPEHASH =
         keccak256("Rebalance(address controller,uint256 nonce,uint64 deadline)");
-    bytes32 internal constant PROCESS_REDEEM_BATCH_TYPEHASH = keccak256(
-        "ProcessRedeemBatch(address controller,bytes32 idsHash,uint256 batchTotalAsset,uint256 nonce,uint64 deadline)"
+    bytes32 internal constant PROCESS_REDEEM_BATCH_TYPEHASH =
+        keccak256("ProcessRedeemBatch(address controller,bytes32 idsHash,uint256 nonce,uint64 deadline)");
+    bytes32 internal constant FINALIZE_REDEEM_BATCH_TYPEHASH = keccak256(
+        "FinalizeRedeemBatch(address controller,bytes32 idsHash,bytes32 settledAssetsHash,uint256 nonce,uint64 deadline)"
     );
-    bytes32 internal constant FINALIZE_REDEEM_BATCH_TYPEHASH =
-        keccak256("FinalizeRedeemBatch(address controller,bytes32 idsHash,uint256 nonce,uint64 deadline)");
     bytes32 internal constant SETTLE_ADAPTER_TYPEHASH = keccak256(
         "SettleAdapter(address controller,address adapter,uint256 posAmount,uint256 assetAmount,bytes32 investInFlightIdsHash,bytes32 redeemInFlightIdsHash,uint256 nonce,uint64 deadline)"
     );
@@ -119,24 +123,26 @@ contract OperatorExecutorTest is Test {
 
         uint256 nonce = 0;
         uint64 deadline = uint64(block.timestamp + 1 hours);
-        bytes memory sig = _signProcessRedeemBatch(address(controller), ids, 500, nonce, deadline, signerPk);
+        bytes memory sig = _signProcessRedeemBatch(address(controller), ids, nonce, deadline, signerPk);
 
-        executor.executeProcessRedeemBatch(address(controller), ids, 500, nonce, deadline, sig);
+        executor.executeProcessRedeemBatch(address(controller), ids, nonce, deadline, sig);
 
-        assertEq(controller.lastProcessHash(), keccak256(abi.encode(ids, uint256(500))));
+        assertEq(controller.lastProcessHash(), keccak256(abi.encode(ids)));
     }
 
     function test_ExecuteAllocateBatch_Routes() public {
         uint256[] memory ids = new uint256[](1);
         ids[0] = 9;
+        uint256[] memory settledAssets = new uint256[](1);
+        settledAssets[0] = 123;
 
         uint256 nonce = 0;
         uint64 deadline = uint64(block.timestamp + 1 hours);
-        bytes memory sig = _signFinalizeRedeemBatch(address(controller), ids, nonce, deadline, signerPk);
+        bytes memory sig = _signFinalizeRedeemBatch(address(controller), ids, settledAssets, nonce, deadline, signerPk);
 
-        executor.executeFinalizeRedeemBatch(address(controller), ids, nonce, deadline, sig);
+        executor.executeFinalizeRedeemBatch(address(controller), ids, settledAssets, nonce, deadline, sig);
 
-        assertEq(controller.lastAllocateHash(), keccak256(abi.encode(ids)));
+        assertEq(controller.lastAllocateHash(), keccak256(abi.encode(ids, settledAssets)));
     }
 
     function test_ExecuteSettleAdapter_Routes() public {
@@ -311,20 +317,12 @@ contract OperatorExecutorTest is Test {
     function _signProcessRedeemBatch(
         address controller_,
         uint256[] memory ids,
-        uint256 batchTotalAsset,
         uint256 nonce,
         uint64 deadline,
         uint256 pk
     ) internal view returns (bytes memory) {
         bytes32 structHash = keccak256(
-            abi.encode(
-                PROCESS_REDEEM_BATCH_TYPEHASH,
-                controller_,
-                keccak256(abi.encodePacked(ids)),
-                batchTotalAsset,
-                nonce,
-                deadline
-            )
+            abi.encode(PROCESS_REDEEM_BATCH_TYPEHASH, controller_, keccak256(abi.encodePacked(ids)), nonce, deadline)
         );
         return _signTypedData(structHash, pk);
     }
@@ -332,12 +330,20 @@ contract OperatorExecutorTest is Test {
     function _signFinalizeRedeemBatch(
         address controller_,
         uint256[] memory ids,
+        uint256[] memory settledAssets,
         uint256 nonce,
         uint64 deadline,
         uint256 pk
     ) internal view returns (bytes memory) {
         bytes32 structHash = keccak256(
-            abi.encode(FINALIZE_REDEEM_BATCH_TYPEHASH, controller_, keccak256(abi.encodePacked(ids)), nonce, deadline)
+            abi.encode(
+                FINALIZE_REDEEM_BATCH_TYPEHASH,
+                controller_,
+                keccak256(abi.encodePacked(ids)),
+                keccak256(abi.encodePacked(settledAssets)),
+                nonce,
+                deadline
+            )
         );
         return _signTypedData(structHash, pk);
     }

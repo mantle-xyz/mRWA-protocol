@@ -4,8 +4,8 @@ pragma solidity ^0.8.24;
 /// @notice Execution-only surface used by OperatorExecutor.
 interface IStrategyControllerExecutor {
     function rebalance() external;
-    function processRedeemBatch(uint256[] calldata ids, uint256 batchTotalAsset) external;
-    function finalizeRedeemBatch(uint256[] calldata ids) external;
+    function processRedeemBatch(uint256[] calldata ids) external;
+    function finalizeRedeemBatch(uint256[] calldata ids, uint256[] calldata settledAssets) external;
     function settleAdapter(
         address adapter,
         uint256 posAmount,

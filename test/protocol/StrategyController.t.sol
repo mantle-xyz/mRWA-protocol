@@ -111,6 +111,7 @@ contract MockStrategyAdapter is IStrategyAdapter {
 
 contract MockControllerVault {
     ERC20 public immutable token;
+    uint256 public mockedExchangeRate = 1e18;
 
     uint256 public locked;
     uint256 public investInFlightTotal;
@@ -121,6 +122,7 @@ contract MockControllerVault {
     mapping(address => bool) public isAdapterRegistry;
 
     struct Req {
+        uint256 shares;
         uint256 estimatedAssets;
         uint256 settledAssets;
         IMantleYieldVault.RequestStatus status;
@@ -159,7 +161,17 @@ contract MockControllerVault {
         uint256 settledAssets,
         IMantleYieldVault.RequestStatus status
     ) external {
-        reqs[id] = Req({estimatedAssets: estimatedAssets, settledAssets: settledAssets, status: status});
+        reqs[id] = Req({
+            shares: estimatedAssets, estimatedAssets: estimatedAssets, settledAssets: settledAssets, status: status
+        });
+    }
+
+    function setExchangeRate(uint256 rate) external {
+        mockedExchangeRate = rate;
+    }
+
+    function exchangeRate() external view returns (uint256) {
+        return mockedExchangeRate;
     }
 
     function totalLockedLiabilities() external view returns (uint256) {
@@ -266,7 +278,7 @@ contract MockControllerVault {
         returns (uint256, address, uint256, uint256, uint256, uint256, IMantleYieldVault.RequestStatus)
     {
         Req memory r = reqs[requestId];
-        return (requestId, address(0), 0, r.estimatedAssets, r.settledAssets, 0, r.status);
+        return (requestId, address(0), r.shares, r.estimatedAssets, r.settledAssets, 0, r.status);
     }
 
     function inFlightRecords(uint256 inFlightId)
@@ -717,7 +729,7 @@ contract StrategyControllerUnitTest is Test {
 
         vm.prank(makeAddr("notExecutor"));
         vm.expectRevert();
-        controller.processRedeemBatch(ids, 0);
+        controller.processRedeemBatch(ids);
     }
 
     function test_RebalanceInvestPath_ExecutesDeposits() public {
@@ -746,8 +758,9 @@ contract StrategyControllerUnitTest is Test {
         asyncAdapter.setTotalValue(500e18);
         uint256[] memory ids = new uint256[](1);
         ids[0] = 1;
+        vault.setRequest(1, 700e18, 0, IMantleYieldVault.RequestStatus.PENDING);
         vm.prank(address(executorGateway));
-        controller.processRedeemBatch(ids, 700e18);
+        controller.processRedeemBatch(ids);
 
         assertEq(syncAdapter.withdrawCount(), 1);
         assertEq(asyncAdapter.asyncCount(), 1);
@@ -768,8 +781,9 @@ contract StrategyControllerUnitTest is Test {
         syncAdapter.setFailFlags(false, true, false);
         uint256[] memory ids = new uint256[](1);
         ids[0] = 1;
+        vault.setRequest(1, 700e18, 0, IMantleYieldVault.RequestStatus.PENDING);
         vm.prank(address(executorGateway));
-        controller.processRedeemBatch(ids, 700e18);
+        controller.processRedeemBatch(ids);
 
         assertEq(syncAdapter.withdrawCount(), 0);
         assertEq(asyncAdapter.asyncCount(), 1);
@@ -783,7 +797,7 @@ contract StrategyControllerUnitTest is Test {
 
         vm.prank(address(executorGateway));
         vm.expectRevert(StrategyController.IdsNotSorted.selector);
-        controller.processRedeemBatch(ids, 1);
+        controller.processRedeemBatch(ids);
     }
 
     function test_RevertWhen_ProcessRedeemBatchReplay() public {
@@ -792,69 +806,77 @@ contract StrategyControllerUnitTest is Test {
         ids[0] = 1;
 
         vm.prank(address(executorGateway));
-        controller.processRedeemBatch(ids, 0);
+        controller.processRedeemBatch(ids);
 
         vm.prank(address(executorGateway));
         vm.expectRevert();
-        controller.processRedeemBatch(ids, 0);
+        controller.processRedeemBatch(ids);
     }
 
     function test_RevertWhen_AllocateBeforeProcessing() public {
         _registerTwoStrategies();
         uint256[] memory ids = new uint256[](1);
         ids[0] = 1;
+        uint256[] memory settledAssets = new uint256[](1);
+        settledAssets[0] = 1;
 
         vm.prank(address(executorGateway));
         vm.expectRevert();
-        controller.finalizeRedeemBatch(ids);
+        controller.finalizeRedeemBatch(ids, settledAssets);
     }
 
     function test_RevertWhen_AllocateInsufficientCash() public {
         _registerTwoStrategies();
         uint256[] memory ids = new uint256[](1);
         ids[0] = 11;
+        uint256[] memory settledAssets = new uint256[](1);
+        settledAssets[0] = 100e18;
         vault.setRequest(11, 100e18, 0, IMantleYieldVault.RequestStatus.PROCESSING);
 
         vm.prank(address(executorGateway));
-        controller.processRedeemBatch(ids, 0);
+        controller.processRedeemBatch(ids);
 
         vm.prank(address(executorGateway));
         vm.expectRevert();
-        controller.finalizeRedeemBatch(ids);
+        controller.finalizeRedeemBatch(ids, settledAssets);
     }
 
     function test_AllocateSuccess_AndRevertOnReplayReady() public {
         _registerTwoStrategies();
         uint256[] memory ids = new uint256[](1);
         ids[0] = 21;
+        uint256[] memory settledAssets = new uint256[](1);
+        settledAssets[0] = 100e18;
         vault.setRequest(21, 100e18, 0, IMantleYieldVault.RequestStatus.PROCESSING);
         asset.mint(address(vault), 100e18);
 
         vm.prank(address(executorGateway));
-        controller.processRedeemBatch(ids, 0);
+        controller.processRedeemBatch(ids);
 
         vm.prank(address(executorGateway));
-        controller.finalizeRedeemBatch(ids);
+        controller.finalizeRedeemBatch(ids, settledAssets);
 
         vm.prank(address(executorGateway));
         vm.expectRevert();
-        controller.finalizeRedeemBatch(ids);
+        controller.finalizeRedeemBatch(ids, settledAssets);
     }
 
     function test_FinalizeRedeemBatch_DoesNotSweepOrConfirmInFlight() public {
         _registerSingleAsyncStrategy();
         uint256[] memory ids = new uint256[](1);
         ids[0] = 22;
+        uint256[] memory settledAssetsInput = new uint256[](1);
+        settledAssetsInput[0] = 100e18;
         vault.setRequest(22, 100e18, 0, IMantleYieldVault.RequestStatus.PROCESSING);
         asset.mint(address(vault), 100e18);
         uint256 inFlightId = vault.createInFlight(address(asyncAdapter), address(asset), 0, 10e18, false);
         assertEq(vault.totalRedeemInFlight(), 10e18);
 
         vm.prank(address(executorGateway));
-        controller.processRedeemBatch(ids, 0);
+        controller.processRedeemBatch(ids);
 
         vm.prank(address(executorGateway));
-        controller.finalizeRedeemBatch(ids);
+        controller.finalizeRedeemBatch(ids, settledAssetsInput);
 
         assertEq(asyncAdapter.claimCount(), 0);
         (,,,,,, bool isInvest,, IMantleYieldVault.InFlightStatus status) = vault.inFlightRecords(inFlightId);
@@ -871,10 +893,13 @@ contract StrategyControllerUnitTest is Test {
         uint256[] memory ids = new uint256[](2);
         ids[0] = 2;
         ids[1] = 1;
+        uint256[] memory settledAssets = new uint256[](2);
+        settledAssets[0] = 1;
+        settledAssets[1] = 1;
 
         vm.prank(address(executorGateway));
         vm.expectRevert(StrategyController.IdsNotSorted.selector);
-        controller.finalizeRedeemBatch(ids);
+        controller.finalizeRedeemBatch(ids, settledAssets);
     }
 
     function test_SetAdapterPaused_AndBatchPaused() public {
@@ -989,8 +1014,9 @@ contract StrategyControllerUnitTest is Test {
 
         uint256[] memory ids = new uint256[](1);
         ids[0] = 901;
+        vault.setRequest(901, 300e18, 0, IMantleYieldVault.RequestStatus.PENDING);
         vm.prank(address(executorGateway));
-        controller.processRedeemBatch(ids, 300e18);
+        controller.processRedeemBatch(ids);
 
         assertEq(syncAdapter.withdrawCount(), 0);
         assertEq(vault.inFlightIdCursor(), 1);
@@ -1005,7 +1031,7 @@ contract StrategyControllerUnitTest is Test {
         uint256[] memory ids = new uint256[](1);
         ids[0] = requestId;
         vm.prank(address(executorGateway));
-        controller.processRedeemBatch(ids, 0);
+        controller.processRedeemBatch(ids);
 
         uint256 redeemInFlightId = vault.createInFlight(address(asyncAdapter), address(posToken), 50e18, 100e18, false);
         assertEq(vault.redeemInFlightTotal(), 100e18);
@@ -1040,7 +1066,7 @@ contract StrategyControllerUnitTest is Test {
         uint256[] memory ids = new uint256[](1);
         ids[0] = requestId;
         vm.prank(address(executorGateway));
-        controller.processRedeemBatch(ids, 0);
+        controller.processRedeemBatch(ids);
 
         uint256 investInFlightId = vault.createInFlight(address(asyncAdapter), address(posToken), 25e18, 50e18, true);
         uint256[] memory investInFlightIds = new uint256[](1);
@@ -1076,7 +1102,7 @@ contract StrategyControllerUnitTest is Test {
         uint256[] memory ids = new uint256[](1);
         ids[0] = requestId;
         vm.prank(address(executorGateway));
-        controller.processRedeemBatch(ids, 0);
+        controller.processRedeemBatch(ids);
 
         uint256 investInFlightId = vault.createInFlight(address(asyncAdapter), address(posToken), 25e18, 50e18, true);
         uint256[] memory investInFlightIds = new uint256[](1);
