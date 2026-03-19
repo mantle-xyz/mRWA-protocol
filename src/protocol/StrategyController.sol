@@ -76,9 +76,18 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     event InvestExecuted(address indexed adapter, uint256 amountAsset, uint256 sharesOrPos);
     event InvestSkipped(address indexed adapter, uint256 amountAsset);
     event RebalanceInvest(uint256 requestedAsset, uint256 investedAsset, uint256 remainingAsset);
-    event DivestExecuted(address indexed adapter, uint256 requestedAsset, uint256 receivedAsset);
     event DivestSkipped(address indexed adapter, uint256 requestedAsset);
-    event AsyncRedeemRequested(address indexed adapter, uint256 amountAsset, uint256 inFlightId);
+    /// @notice Unified redeem in-flight record event for both async and sync paths.
+    /// @dev inFlightUsdcAmount semantic differs by path:
+    ///      - async: equals requestedAsset
+    ///      - sync: equals actually received asset amount from withdrawSync
+    event RedeemInFlightRecorded(
+        address indexed adapter,
+        uint256 indexed inFlightId,
+        uint256 requestedAsset,
+        uint256 inFlightUsdcAmount,
+        bool isAsync
+    );
     event DivestIncomplete(uint256 remainingAsset);
     event RedeemBatchProcessing(uint256 indexed batchSize, uint256 batchTotalAsset, uint256 shortfallAsset);
     event RedeemBatchReady(uint256 indexed batchSize, uint256 requiredAsset);
@@ -496,12 +505,10 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         lastRebalance = uint64(block.timestamp);
     }
 
-    /// @notice Move request batch into PROCESSING and trigger divest if free cash is insufficient.
-    function processRedeemBatch(uint256[] calldata ids, uint256 batchTotalAsset)
-        external
-        onlyOperatorExecutor
-        nonReentrant
-    {
+    /// @notice Move redemption requests into PROCESSING and divest when free cash is below batch demand.
+    /// @dev Batch demand is derived on-chain from `ids` using current `exchangeRate`:
+    ///      sum(request.shares * exchangeRate / 1e18).
+    function processRedeemBatch(uint256[] calldata ids) external onlyOperatorExecutor nonReentrant {
         _validateSortedIds(ids);
 
         bytes32 batchKey = _batchKey(ids);
@@ -512,6 +519,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         vault.updateRequestBatch(ids, IMantleYieldVault.RequestStatus.PROCESSING);
         processingBatchDone[batchKey] = true;
 
+        uint256 batchTotalAsset = _batchTotalBySharesAndRate(ids);
         uint256 freeCash = _freeCash();
         uint256 shortfall;
         if (freeCash < batchTotalAsset) {
@@ -526,16 +534,30 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     // Business - Settlement & Redemption
     // =============================================================
 
-    /// @notice Finalize redeem batch: mark requests READY after PROCESSING.
-    /// @dev Settlement actions (sweep/confirm in-flight) are handled by settleAdapter/settleAdapters.
-    function finalizeRedeemBatch(uint256[] calldata ids) external onlyOperatorExecutor nonReentrant {
+    /// @notice Finalize a processed redeem batch with operator-provided per-request settled assets.
+    /// @dev Preconditions:
+    ///      - `processRedeemBatch(ids)` has already been executed for the same sorted `ids`.
+    ///      - Vault has enough underlying balance to cover `sum(settledAssets)`.
+    ///      - Requests are still in PROCESSING state and not finalized yet.
+    ///      Settlement actions (adapter sweep / in-flight confirmation) are not performed here;
+    ///      run settleAdapter/settleAdapters before this function when needed.
+    ///      On success, the vault marks requests DONE and transfers settled assets to receivers.
+    function finalizeRedeemBatch(uint256[] calldata ids, uint256[] calldata settledAssets)
+        external
+        onlyOperatorExecutor
+        nonReentrant
+    {
         _validateSortedIds(ids);
         bytes32 batchKey = _batchKey(ids);
         _ensureBatchReadyAllowed(batchKey);
-        _markBatchReady(ids, batchKey);
+        _markBatchReady(ids, settledAssets, batchKey);
     }
 
-    /// @notice Unified settlement entrypoint for adapter sweep + in-flight confirmations.
+    /// @notice Settle one adapter by sweeping assets back to vault and confirming in-flight records.
+    /// @dev If `posAmount > 0` (`assetAmount > 0`) and vault has pending invest (redeem) in-flight for `adapter`,
+    ///      caller must provide at least one matching pending id in `investInFlightIds` (`redeemInFlightIds`),
+    ///      otherwise the call reverts.
+    ///      Every provided in-flight id must belong to `adapter`, match direction (invest/redeem), and be pending.
     function settleAdapter(
         address adapter,
         uint256 posAmount,
@@ -561,8 +583,12 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         _confirmRedeemInFlightIds(redeemInFlightIds, adapter);
     }
 
-    /// @notice Multi-adapter settlement in a single transaction.
-    /// @dev Sweeps by adapter and confirms invest/redeem in-flight.
+    /// @notice Settle multiple adapters in a single transaction.
+    /// @dev `adapters.length`, `posAmounts.length`, and `assetAmounts.length` must match.
+    ///      For each adapter, when sweep amount is non-zero and vault has pending in-flight,
+    ///      matching in-flight ids must be supplied or the call reverts.
+    ///      `investInFlightIds` and `redeemInFlightIds` are aggregated across all `adapters`;
+    ///      each id must map to one of the provided adapters, match direction, and be pending.
     function settleAdapters(
         address[] calldata adapters,
         uint256[] calldata posAmounts,
@@ -801,28 +827,32 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
                 }
                 vault.approveToAdapter(adapter, token, 0);
 
-                uint256 inFlightId = vault.createInFlight(adapter, token, posAmount, requestAsset, false);
-                emit AsyncRedeemRequested(adapter, requestAsset, inFlightId);
+                _recordAsyncRedeemInFlight(adapter, token, requestAsset, posAmount);
                 remaining -= (coveredByPending + requestAsset);
                 continue;
             }
 
+            // Sync redeem path
             address syncPosToken = _posToken(adapter);
-            uint256 syncPosAllowance;
-            if (syncPosToken != address(0)) {
-                syncPosAllowance = _estimatePosAmount(adapter, requestAsset, requestAsset);
-                if (syncPosAllowance == 0) {
-                    syncPosAllowance = requestAsset;
+            if (syncPosToken == address(0)) {
+                emit DivestSkipped(adapter, requestAsset);
+                if (coveredByPending >= remaining) {
+                    remaining = 0;
+                } else {
+                    remaining -= coveredByPending;
                 }
-                vault.approveToAdapter(adapter, syncPosToken, syncPosAllowance);
+                continue;
             }
 
+            uint256 syncPosAllowance = _estimatePosAmount(adapter, requestAsset, requestAsset);
+            if (syncPosAllowance == 0) {
+                syncPosAllowance = requestAsset;
+            }
+            vault.approveToAdapter(adapter, syncPosToken, syncPosAllowance);
+
             try IStrategyAdapter(adapter).withdrawSync(requestAsset, adapter) returns (uint256 received) {
-                _recordSyncRedeemInFlight(adapter, requestAsset, received);
-                if (syncPosToken != address(0)) {
-                    vault.approveToAdapter(adapter, syncPosToken, 0);
-                }
-                emit DivestExecuted(adapter, requestAsset, received);
+                _recordSyncRedeemInFlight(adapter, syncPosToken, requestAsset, received);
+                vault.approveToAdapter(adapter, syncPosToken, 0);
                 uint256 cleared = coveredByPending + received;
                 if (cleared >= remaining) {
                     remaining = 0;
@@ -830,9 +860,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
                     remaining -= cleared;
                 }
             } catch {
-                if (syncPosToken != address(0)) {
-                    vault.approveToAdapter(adapter, syncPosToken, 0);
-                }
+                vault.approveToAdapter(adapter, syncPosToken, 0);
                 emit DivestSkipped(adapter, requestAsset);
                 if (coveredByPending >= remaining) {
                     remaining = 0;
@@ -898,8 +926,8 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         }
     }
 
-    function _markBatchReady(uint256[] calldata ids, bytes32 batchKey) internal {
-        (uint256 required, uint256[] memory settledAssets) = _batchRequiredAssets(ids);
+    function _markBatchReady(uint256[] calldata ids, uint256[] calldata settledAssets, bytes32 batchKey) internal {
+        uint256 required = _batchRequiredAssets(ids, settledAssets);
         uint256 available = asset.balanceOf(address(vault));
         if (available < required) {
             revert InsufficientCashForReady(required, available);
@@ -1028,10 +1056,26 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         vault.createInFlight(adapter, token, expectedPos, assetAmount, true);
     }
 
+    /// @dev Async redeem path records pending USDC and emits unified in-flight events.
+    function _recordAsyncRedeemInFlight(address adapter, address token, uint256 requestedAsset, uint256 posAmount)
+        internal
+        returns (uint256 inFlightId)
+    {
+        if (requestedAsset == 0 || posAmount == 0) {
+            return 0;
+        }
+
+        inFlightId = vault.createInFlight(adapter, token, posAmount, requestedAsset, false);
+        emit RedeemInFlightRecorded(adapter, inFlightId, requestedAsset, requestedAsset, true);
+    }
+
     /// @dev Sync redeem path records pending USDC on adapter and waits for off-chain settlement.
-    function _recordSyncRedeemInFlight(address adapter, uint256 requestedAsset, uint256 receivedAsset) internal {
+    function _recordSyncRedeemInFlight(address adapter, address token, uint256 requestedAsset, uint256 receivedAsset)
+        internal
+        returns (uint256 inFlightId)
+    {
         if (requestedAsset == 0 || receivedAsset == 0) {
-            return;
+            return 0;
         }
 
         uint256 posAmount = _estimatePosAmount(adapter, requestedAsset, requestedAsset);
@@ -1039,8 +1083,8 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
             posAmount = requestedAsset;
         }
 
-        address token = _posToken(adapter);
-        vault.createInFlight(adapter, token, posAmount, receivedAsset, false);
+        inFlightId = vault.createInFlight(adapter, token, posAmount, receivedAsset, false);
+        emit RedeemInFlightRecorded(adapter, inFlightId, requestedAsset, receivedAsset, false);
     }
 
     function _estimatePosAmount(address adapter, uint256 assetAmount, uint256 fallbackAmount)
@@ -1067,24 +1111,29 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     // Batch Validation Helpers
     // =============================================================
 
-    function _batchRequiredAssets(uint256[] calldata ids)
+    function _batchRequiredAssets(uint256[] calldata ids, uint256[] calldata settledAssets)
         internal
         view
-        returns (uint256 required, uint256[] memory settledAssets)
+        returns (uint256 required)
     {
-        settledAssets = new uint256[](ids.length);
+        if (ids.length != settledAssets.length) {
+            revert ClaimInputsLengthMismatch();
+        }
         for (uint256 i = 0; i < ids.length; i++) {
-            (,,, uint256 estimatedAssets_, uint256 settledAssets_,, IMantleYieldVault.RequestStatus status) =
-                vault.requests(ids[i]);
-            if (status != IMantleYieldVault.RequestStatus.PROCESSING && status != IMantleYieldVault.RequestStatus.DONE)
-            {
+            (,,,,,, IMantleYieldVault.RequestStatus status) = vault.requests(ids[i]);
+            if (status != IMantleYieldVault.RequestStatus.PROCESSING) {
                 revert InvalidRequestState(ids[i], status);
             }
+            required += settledAssets[i];
+        }
+    }
 
-            // Before READY, request.settledAssets is usually 0. Use estimatedAssets as default settlement.
-            uint256 effectiveSettled = settledAssets_ == 0 ? estimatedAssets_ : settledAssets_;
-            settledAssets[i] = effectiveSettled;
-            required += effectiveSettled;
+    /// @dev Process stage uses current exchange rate to estimate batch settlement amount from request shares.
+    function _batchTotalBySharesAndRate(uint256[] calldata ids) internal view returns (uint256 totalAssets) {
+        uint256 rate = vault.exchangeRate();
+        for (uint256 i = 0; i < ids.length; i++) {
+            (,, uint256 shares,,,,) = vault.requests(ids[i]);
+            totalAssets += Math.mulDiv(shares, rate, 1e18, Math.Rounding.Floor);
         }
     }
 

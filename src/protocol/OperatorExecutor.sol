@@ -18,11 +18,11 @@ contract OperatorExecutor is AccessControlUpgradeable, UUPSUpgradeable, EIP712Up
 
     bytes32 public constant REBALANCE_TYPEHASH =
         keccak256("Rebalance(address controller,uint256 nonce,uint64 deadline)");
-    bytes32 public constant PROCESS_REDEEM_BATCH_TYPEHASH = keccak256(
-        "ProcessRedeemBatch(address controller,bytes32 idsHash,uint256 batchTotalAsset,uint256 nonce,uint64 deadline)"
+    bytes32 public constant PROCESS_REDEEM_BATCH_TYPEHASH =
+        keccak256("ProcessRedeemBatch(address controller,bytes32 idsHash,uint256 nonce,uint64 deadline)");
+    bytes32 public constant FINALIZE_REDEEM_BATCH_TYPEHASH = keccak256(
+        "FinalizeRedeemBatch(address controller,bytes32 idsHash,bytes32 settledAssetsHash,uint256 nonce,uint64 deadline)"
     );
-    bytes32 public constant FINALIZE_REDEEM_BATCH_TYPEHASH =
-        keccak256("FinalizeRedeemBatch(address controller,bytes32 idsHash,uint256 nonce,uint64 deadline)");
     bytes32 public constant SETTLE_ADAPTER_TYPEHASH = keccak256(
         "SettleAdapter(address controller,address adapter,uint256 posAmount,uint256 assetAmount,bytes32 investInFlightIdsHash,bytes32 redeemInFlightIdsHash,uint256 nonce,uint64 deadline)"
     );
@@ -41,7 +41,6 @@ contract OperatorExecutor is AccessControlUpgradeable, UUPSUpgradeable, EIP712Up
         address indexed controller,
         uint256 nonce,
         bytes32 idsHash,
-        uint256 batchTotalAsset,
         bytes32 commandHash
     );
     event FinalizeRedeemBatchExecuted(
@@ -50,6 +49,7 @@ contract OperatorExecutor is AccessControlUpgradeable, UUPSUpgradeable, EIP712Up
         address indexed controller,
         uint256 nonce,
         bytes32 idsHash,
+        bytes32 settledAssetsHash,
         bytes32 commandHash
     );
     event SettleAdapterExecuted(
@@ -125,37 +125,39 @@ contract OperatorExecutor is AccessControlUpgradeable, UUPSUpgradeable, EIP712Up
     function executeProcessRedeemBatch(
         address controller_,
         uint256[] calldata ids,
-        uint256 batchTotalAsset,
         uint256 nonce,
         uint64 deadline,
         bytes calldata signature
     ) external {
         bytes32 idsHash = _hashUint256Array(ids);
-        bytes32 structHash = keccak256(
-            abi.encode(PROCESS_REDEEM_BATCH_TYPEHASH, controller_, idsHash, batchTotalAsset, nonce, deadline)
-        );
+        bytes32 structHash = keccak256(abi.encode(PROCESS_REDEEM_BATCH_TYPEHASH, controller_, idsHash, nonce, deadline));
         (address signer, bytes32 commandHash) = _verifyAndConsume(structHash, nonce, deadline, signature);
 
         IStrategyControllerExecutor targetController = _controllerOf(controller_);
-        targetController.processRedeemBatch(ids, batchTotalAsset);
-        emit ProcessRedeemBatchExecuted(signer, msg.sender, controller_, nonce, idsHash, batchTotalAsset, commandHash);
+        targetController.processRedeemBatch(ids);
+        emit ProcessRedeemBatchExecuted(signer, msg.sender, controller_, nonce, idsHash, commandHash);
     }
 
     function executeFinalizeRedeemBatch(
         address controller_,
         uint256[] calldata ids,
+        uint256[] calldata settledAssets,
         uint256 nonce,
         uint64 deadline,
         bytes calldata signature
     ) external {
         bytes32 idsHash = _hashUint256Array(ids);
-        bytes32 structHash =
-            keccak256(abi.encode(FINALIZE_REDEEM_BATCH_TYPEHASH, controller_, idsHash, nonce, deadline));
+        bytes32 settledAssetsHash = _hashUint256Array(settledAssets);
+        bytes32 structHash = keccak256(
+            abi.encode(FINALIZE_REDEEM_BATCH_TYPEHASH, controller_, idsHash, settledAssetsHash, nonce, deadline)
+        );
         (address signer, bytes32 commandHash) = _verifyAndConsume(structHash, nonce, deadline, signature);
 
         IStrategyControllerExecutor targetController = _controllerOf(controller_);
-        targetController.finalizeRedeemBatch(ids);
-        emit FinalizeRedeemBatchExecuted(signer, msg.sender, controller_, nonce, idsHash, commandHash);
+        targetController.finalizeRedeemBatch(ids, settledAssets);
+        emit FinalizeRedeemBatchExecuted(
+            signer, msg.sender, controller_, nonce, idsHash, settledAssetsHash, commandHash
+        );
     }
 
     function executeSettleAdapter(
