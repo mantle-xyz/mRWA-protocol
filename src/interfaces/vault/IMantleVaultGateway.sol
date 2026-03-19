@@ -45,4 +45,5 @@ interface IMantleVaultGateway {
     function exchangeRate() external view returns (uint256);
     function totalAssets() external view returns (uint256);
     function getTokenInfos() external view returns (IMantleYieldVault.tokenInfo[] memory);
+    function getFreeCash() external view returns (uint256);
 }

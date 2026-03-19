@@ -185,7 +185,7 @@ contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultA
             uint256 tokenAmount = adapterInvestInFlightTokens[adapters[i-1]] + token.balanceOf(address(this));
             uint256 priceE18 = adapter.getPosTokenPrice();
             uint256 usdcAmount = tokenAmount.mulDiv(priceE18, 1e18, Math.Rounding.Floor);
-            infos[i] = tokenInfo(token, tokenAmount, usdcAmount);
+            infos[i] = tokenInfo(adapter.posToken(), tokenAmount, usdcAmount);
         }
         return infos;
     }

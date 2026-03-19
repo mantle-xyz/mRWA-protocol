@@ -173,6 +173,10 @@ contract MantleVaultGateway is
         return vault.getTokenInfos();
     }
 
+    function getFreeCash() external view override returns (uint256) {
+        return vault.getFreeCash();
+    }
+
     function _onlyVault() internal view {
         if (msg.sender != address(vault)) revert IMantleYieldVault.Vault__NotAuthorized();
     }
