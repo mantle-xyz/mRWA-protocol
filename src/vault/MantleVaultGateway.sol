@@ -77,6 +77,7 @@ contract MantleVaultGateway is
             return 0;
         }
         _requireNotSanctioned(msg.sender);
+        _requireWhitelisted(msg.sender);
         return vault.requestRedeemFor(msg.sender, msg.sender, shares);
     }
 
