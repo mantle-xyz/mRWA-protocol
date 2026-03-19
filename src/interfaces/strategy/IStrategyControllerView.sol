@@ -13,6 +13,18 @@ interface IStrategyControllerView {
 
     function strategyOrderLength() external view returns (uint256);
     function strategyOrder(uint256 index) external view returns (address);
+    function getRebalanceState()
+        external
+        view
+        returns (
+            uint256 totalCash,
+            uint256 locked,
+            uint256 freeCash,
+            uint256 netAssets,
+            uint256 targetCash,
+            uint256 threshold
+        );
+    function previewRebalance() external view returns (bool shouldRebalance, uint8 action, uint256 amount);
 
     function strategyInfo(address adapter)
         external

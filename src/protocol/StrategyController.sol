@@ -10,10 +10,13 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 contract StrategyController is Initializable, AccessControlUpgradeable, ReentrancyGuard {
-    bytes32 public constant EXECUTOR_ROLE = keccak256("EXECUTOR_ROLE");
-    bytes32 public constant STRATEGY_MANAGER_ROLE = keccak256("STRATEGY_MANAGER_ROLE");
+    bytes32 public constant OPERATOR_EXECUTOR_ROLE = keccak256("OPERATOR_EXECUTOR_ROLE");
+    bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
 
     uint256 public constant BPS_DENOMINATOR = 10_000;
+    uint8 public constant REBALANCE_ACTION_NONE = 0;
+    uint8 public constant REBALANCE_ACTION_INVEST = 1;
+    uint8 public constant REBALANCE_ACTION_DIVEST = 2;
 
     IERC20 public asset;
     IMantleYieldVault public vault;
@@ -36,12 +39,29 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     mapping(bytes32 => bool) public processingBatchDone;
     mapping(bytes32 => bool) public readyBatchDone;
 
+    modifier onlyAdmin() {
+        _checkRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        _;
+    }
+
+    modifier onlyPauser() {
+        _checkRole(PAUSER_ROLE, msg.sender);
+        _;
+    }
+
+    modifier onlyOperatorExecutor() {
+        _checkRole(OPERATOR_EXECUTOR_ROLE, msg.sender);
+        _;
+    }
+
     event StrategyRegistered(
         address indexed adapter, uint16 targetWeightBps, uint16 priority, bool isAsync, bool isActive
     );
     event StrategyUpdated(
         address indexed adapter, uint16 targetWeightBps, uint16 priority, bool isAsync, bool isActive
     );
+    event StrategyActivated(address indexed adapter);
+    event StrategyDeactivated(address indexed adapter);
     event RiskParamsUpdated(uint16 bufferTargetBps, uint16 rebalanceThresholdBps, uint64 rebalanceCooldown);
     event StrategyOrderUpdated(address[] orderedStrategies);
     event AdapterPauseUpdated(address indexed adapter, bool paused);
@@ -88,6 +108,10 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     error ClaimInputsLengthMismatch();
     error UpdateStrategiesLengthMismatch();
     error DuplicateStrategyUpdate(address adapter);
+    error StrategyAlreadyActive(address adapter);
+    error StrategyAlreadyInactive(address adapter);
+    error StrategyInOrder(address adapter);
+    error StrategyHasInFlight(address adapter, uint256 pendingInvestTokens, uint256 pendingRedeemUsdc);
 
     constructor() {
         _disableInitializers();
@@ -99,21 +123,18 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
 
     function initialize(
         address vault_,
-        address admin,
-        address strategyManager,
-        address executorGateway,
+        address admin_,
+        address operatorExecutor_,
+        address pauser_,
         uint16 bufferTargetBps_,
         uint16 rebalanceThresholdBps_,
         uint64 rebalanceCooldown_
     ) external initializer {
-        if (
-            vault_ == address(0) || admin == address(0) || strategyManager == address(0)
-                || executorGateway == address(0)
-        ) {
+        if (vault_ == address(0) || admin_ == address(0) || operatorExecutor_ == address(0) || pauser_ == address(0)) {
             revert InvalidAddress();
         }
-        if (executorGateway.code.length == 0) {
-            revert InvalidExecutorContract(executorGateway);
+        if (operatorExecutor_.code.length == 0) {
+            revert InvalidExecutorContract(operatorExecutor_);
         }
         if (bufferTargetBps_ > BPS_DENOMINATOR || rebalanceThresholdBps_ > BPS_DENOMINATOR) {
             revert InvalidBps();
@@ -130,9 +151,9 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         rebalanceThresholdBps = rebalanceThresholdBps_;
         rebalanceCooldown = rebalanceCooldown_;
 
-        _grantRole(DEFAULT_ADMIN_ROLE, admin);
-        _grantRole(STRATEGY_MANAGER_ROLE, strategyManager);
-        _grantRole(EXECUTOR_ROLE, executorGateway);
+        _grantRole(DEFAULT_ADMIN_ROLE, admin_);
+        _grantRole(OPERATOR_EXECUTOR_ROLE, operatorExecutor_);
+        _grantRole(PAUSER_ROLE, pauser_);
     }
 
     // =============================================================
@@ -143,9 +164,37 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         return strategyOrder.length;
     }
 
+    /// @notice Read current rebalance accounting state with the same formula used by rebalance().
+    function getRebalanceState()
+        external
+        view
+        returns (
+            uint256 totalCash,
+            uint256 locked,
+            uint256 freeCash,
+            uint256 netAssets,
+            uint256 targetCash,
+            uint256 threshold
+        )
+    {
+        return _readRebalanceState();
+    }
+
+    /// @notice Preview whether rebalance should run at current block and what action is expected.
+    /// @dev action: 0 = NONE, 1 = INVEST, 2 = DIVEST.
+    function previewRebalance() external view returns (bool shouldRebalance, uint8 action, uint256 amount) {
+        if (block.timestamp < uint256(lastRebalance) + uint256(rebalanceCooldown)) {
+            return (false, REBALANCE_ACTION_NONE, 0);
+        }
+
+        (,, uint256 freeCash,, uint256 targetCash, uint256 threshold) = _readRebalanceState();
+        (action, amount) = _computeRebalanceDecision(freeCash, targetCash, threshold);
+        shouldRebalance = action != REBALANCE_ACTION_NONE;
+    }
+
     function setRiskParams(uint16 bufferTargetBps_, uint16 rebalanceThresholdBps_, uint64 rebalanceCooldown_)
         external
-        onlyRole(STRATEGY_MANAGER_ROLE)
+        onlyAdmin
     {
         if (bufferTargetBps_ > BPS_DENOMINATOR || rebalanceThresholdBps_ > BPS_DENOMINATOR) {
             revert InvalidBps();
@@ -156,12 +205,15 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         emit RiskParamsUpdated(bufferTargetBps_, rebalanceThresholdBps_, rebalanceCooldown_);
     }
 
-    function registerStrategy(address adapter, uint16 targetWeightBps, uint16 priority, bool isAsync, bool isActive)
+    function registerStrategy(address adapter, uint16 targetWeightBps, uint16 priority, bool isAsync)
         external
-        onlyRole(STRATEGY_MANAGER_ROLE)
+        onlyAdmin
     {
         if (adapter == address(0)) {
             revert InvalidAddress();
+        }
+        if (adapter.code.length == 0) {
+            revert InvalidStrategy(adapter);
         }
         if (targetWeightBps > BPS_DENOMINATOR) {
             revert InvalidBps();
@@ -170,28 +222,72 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
             revert InvalidStrategy(adapter);
         }
 
+        _ensureVaultAdapterRegistered(adapter);
+
         strategyInfo[adapter] = StrategyInfo({
-            targetWeightBps: targetWeightBps, priority: priority, isAsync: isAsync, isActive: isActive, exists: true
+            targetWeightBps: targetWeightBps, priority: priority, isAsync: isAsync, isActive: false, exists: true
         });
 
         _validateCurrentOrderInvariant();
-        emit StrategyRegistered(adapter, targetWeightBps, priority, isAsync, isActive);
+        emit StrategyRegistered(adapter, targetWeightBps, priority, isAsync, false);
+    }
+
+    function activateStrategy(address adapter) external onlyAdmin {
+        StrategyInfo storage info = strategyInfo[adapter];
+        if (!info.exists) {
+            revert InvalidStrategy(adapter);
+        }
+        if (info.isActive) {
+            revert StrategyAlreadyActive(adapter);
+        }
+
+        _ensureVaultAdapterRegistered(adapter);
+        info.isActive = true;
+
+        emit StrategyActivated(adapter);
+        emit StrategyUpdated(adapter, info.targetWeightBps, info.priority, info.isAsync, true);
+    }
+
+    function deactivateStrategy(address adapter) external onlyAdmin {
+        StrategyInfo storage info = strategyInfo[adapter];
+        if (!info.exists) {
+            revert InvalidStrategy(adapter);
+        }
+        if (!info.isActive) {
+            revert StrategyAlreadyInactive(adapter);
+        }
+        if (_isAdapterInOrder(adapter)) {
+            revert StrategyInOrder(adapter);
+        }
+
+        uint256 pendingInvest = vault.adapterInvestInFlightTokens(adapter);
+        uint256 pendingRedeem = vault.adapterRedeemInFlightUsdc(adapter);
+        if (pendingInvest > 0 || pendingRedeem > 0) {
+            revert StrategyHasInFlight(adapter, pendingInvest, pendingRedeem);
+        }
+
+        if (vault.isAdapter(adapter)) {
+            vault.removeAdapter(adapter);
+        }
+
+        info.isActive = false;
+        emit StrategyDeactivated(adapter);
+        emit StrategyUpdated(adapter, info.targetWeightBps, info.priority, info.isAsync, false);
     }
 
     function updateStrategies(
         address[] calldata adapters,
         uint16[] calldata targetWeightBpsList,
         uint16[] calldata priorities,
-        bool[] calldata isAsyncList,
-        bool[] calldata isActiveList
-    ) external onlyRole(STRATEGY_MANAGER_ROLE) {
-        _validateUpdateStrategiesInputs(adapters, targetWeightBpsList, priorities, isAsyncList, isActiveList);
+        bool[] calldata isAsyncList
+    ) external onlyAdmin {
+        _validateUpdateStrategiesInputs(adapters, targetWeightBpsList, priorities, isAsyncList);
 
         _validateNoDuplicateAdapters(adapters);
 
         uint256 len = adapters.length;
         for (uint256 i = 0; i < len; i++) {
-            _applyStrategyUpdate(adapters[i], targetWeightBpsList[i], priorities[i], isAsyncList[i], isActiveList[i]);
+            _applyStrategyUpdate(adapters[i], targetWeightBpsList[i], priorities[i], isAsyncList[i]);
         }
 
         _validateCurrentOrderInvariant();
@@ -202,21 +298,20 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         uint16[] calldata targetWeightBpsList,
         uint16[] calldata priorities,
         bool[] calldata isAsyncList,
-        bool[] calldata isActiveList,
         address[] calldata orderedStrategies
-    ) external onlyRole(STRATEGY_MANAGER_ROLE) {
-        _validateUpdateStrategiesInputs(adapters, targetWeightBpsList, priorities, isAsyncList, isActiveList);
+    ) external onlyAdmin {
+        _validateUpdateStrategiesInputs(adapters, targetWeightBpsList, priorities, isAsyncList);
         _validateNoDuplicateAdapters(adapters);
 
         uint256 len = adapters.length;
         for (uint256 i = 0; i < len; i++) {
-            _applyStrategyUpdate(adapters[i], targetWeightBpsList[i], priorities[i], isAsyncList[i], isActiveList[i]);
+            _applyStrategyUpdate(adapters[i], targetWeightBpsList[i], priorities[i], isAsyncList[i]);
         }
 
         _setStrategyOrder(orderedStrategies);
     }
 
-    function setStrategyOrder(address[] calldata orderedStrategies) external onlyRole(STRATEGY_MANAGER_ROLE) {
+    function setStrategyOrder(address[] calldata orderedStrategies) external onlyAdmin {
         _setStrategyOrder(orderedStrategies);
     }
 
@@ -260,14 +355,10 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         address[] calldata adapters,
         uint16[] calldata targetWeightBpsList,
         uint16[] calldata priorities,
-        bool[] calldata isAsyncList,
-        bool[] calldata isActiveList
+        bool[] calldata isAsyncList
     ) internal pure {
         uint256 len = adapters.length;
-        if (
-            len != targetWeightBpsList.length || len != priorities.length || len != isAsyncList.length
-                || len != isActiveList.length
-        ) {
+        if (len != targetWeightBpsList.length || len != priorities.length || len != isAsyncList.length) {
             revert UpdateStrategiesLengthMismatch();
         }
     }
@@ -302,13 +393,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         }
     }
 
-    function _applyStrategyUpdate(
-        address adapter,
-        uint16 targetWeightBps,
-        uint16 priority,
-        bool isAsync,
-        bool isActive
-    ) internal {
+    function _applyStrategyUpdate(address adapter, uint16 targetWeightBps, uint16 priority, bool isAsync) internal {
         if (targetWeightBps > BPS_DENOMINATOR) {
             revert InvalidBps();
         }
@@ -320,9 +405,8 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         info.targetWeightBps = targetWeightBps;
         info.priority = priority;
         info.isAsync = isAsync;
-        info.isActive = isActive;
 
-        emit StrategyUpdated(adapter, targetWeightBps, priority, isAsync, isActive);
+        emit StrategyUpdated(adapter, targetWeightBps, priority, isAsync, info.isActive);
     }
 
     function _validateNoDuplicateAdapters(address[] calldata adapters) internal pure {
@@ -337,13 +421,29 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         }
     }
 
+    function _ensureVaultAdapterRegistered(address adapter) internal {
+        if (!vault.isAdapter(adapter)) {
+            vault.registerAdapter(adapter);
+        }
+    }
+
+    function _isAdapterInOrder(address adapter) internal view returns (bool) {
+        uint256 len = strategyOrder.length;
+        for (uint256 i = 0; i < len; i++) {
+            if (strategyOrder[i] == adapter) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     // =============================================================
     // Emergency Controls
     // =============================================================
 
     /// @notice Set adapter pause state via controller.
     /// @dev Controller must hold PAUSER_ROLE on target adapter.
-    function setAdapterPaused(address adapter, bool paused_) external onlyRole(STRATEGY_MANAGER_ROLE) nonReentrant {
+    function setAdapterPaused(address adapter, bool paused_) external onlyPauser nonReentrant {
         if (!strategyInfo[adapter].exists) {
             revert InvalidStrategy(adapter);
         }
@@ -353,11 +453,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
 
     /// @notice Batch set adapter pause state via controller.
     /// @dev Controller must hold PAUSER_ROLE on each target adapter.
-    function setAdaptersPaused(address[] calldata adapters, bool paused_)
-        external
-        onlyRole(STRATEGY_MANAGER_ROLE)
-        nonReentrant
-    {
+    function setAdaptersPaused(address[] calldata adapters, bool paused_) external onlyPauser nonReentrant {
         uint256 len = adapters.length;
         for (uint256 i = 0; i < len; i++) {
             address adapter = adapters[i];
@@ -375,7 +471,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
 
     /// @notice Execute buffer-based rebalance.
     /// @dev Invests when free cash is above target+threshold, divests when below target-threshold.
-    function rebalance() external onlyRole(EXECUTOR_ROLE) nonReentrant {
+    function rebalance() external onlyOperatorExecutor nonReentrant {
         if (block.timestamp < uint256(lastRebalance) + uint256(rebalanceCooldown)) {
             revert CooldownNotElapsed();
         }
@@ -390,10 +486,11 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         ) = _readRebalanceState();
         emit RebalanceEvaluated(totalCash, locked, freeCash, netAssets, targetCash, threshold);
 
-        if (freeCash > targetCash + threshold) {
-            _invest(freeCash - targetCash);
-        } else if (freeCash + threshold < targetCash) {
-            _divest(targetCash - freeCash);
+        (uint8 action, uint256 amount) = _computeRebalanceDecision(freeCash, targetCash, threshold);
+        if (action == REBALANCE_ACTION_INVEST) {
+            _invest(amount);
+        } else if (action == REBALANCE_ACTION_DIVEST) {
+            _divest(amount);
         }
 
         lastRebalance = uint64(block.timestamp);
@@ -402,7 +499,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     /// @notice Move request batch into PROCESSING and trigger divest if free cash is insufficient.
     function processRedeemBatch(uint256[] calldata ids, uint256 batchTotalAsset)
         external
-        onlyRole(EXECUTOR_ROLE)
+        onlyOperatorExecutor
         nonReentrant
     {
         _validateSortedIds(ids);
@@ -431,7 +528,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
 
     /// @notice Finalize redeem batch: mark requests READY after PROCESSING.
     /// @dev Settlement actions (sweep/confirm in-flight) are handled by settleAdapter/settleAdapters.
-    function finalizeRedeemBatch(uint256[] calldata ids) external onlyRole(EXECUTOR_ROLE) nonReentrant {
+    function finalizeRedeemBatch(uint256[] calldata ids) external onlyOperatorExecutor nonReentrant {
         _validateSortedIds(ids);
         bytes32 batchKey = _batchKey(ids);
         _ensureBatchReadyAllowed(batchKey);
@@ -445,7 +542,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         uint256 assetAmount,
         uint256[] calldata investInFlightIds,
         uint256[] calldata redeemInFlightIds
-    ) external onlyRole(EXECUTOR_ROLE) nonReentrant {
+    ) external onlyOperatorExecutor nonReentrant {
         if (
             posAmount > 0 && vault.adapterInvestInFlightTokens(adapter) > 0
                 && !_hasPendingInvestInFlightForAdapter(adapter, investInFlightIds)
@@ -472,7 +569,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         uint256[] calldata assetAmounts,
         uint256[] calldata investInFlightIds,
         uint256[] calldata redeemInFlightIds
-    ) external onlyRole(EXECUTOR_ROLE) nonReentrant {
+    ) external onlyOperatorExecutor nonReentrant {
         uint256 len = adapters.length;
         if (len != posAmounts.length || len != assetAmounts.length) {
             revert ClaimInputsLengthMismatch();
@@ -534,6 +631,20 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
 
     function _freeCash() internal view returns (uint256) {
         return vault.getFreeCash();
+    }
+
+    function _computeRebalanceDecision(uint256 freeCash, uint256 targetCash, uint256 threshold)
+        internal
+        pure
+        returns (uint8 action, uint256 amount)
+    {
+        if (freeCash > targetCash + threshold) {
+            return (REBALANCE_ACTION_INVEST, freeCash - targetCash);
+        }
+        if (freeCash + threshold < targetCash) {
+            return (REBALANCE_ACTION_DIVEST, targetCash - freeCash);
+        }
+        return (REBALANCE_ACTION_NONE, 0);
     }
 
     function _totalStrategyValue() internal view returns (uint256 total) {

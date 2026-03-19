@@ -50,6 +50,7 @@ contract MockVaultFlow {
     uint256 public inFlightIdCursor;
     mapping(address => uint256) public investInFlightByAdapter;
     mapping(address => uint256) public redeemInFlightByAdapter;
+    mapping(address => bool) public isAdapterRegistry;
 
     mapping(uint256 => uint256) public liabilities;
     mapping(uint256 => IMantleYieldVault.RequestStatus) public requestStatus;
@@ -118,6 +119,19 @@ contract MockVaultFlow {
 
     function approveToAdapter(address adapter, address token, uint256 amount) external {
         ERC20(token).approve(adapter, amount);
+    }
+
+    function isAdapter(address adapter) external view returns (bool) {
+        return isAdapterRegistry[adapter];
+    }
+
+    function registerAdapter(address adapter) external {
+        isAdapterRegistry[adapter] = true;
+    }
+
+    function removeAdapter(address adapter) external {
+        require(investInFlightByAdapter[adapter] == 0 && redeemInFlightByAdapter[adapter] == 0, "HAS_IN_FLIGHT");
+        isAdapterRegistry[adapter] = false;
     }
 
     function updateRequestBatch(uint256[] calldata ids, IMantleYieldVault.RequestStatus status) external {
@@ -265,8 +279,10 @@ contract StrategyFlowTest is Test {
             address(0)
         );
 
-        controller.registerStrategy(address(adapterISNR), 5000, 1, true, true);
-        controller.registerStrategy(address(adapterUMINT), 5000, 2, true, true);
+        controller.registerStrategy(address(adapterISNR), 5000, 1, true);
+        controller.registerStrategy(address(adapterUMINT), 5000, 2, true);
+        controller.activateStrategy(address(adapterISNR));
+        controller.activateStrategy(address(adapterUMINT));
 
         address[] memory ordered = new address[](2);
         ordered[0] = address(adapterISNR);
