@@ -130,7 +130,7 @@ contract Deposit is SignerHelper {
 
         _startUserBroadcast(useLedger, user);
         usdc.approve(vaultAddr, amount);
-        uint256 shares = gateway.deposit(amount, user);
+        uint256 shares = gateway.deposit(amount);
         vm.stopBroadcast();
 
         console.log("\nShares received:", shares);
@@ -165,7 +165,7 @@ contract SyncRedeem is SignerHelper {
         require(shares <= maxRedeemable, "Exceeds maxRedeem - use async redeem instead");
 
         _startUserBroadcast(useLedger, user);
-        uint256 assets = gateway.redeem(shares, user, user);
+        uint256 assets = gateway.redeem(shares);
         vm.stopBroadcast();
 
         console.log("\nUSDC received:", assets);
@@ -197,7 +197,7 @@ contract RequestRedeem is SignerHelper {
         require(shares <= shareBal, "Insufficient shares");
 
         _startUserBroadcast(useLedger, user);
-        uint256 requestId = gateway.requestRedeem(shares, user, user);
+        uint256 requestId = gateway.requestRedeem(shares);
         vm.stopBroadcast();
 
         (,, uint256 reqShares, uint256 reqAssets,,,) = vault.requests(requestId);

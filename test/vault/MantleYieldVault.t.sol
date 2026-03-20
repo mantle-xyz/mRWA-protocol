@@ -234,7 +234,7 @@ abstract contract VaultTestBase is Test {
         usdc.mint(alice, INITIAL_DEPOSIT);
         vm.startPrank(alice);
         usdc.approve(address(vault), type(uint256).max);
-        gateway.deposit(INITIAL_DEPOSIT, alice);
+        gateway.deposit(INITIAL_DEPOSIT);
         vm.stopPrank();
     }
 
@@ -364,7 +364,7 @@ contract DepositTest is VaultTestBase {
         usdc.mint(bob, 500e6);
         vm.startPrank(bob);
         usdc.approve(address(vault), 500e6);
-        uint256 shares = gateway.deposit(500e6, bob);
+        uint256 shares = gateway.deposit(500e6);
         vm.stopPrank();
 
         assertEq(shares, 500e6);
@@ -377,7 +377,7 @@ contract DepositTest is VaultTestBase {
         uint256 expectedShares = vault.previewDeposit(500e6);
         vm.startPrank(bob);
         usdc.approve(address(vault), 500e6);
-        uint256 shares = gateway.deposit(500e6, bob);
+        uint256 shares = gateway.deposit(500e6);
         vm.stopPrank();
 
         assertEq(shares, expectedShares);
@@ -392,7 +392,7 @@ contract DepositTest is VaultTestBase {
         vm.startPrank(bob);
         usdc.approve(address(vault), 100e6);
         vm.expectRevert();
-        gateway.deposit(100e6, bob);
+        gateway.deposit(100e6);
         vm.stopPrank();
     }
 
@@ -401,15 +401,8 @@ contract DepositTest is VaultTestBase {
         vm.startPrank(sanctionedUser);
         usdc.approve(address(vault), 100e6);
         vm.expectRevert(abi.encodeWithSelector(IMantleYieldVault.Vault__Sanctioned.selector, sanctionedUser));
-        gateway.deposit(100e6, sanctionedUser);
+        gateway.deposit(100e6);
         vm.stopPrank();
-    }
-
-    function test_depositRevertsSanctionedReceiver() public {
-        usdc.mint(alice, 100e6);
-        vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSelector(IMantleYieldVault.Vault__Sanctioned.selector, sanctionedUser));
-        gateway.deposit(100e6, sanctionedUser);
     }
 }
 
@@ -423,7 +416,7 @@ contract SyncRedeemTest is VaultTestBase {
         uint256 expectedAssets = vault.previewRedeem(shares);
 
         vm.prank(alice);
-        uint256 assets = gateway.redeem(shares, alice, alice);
+        uint256 assets = gateway.redeem(shares);
 
         assertEq(assets, expectedAssets);
         assertEq(vault.balanceOf(alice), INITIAL_DEPOSIT - shares);
@@ -434,7 +427,7 @@ contract SyncRedeemTest is VaultTestBase {
         uint256 neededShares = vault.previewWithdraw(wantAssets);
 
         vm.prank(alice);
-        uint256 assetsOut = gateway.redeem(neededShares, alice, alice);
+        uint256 assetsOut = gateway.redeem(neededShares);
 
         assertGe(assetsOut, wantAssets);
         assertEq(vault.balanceOf(alice), INITIAL_DEPOSIT - neededShares);
@@ -443,7 +436,7 @@ contract SyncRedeemTest is VaultTestBase {
     function test_redeemRevertsZeroShares() public {
         vm.prank(alice);
         vm.expectRevert(IMantleYieldVault.Vault__ZeroAmount.selector);
-        gateway.redeem(0, alice, alice);
+        gateway.redeem(0);
     }
 
     function test_redeemRevertsWhenPaused() public {
@@ -452,13 +445,7 @@ contract SyncRedeemTest is VaultTestBase {
 
         vm.prank(alice);
         vm.expectRevert();
-        gateway.redeem(100e6, alice, alice);
-    }
-
-    function test_redeemRevertsSanctionedReceiver() public {
-        vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSelector(IMantleYieldVault.Vault__Sanctioned.selector, sanctionedUser));
-        gateway.redeem(100e6, sanctionedUser, alice);
+        gateway.redeem(100e6);
     }
 
     function test_redeemRevertsInsufficientFreeCash() public {
@@ -469,7 +456,7 @@ contract SyncRedeemTest is VaultTestBase {
 
         vm.prank(alice);
         vm.expectRevert();
-        gateway.redeem(aliceShares, alice, alice);
+        gateway.redeem(aliceShares);
     }
 
     function test_previewRedeemIncludesFee() public view {
@@ -490,40 +477,23 @@ contract AsyncRedeemTest is VaultTestBase {
         uint256 shares = 500e6;
 
         vm.prank(alice);
-        uint256 requestId = gateway.requestRedeem(shares, alice, alice);
+        uint256 requestId = gateway.requestRedeem(shares);
 
         assertEq(requestId, 1);
         assertEq(vault.balanceOf(alice), INITIAL_DEPOSIT - shares);
         assertGt(vault.totalLockedShares(), 0);
-    }
-
-    function test_requestRedeemWithControllerCreatesRequest() public {
-        uint256 shares = 500e6;
-
-        vm.prank(alice);
-        uint256 requestId = gateway.requestRedeem(shares, alice, alice);
-
-        assertEq(requestId, 1);
-        assertEq(vault.balanceOf(alice), INITIAL_DEPOSIT - shares);
-        assertGt(vault.totalLockedShares(), 0);
-    }
-
-    function test_requestRedeemWithDifferentControllerReverts() public {
-        vm.prank(alice);
-        vm.expectRevert(IMantleYieldVault.Vault__NotAuthorized.selector);
-        gateway.requestRedeem(500e6, bob, alice);
     }
 
     function test_requestRedeemRevertsZero() public {
         vm.prank(alice);
         vm.expectRevert(IMantleYieldVault.Vault__ZeroAmount.selector);
-        gateway.requestRedeem(0, alice, alice);
+        gateway.requestRedeem(0);
     }
 
     function test_requestRedeemRevertsBelowMin() public {
         vm.prank(alice);
         vm.expectRevert();
-        gateway.requestRedeem(1, alice, alice);
+        gateway.requestRedeem(1);
     }
 
     function test_requestRedeemRevertsSanctioned() public {
@@ -531,7 +501,7 @@ contract AsyncRedeemTest is VaultTestBase {
         vm.startPrank(sanctionedUser);
         usdc.approve(address(vault), 100e6);
         vm.expectRevert(abi.encodeWithSelector(IMantleYieldVault.Vault__Sanctioned.selector, sanctionedUser));
-        gateway.deposit(100e6, sanctionedUser);
+        gateway.deposit(100e6);
         vm.stopPrank();
     }
 
@@ -542,7 +512,7 @@ contract AsyncRedeemTest is VaultTestBase {
         oracle.setSanctioned(alice, true);
 
         vm.prank(alice);
-        uint256 requestId = gateway.requestRedeem(shares, alice, alice);
+        uint256 requestId = gateway.requestRedeem(shares);
 
         assertEq(requestId, 0);
         assertEq(vault.balanceOf(alice), INITIAL_DEPOSIT - shares);
@@ -554,7 +524,7 @@ contract AsyncRedeemTest is VaultTestBase {
         uint256 shares = 500e6;
 
         vm.prank(alice);
-        uint256 requestId = gateway.requestRedeem(shares, alice, alice);
+        uint256 requestId = gateway.requestRedeem(shares);
 
         uint256[] memory ids = new uint256[](1);
         ids[0] = requestId;
@@ -575,10 +545,10 @@ contract AsyncRedeemTest is VaultTestBase {
 
     function test_multipleRequestsThenSettle() public {
         vm.prank(alice);
-        uint256 id1 = gateway.requestRedeem(200e6, alice, alice);
+        uint256 id1 = gateway.requestRedeem(200e6);
 
         vm.prank(alice);
-        uint256 id2 = gateway.requestRedeem(200e6, alice, alice);
+        uint256 id2 = gateway.requestRedeem(200e6);
 
         uint256[] memory ids = new uint256[](2);
         ids[0] = id1;
@@ -605,7 +575,7 @@ contract AsyncRedeemTest is VaultTestBase {
 contract UpdateRequestBatchTest is VaultTestBase {
     function test_canTransitionPendingToProcessing() public {
         vm.prank(alice);
-        uint256 id = gateway.requestRedeem(500e6, alice, alice);
+        uint256 id = gateway.requestRedeem(500e6);
 
         uint256[] memory ids = new uint256[](1);
         ids[0] = id;
@@ -616,7 +586,7 @@ contract UpdateRequestBatchTest is VaultTestBase {
 
     function test_revertsForbiddenTargetStatus_NONE() public {
         vm.prank(alice);
-        uint256 id = gateway.requestRedeem(500e6, alice, alice);
+        uint256 id = gateway.requestRedeem(500e6);
 
         uint256[] memory ids = new uint256[](1);
         ids[0] = id;
@@ -632,7 +602,7 @@ contract UpdateRequestBatchTest is VaultTestBase {
 
     function test_revertsForbiddenTargetStatus_DONE() public {
         vm.prank(alice);
-        uint256 id = gateway.requestRedeem(500e6, alice, alice);
+        uint256 id = gateway.requestRedeem(500e6);
 
         uint256[] memory ids = new uint256[](1);
         ids[0] = id;
@@ -670,7 +640,7 @@ contract UpdateRequestBatchTest is VaultTestBase {
 
     function test_revertsOnBackwardTransition() public {
         vm.prank(alice);
-        uint256 id = gateway.requestRedeem(500e6, alice, alice);
+        uint256 id = gateway.requestRedeem(500e6);
 
         uint256[] memory ids = new uint256[](1);
         ids[0] = id;
@@ -689,7 +659,7 @@ contract UpdateRequestBatchTest is VaultTestBase {
 
     function test_revertsOnSameStatusTransition() public {
         vm.prank(alice);
-        uint256 id = gateway.requestRedeem(500e6, alice, alice);
+        uint256 id = gateway.requestRedeem(500e6);
 
         uint256[] memory ids = new uint256[](1);
         ids[0] = id;
@@ -888,12 +858,12 @@ contract ExchangeRateTest is VaultTestBase {
         vm.startPrank(bob);
         usdc.approve(address(vault), 100e6);
         vm.expectRevert();
-        gateway.deposit(100e6, bob);
+        gateway.deposit(100e6);
         vm.stopPrank();
 
         vm.prank(alice);
         vm.expectRevert();
-        gateway.redeem(10e6, alice, alice);
+        gateway.redeem(10e6);
     }
 
     function test_exchangeRateAffectsSharePrice() public {
@@ -934,7 +904,7 @@ contract RedemptionFeeTest is VaultTestBase {
         uint256 vaultBalBefore = usdc.balanceOf(address(vault));
 
         vm.prank(alice);
-        gateway.requestRedeem(shares, alice, alice);
+        gateway.requestRedeem(shares);
 
         assertEq(usdc.balanceOf(address(vault)), vaultBalBefore);
     }
@@ -944,7 +914,7 @@ contract RedemptionFeeTest is VaultTestBase {
         uint256 freeCashBefore = vault.getFreeCash();
 
         vm.prank(alice);
-        gateway.redeem(shares, alice, alice);
+        gateway.redeem(shares);
 
         uint256 gross = shares;
         uint256 fee = (gross * FEE_BPS + BPS_DENOMINATOR - 1) / BPS_DENOMINATOR;
@@ -967,7 +937,7 @@ contract FreeCashTest is VaultTestBase {
         uint256 shares = 500e6;
 
         vm.prank(alice);
-        gateway.requestRedeem(shares, alice, alice);
+        gateway.requestRedeem(shares);
 
         uint256 gross = shares;
         uint256 fee = (gross * FEE_BPS + BPS_DENOMINATOR - 1) / BPS_DENOMINATOR;
@@ -979,7 +949,7 @@ contract FreeCashTest is VaultTestBase {
     function test_getFreeCash_afterFullRedeem_feeRemains() public {
         uint256 aliceBalance = vault.balanceOf(alice);
         vm.prank(alice);
-        gateway.requestRedeem(aliceBalance, alice, alice);
+        gateway.requestRedeem(aliceBalance);
 
         uint256 gross = aliceBalance;
         uint256 fee = (gross * FEE_BPS + BPS_DENOMINATOR - 1) / BPS_DENOMINATOR;
@@ -1006,7 +976,7 @@ contract TotalAssetsTest is VaultTestBase {
         uint256 shares = 500e6;
 
         vm.prank(alice);
-        gateway.requestRedeem(shares, alice, alice);
+        gateway.requestRedeem(shares);
 
         uint256 gross = shares;
         uint256 fee = (gross * FEE_BPS + BPS_DENOMINATOR - 1) / BPS_DENOMINATOR;
@@ -1018,7 +988,7 @@ contract TotalAssetsTest is VaultTestBase {
     function test_totalAssetsReturnsZeroWhenLiabilitiesExceedTotal() public {
         uint256 aliceBalance = vault.balanceOf(alice);
         vm.prank(alice);
-        gateway.requestRedeem(aliceBalance, alice, alice);
+        gateway.requestRedeem(aliceBalance);
 
         uint256 gross = aliceBalance;
         uint256 fee = (gross * FEE_BPS + BPS_DENOMINATOR - 1) / BPS_DENOMINATOR;
@@ -1080,9 +1050,7 @@ contract SanctionsTest is VaultTestBase {
         oracle.setSanctioned(alice, true);
 
         assertEq(gateway.maxDeposit(alice), 0);
-        assertEq(gateway.maxMint(alice), 0);
         assertEq(gateway.maxRedeem(alice), 0);
-        assertEq(gateway.maxWithdraw(alice), 0);
     }
 }
 
@@ -1250,7 +1218,7 @@ contract MaxRedeemWithdrawTest is VaultTestBase {
         uint256 half = INITIAL_DEPOSIT / 2;
 
         vm.prank(alice);
-        gateway.requestRedeem(half, alice, alice);
+        gateway.requestRedeem(half);
 
         uint256 maxR = vault.maxRedeem(alice);
         assertLe(vault.previewRedeem(maxR), vault.getFreeCash());
@@ -1260,7 +1228,7 @@ contract MaxRedeemWithdrawTest is VaultTestBase {
         uint256 half = INITIAL_DEPOSIT / 2;
 
         vm.prank(alice);
-        gateway.requestRedeem(half, alice, alice);
+        gateway.requestRedeem(half);
 
         uint256 maxW = vault.maxWithdraw(alice);
         assertLe(maxW, vault.getFreeCash());
@@ -1289,7 +1257,7 @@ contract ERC165Test is VaultTestBase {
 contract ERC7540ViewTest is VaultTestBase {
     function test_pendingRedeemRequestTracksShares() public {
         vm.prank(alice);
-        gateway.requestRedeem(500e6, alice, alice);
+        gateway.requestRedeem(500e6);
 
         assertEq(vault.pendingRedeemRequest(alice), 500e6);
     }
@@ -1301,17 +1269,13 @@ contract ERC7540ViewTest is VaultTestBase {
 
 contract GatewayViewPassthroughTest is VaultTestBase {
     function test_gatewayLimitViewsMirrorVault() public view {
-        assertEq(gateway.maxMint(alice), vault.maxMint(alice));
         assertEq(gateway.maxRedeem(alice), vault.maxRedeem(alice));
         assertEq(gateway.maxDeposit(alice), vault.maxDeposit(alice));
-        assertEq(gateway.maxWithdraw(alice), vault.maxWithdraw(alice));
     }
 
     function test_gatewayPreviewViewsMirrorVault() public view {
         uint256 shares = 123e6;
-        uint256 assets = 50e6;
         assertEq(gateway.previewRedeem(shares), vault.previewRedeem(shares));
-        assertEq(gateway.previewWithdraw(assets), vault.previewWithdraw(assets));
     }
 
     function test_gatewayAssetViewsMirrorVault() public view {
@@ -1334,10 +1298,8 @@ contract GatewayViewPassthroughTest is VaultTestBase {
     function test_gatewayMaxViewsReturnZeroWhenAccountantPaused() public {
         mockAccountant.setPauseStatus(true);
 
-        assertEq(gateway.maxMint(alice), 0);
         assertEq(gateway.maxDeposit(alice), 0);
         assertEq(gateway.maxRedeem(alice), 0);
-        assertEq(gateway.maxWithdraw(alice), 0);
     }
 }
 
@@ -1395,7 +1357,7 @@ contract ZeroCashBufferTest is VaultTestBase {
         vm.expectRevert(
             abi.encodeWithSignature("ERC4626ExceededMaxRedeem(address,uint256,uint256)", alice, aliceShares, uint256(0))
         );
-        gateway.redeem(aliceShares, alice, alice);
+        gateway.redeem(aliceShares);
 
         // ====================================================
         // Phase 3: Async redeem (T+N) full flow
@@ -1403,7 +1365,7 @@ contract ZeroCashBufferTest is VaultTestBase {
 
         // Step 3a: User requests async redeem
         vm.prank(alice);
-        uint256 reqId = gateway.requestRedeem(aliceShares, alice, alice);
+        uint256 reqId = gateway.requestRedeem(aliceShares);
 
         uint256 netAssets = 990e6; // 1000e6 - 1% fee (10e6)
         assertEq(vault.totalLockedShares(), aliceShares, "locked shares = redeemed shares");
@@ -1473,7 +1435,7 @@ contract ZeroCashBufferTest is VaultTestBase {
         usdc.mint(bob, bobDeposit);
         vm.startPrank(bob);
         usdc.approve(address(vault), bobDeposit);
-        gateway.deposit(bobDeposit, bob);
+        gateway.deposit(bobDeposit);
         vm.stopPrank();
 
         assertEq(usdc.balanceOf(address(vault)), bobDeposit, "vault holds Bob's deposit");
@@ -1545,7 +1507,7 @@ contract ZeroCashBufferTest is VaultTestBase {
         // --- Alice requests async redeem ---
         uint256 aliceShares = vault.balanceOf(alice);
         vm.prank(alice);
-        uint256 reqId = gateway.requestRedeem(aliceShares, alice, alice);
+        uint256 reqId = gateway.requestRedeem(aliceShares);
         uint256 netAssets = 990e6; // 1000 - 1% fee
 
         uint256[] memory ids = new uint256[](1);
@@ -1588,7 +1550,7 @@ contract ZeroCashBufferTest is VaultTestBase {
     function test_markRequestsDone_settledExceedsEstimated_works() public {
         uint256 redeemShares = 500e6;
         vm.prank(alice);
-        uint256 reqId = gateway.requestRedeem(redeemShares, alice, alice);
+        uint256 reqId = gateway.requestRedeem(redeemShares);
 
         uint256[] memory ids = new uint256[](1);
         ids[0] = reqId;
@@ -1615,7 +1577,7 @@ contract ZeroCashBufferTest is VaultTestBase {
     /// @dev ids and settledAssets length mismatch reverts
     function test_markRequestsDone_revertsOnLengthMismatch() public {
         vm.prank(alice);
-        uint256 reqId = gateway.requestRedeem(500e6, alice, alice);
+        uint256 reqId = gateway.requestRedeem(500e6);
 
         uint256[] memory ids = new uint256[](1);
         ids[0] = reqId;
@@ -1641,7 +1603,7 @@ contract SyncRedeemDisabledTest is VaultTestBase {
         vm.prank(alice);
         usdc.approve(address(vault), type(uint256).max);
         vm.prank(alice);
-        gateway.deposit(10_000e6, alice);
+        gateway.deposit(10_000e6);
     }
 
     function test_setSyncRedeemDisabled_onlyAdmin() public {
@@ -1666,7 +1628,7 @@ contract SyncRedeemDisabledTest is VaultTestBase {
         uint256 shares = vault.balanceOf(alice);
         vm.prank(alice);
         vm.expectRevert(IMantleYieldVault.Vault__SyncRedeemDisabled.selector);
-        gateway.redeem(shares, alice, alice);
+        gateway.redeem(shares);
     }
 
     function test_maxRedeemNotAffectedWhenSyncDisabled() public {
@@ -1689,7 +1651,7 @@ contract SyncRedeemDisabledTest is VaultTestBase {
 
         uint256 shares = vault.balanceOf(alice);
         vm.prank(alice);
-        gateway.requestRedeem(shares, alice, alice);
+        gateway.requestRedeem(shares);
 
         assertEq(vault.pendingRedeemRequest(alice), shares);
     }
@@ -1703,7 +1665,7 @@ contract SyncRedeemDisabledTest is VaultTestBase {
 
         uint256 shares = vault.balanceOf(alice);
         vm.prank(alice);
-        gateway.redeem(shares, alice, alice);
+        gateway.redeem(shares);
 
         assertEq(vault.balanceOf(alice), 0);
     }

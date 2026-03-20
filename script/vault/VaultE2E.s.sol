@@ -331,7 +331,7 @@ contract VaultE2E is Script {
 
         vm.startBroadcast(aliceKey);
         usdc.approve(address(vault), type(uint256).max);
-        uint256 shares = gateway.deposit(5_000e6, alice);
+        uint256 shares = gateway.deposit(5_000e6);
         vm.stopBroadcast();
 
         require(shares == 5_000e6, "shares != 5000e6");
@@ -354,7 +354,7 @@ contract VaultE2E is Script {
         uint256 usdcBefore = usdc.balanceOf(alice);
 
         vm.broadcast(aliceKey);
-        uint256 assetsOut = gateway.redeem(1_000e6, alice, alice);
+        uint256 assetsOut = gateway.redeem(1_000e6);
 
         uint256 expectedNet = 1_000e6 - (1_000e6 * 100 / 10_000);
         require(assetsOut == expectedNet, "sync redeem net wrong");
@@ -376,7 +376,7 @@ contract VaultE2E is Script {
 
         // Step 1: requestRedeem
         vm.broadcast(aliceKey);
-        uint256 reqId = gateway.requestRedeem(redeemShares, alice, alice);
+        uint256 reqId = gateway.requestRedeem(redeemShares);
         console.log("[async] Step 1 - requestRedeem: id =", reqId);
 
         (,, uint256 reqShares, uint256 reqAssets, uint256 settled,, IMantleYieldVault.RequestStatus status) =
@@ -419,7 +419,7 @@ contract VaultE2E is Script {
         uint256 lockedBefore = vault.totalLockedShares();
 
         vm.broadcast(aliceKey);
-        uint256 reqId = gateway.requestRedeem(redeemShares, alice, alice);
+        uint256 reqId = gateway.requestRedeem(redeemShares);
 
         (,,, uint256 estAssets,,,) = vault.requests(reqId);
         uint256 friction = 5e6;
@@ -552,7 +552,7 @@ contract VaultE2E is Script {
 
         // Deposit should revert when paused
         vm.broadcast(aliceKey);
-        try gateway.deposit(100e6, alice) {
+        try gateway.deposit(100e6) {
             revert("deposit should revert when paused");
         } catch {
             console.log("[pause] Deposit correctly blocked");
