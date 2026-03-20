@@ -48,7 +48,7 @@ contract DeployMockSync4626Adapter is Script {
         console2.log("PosToken:          ", adapter.posToken());
         console2.log("Has ADMIN_ROLE:    ", adapter.hasRole(adapter.DEFAULT_ADMIN_ROLE(), admin));
         console2.log("Has CONTROLLER:    ", adapter.hasRole(adapter.CONTROLLER_ROLE(), controller));
-        console2.log("Has ACCOUNTANT:    ", adapter.hasRole(adapter.ACCOUNTANT_ROLE(), accountant));
+        console2.log("Has ACCOUNTANT_EXECUTOR:    ", adapter.hasRole(adapter.ACCOUNTANT_EXECUTOR_ROLE(), accountant));
         console2.log("Has PAUSER (admin):", adapter.hasRole(adapter.PAUSER_ROLE(), admin));
         console2.log("Has PAUSER (ctrl): ", adapter.hasRole(adapter.PAUSER_ROLE(), controller));
     }
