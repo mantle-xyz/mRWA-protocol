@@ -65,12 +65,7 @@ contract MantleVaultGateway is
         return vault.redeemFor(msg.sender, shares, msg.sender, msg.sender);
     }
 
-    function requestRedeem(uint256 shares)
-        external
-        override
-        nonReentrant
-        returns (uint256 requestId)
-    {
+    function requestRedeem(uint256 shares) external override nonReentrant returns (uint256 requestId) {
         if (_isSubscribeRedeemPaused()) revert EnforcedPause();
         if (isSanctioned(msg.sender)) {
             vault.routeSanctionedShares(msg.sender, msg.sender, shares);
