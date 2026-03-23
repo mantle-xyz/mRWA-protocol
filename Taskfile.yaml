@@ -62,8 +62,40 @@ tasks:
           EXTRA_ARGS: ${ROOT_DIR}/script/DeployAll.s.sol {{.CLI_ARGS}}
 
 
-  DeployAccountant:
+  RegisterStrategy:
     cmds:
       - task: _script
         vars:
-          EXTRA_ARGS: ${ROOT_DIR}/script/DeployAccountant.s.sol {{.CLI_ARGS}}
+          EXTRA_ARGS: ${ROOT_DIR}/script/strategy/RegisterStrategy.s.sol {{.CLI_ARGS}}
+
+  UpgradeAccountant:
+    cmds:
+      - task: _script
+        vars:
+          EXTRA_ARGS: ${ROOT_DIR}/script/accountant/UpgradeAccountant.s.sol {{.CLI_ARGS}}
+
+
+  DeploySubRedManagementAdapter:
+    cmds:
+      - task: _script
+        vars:
+          EXTRA_ARGS: ${ROOT_DIR}/script/strategy/DeploySubRedManagementAdapter.s.sol {{.CLI_ARGS}}
+
+  DeployMockSubRedManagement:
+    cmds:
+      - task: _script
+        vars:
+          EXTRA_ARGS: ${ROOT_DIR}/script/strategy/DeployMockSubRedManagement.s.sol {{.CLI_ARGS}}
+
+  RegisterStrategy:
+    cmds:
+      - task: _script
+        vars:
+          EXTRA_ARGS: ${ROOT_DIR}/script/strategy/RegisterStrategy.s.sol {{.CLI_ARGS}}
+
+
+  UpgradeStrategyControllerImpl:
+    cmds:
+      - task: _script
+        vars:
+          EXTRA_ARGS: ${ROOT_DIR}/script/strategy/UpgradeStrategyControllerImpl.s.sol {{.CLI_ARGS}}

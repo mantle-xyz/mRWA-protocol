@@ -20,6 +20,7 @@ envs:
   F_STRATEGY_MANAGER_ADDRESS: "0xf615c372a0d91412311459bc6f8cb6e666b1ba54" # StrategyController STRATEGY_MANAGER_ROLE
   F_TREASURY_ADDRESS: "0xf615c372a0d91412311459bc6f8cb6e666b1ba54"      # Vault fee share recipient
   F_PAUSER_ADDRESS: "0xf615c372a0d91412311459bc6f8cb6e666b1ba54"        # Vault PAUSER_ROLE
+  F_ACCOUNTANT_FACTORY: "0x6A6a848D8ca9b6D963CD513a6354B15AF450074f"
 
   # ── Accountant params ────────────────────────────────────────
   F_INITIAL_RATE: "1000000000000000000" # 1e18
@@ -30,10 +31,30 @@ envs:
   F_REBALANCE_THRESHOLD_BPS: "10"     # 0.1%
   F_REBALANCE_COOLDOWN: "3600"         # 1 hour
 
+  # ── RegisterStrategy params ──────────────────────────────────
+  F_CONTROLLER_ADDRESS: "0x2D4c86737808972DB9e6B0B9Ce4930e8A4125F0c"     # StrategyController proxy
+  F_STRATEGY_ADAPTER_ADDRESS: "0xF42b55a3d6EDF1d0eDA1ADE86Eee267C3a168f22"
+  F_TARGET_WEIGHT_BPS: "10000"       # 100%
+  F_PRIORITY: "0"                    # execution priority (lower = higher)
+  F_IS_ASYNC: "true"                 # true for ERC-7540, false for ERC-4626
+  F_SET_ORDER: "true"                # update strategyOrder after registration
+
+  # ── DeploySubRedManagementAdapter params ─────────────────────
+  ADAPTER_VAULT: "0xd39bBd306882bCbd362240be35eb819cEbD408C3"
+  ADAPTER_SUBRED_MANAGEMENT: "0xFb37881656Ffe5261d6F491EDE0554bD98f9157d"
+  ADAPTER_ST_TOKEN: "0x9a437bdbb5Bc3a5904AEB6bb19F7f66F09e3cb19"
+  ADAPTER_ADMIN: "0xf615c372a0d91412311459bc6f8cb6e666b1ba54"
+  ADAPTER_CONTROLLER: "0x2D4c86737808972DB9e6B0B9Ce4930e8A4125F0c"
+  ADAPTER_ACCOUNTANT: "0x2c52d6f3534001c6516107Ba78213eE4398c9483"
+  ADAPTER_PRICE_ORACLE: "0x0000000000000000000000000000000000000000"  # optional, default: address(0)
+
+  # ── DeployMockSubRedManagement params ─────────────────────
+  F_ST_TOKEN: "0x0000000000000000000000000000000000000000"
+
   # ── Vault params ─────────────────────────────────────────────
   F_MAX_REDEMPTION_FEE_BPS: "500"      # 5% cap
   F_MAX_RATE_CHANGE_BPS: "500"         # 5% cap
   F_REDEMPTION_FEE_BPS: "10"           # 0.1%
   F_MIN_REDEEM_AMOUNT: "1000000"       # 1 USDC (6 decimals)
   F_MIN_DEPOSIT_AMOUNT: "1000000"      # 1 USDC (6 decimals)
-  F_SYNC_REDEEM_DISABLED: "true"
+  F_SYNC_REDEEM_DISABLED: "false"
