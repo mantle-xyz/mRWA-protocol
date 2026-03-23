@@ -100,7 +100,7 @@ contract DeployAll is Script {
         address complianceBot = vm.envAddress("F_COMPLIANCE_BOT_ADDRESS");
         address bot = vm.envAddress("F_BOT_ADDRESS");
         address signer = vm.envAddress("F_SIGNER_ADDRESS");
-        address strategyManager = vm.envAddress("F_STRATEGY_MANAGER_ADDRESS");
+        // strategyManager removed — StrategyController.initialize doesn't take this param
         address treasury = vm.envAddress("F_TREASURY_ADDRESS");
         address pauser = vm.envAddress("F_PAUSER_ADDRESS");
         uint64 initialRate = uint64(vm.envUint("F_INITIAL_RATE"));
@@ -201,9 +201,7 @@ contract DeployAll is Script {
 
         // 2g. AccountantExecutor — UUPS, init now (accountant address is known)
         address acctExecAddr = address(
-            new ERC1967Proxy(
-                address(accountantExecImpl), abi.encodeCall(AccountantExecutor.initialize, (accountantAddr, admin))
-            )
+            new ERC1967Proxy(address(accountantExecImpl), abi.encodeCall(AccountantExecutor.initialize, (admin)))
         );
         d.accountantExecutor = AccountantExecutor(acctExecAddr);
 
@@ -257,9 +255,7 @@ contract DeployAll is Script {
         // 3c. StrategyController.initialize (reads vault.asset(), so vault must be init'd)
         d.controller = StrategyController(controllerAddr);
         d.controller
-            .initialize(
-                vaultAddr, admin, strategyManager, opExecAddr, bufferTargetBps, rebalanceThresholdBps, rebalanceCooldown
-            );
+            .initialize(vaultAddr, admin, opExecAddr, pauser, bufferTargetBps, rebalanceThresholdBps, rebalanceCooldown);
 
         console2.log("");
         console2.log("[Phase 3] Deferred proxies initialized");
@@ -305,7 +301,9 @@ contract DeployAll is Script {
         );
         console2.log("");
         console2.log("--- AccountantExecutor ---");
-        console2.log("  Accountant:      ", address(d.accountantExecutor.accountant()));
+        console2.log(
+            "  Admin:           ", d.accountantExecutor.hasRole(d.accountantExecutor.DEFAULT_ADMIN_ROLE(), admin)
+        );
         console2.log("  Has BOT:         ", d.accountantExecutor.hasRole(d.accountantExecutor.BOT_ROLE(), bot));
         console2.log("");
         console2.log("--- StrategyController ---");
