@@ -314,32 +314,32 @@ contract AccountantTest is Test {
     //              DEVIATION CIRCUIT BREAKER
     // =============================================================
 
-    function test_updateExchangeRate_revertsWhenDeviationExceeded_up() public {
+    function test_updateExchangeRate_pausesWhenDeviationExceeded_up() public {
         _skipCooldown();
 
         uint64 tooHighRate = 1.02e18; // 2% up, max is 1%
-        uint256 deviationBps = 200;
 
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                Accountant.DeviationExceeded.selector, deviationBps, accountant.maxAllowedDeviation()
-            )
-        );
+        vm.expectEmit(false, false, false, true);
+        emit Accountant.CircuitBreakerTriggered(200, accountant.maxAllowedDeviation(), tooHighRate);
+
         _doUpdate(tooHighRate);
+
+        assertTrue(accountant.paused());
+        assertEq(accountant.lastExchangeRate(), INITIAL_RATE, "Rate should NOT be updated");
     }
 
-    function test_updateExchangeRate_revertsWhenDeviationExceeded_down() public {
+    function test_updateExchangeRate_pausesWhenDeviationExceeded_down() public {
         _skipCooldown();
 
         uint64 tooLowRate = 0.98e18; // 2% down
-        uint256 deviationBps = 200;
 
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                Accountant.DeviationExceeded.selector, deviationBps, accountant.maxAllowedDeviation()
-            )
-        );
+        vm.expectEmit(false, false, false, true);
+        emit Accountant.CircuitBreakerTriggered(200, accountant.maxAllowedDeviation(), tooLowRate);
+
         _doUpdate(tooLowRate);
+
+        assertTrue(accountant.paused());
+        assertEq(accountant.lastExchangeRate(), INITIAL_RATE, "Rate should NOT be updated");
     }
 
     function test_updateExchangeRate_succeedsAtMaxDeviationBoundary() public {
@@ -584,8 +584,138 @@ contract AccountantTest is Test {
 
     // =============================================================
     //            EMERGENCY UPDATE EXCHANGE RATE
-    //            (commented out — function is disabled)
     // =============================================================
+
+    function test_emergencyRateUpdate_succeeds() public {
+        uint64 newRate = 0.5e18; // 50% crash — far beyond normal deviation limit
+        vm.prank(admin);
+        accountant.emergencyRateUpdate(newRate);
+
+        assertEq(accountant.lastExchangeRate(), newRate);
+        assertEq(accountant.getRate(), newRate);
+        assertEq(accountant.lastUpdateTimestamp(), block.timestamp);
+        assertEq(accountant.lastComputeTimestamp(), block.timestamp);
+    }
+
+    function test_emergencyRateUpdate_emitsEvent() public {
+        uint64 newRate = 0.8e18;
+
+        vm.expectEmit(false, false, false, true);
+        emit Accountant.EmergencyRateUpdated(INITIAL_RATE, newRate, block.timestamp);
+
+        vm.prank(admin);
+        accountant.emergencyRateUpdate(newRate);
+    }
+
+    function test_emergencyRateUpdate_revertsWhenNotAdmin() public {
+        bytes32 adminRole = accountant.DEFAULT_ADMIN_ROLE();
+
+        vm.expectRevert(
+            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user, adminRole)
+        );
+        vm.prank(user);
+        accountant.emergencyRateUpdate(0.5e18);
+    }
+
+    function test_emergencyRateUpdate_revertsWhenExecutorCalls() public {
+        bytes32 adminRole = accountant.DEFAULT_ADMIN_ROLE();
+
+        vm.expectRevert(
+            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, executor, adminRole)
+        );
+        vm.prank(executor);
+        accountant.emergencyRateUpdate(0.5e18);
+    }
+
+    function test_emergencyRateUpdate_revertsWhenRateIsZero() public {
+        vm.expectRevert(Accountant.InvalidRate.selector);
+        vm.prank(admin);
+        accountant.emergencyRateUpdate(0);
+    }
+
+    function test_emergencyRateUpdate_bypassesDeviationCheck() public {
+        uint64 crashRate = 0.5e18; // 50% drop — would revert on updateExchangeRate
+        vm.prank(admin);
+        accountant.emergencyRateUpdate(crashRate);
+
+        assertEq(accountant.lastExchangeRate(), crashRate);
+    }
+
+    function test_emergencyRateUpdate_bypassesCooldown() public {
+        // No cooldown skip — call immediately after setUp (timestamp = 1000)
+        vm.prank(admin);
+        accountant.emergencyRateUpdate(0.99e18);
+
+        assertEq(accountant.lastExchangeRate(), 0.99e18);
+    }
+
+    function test_emergencyRateUpdate_unpausesWhenAlreadyPaused() public {
+        vm.prank(admin);
+        accountant.pause();
+        assertTrue(accountant.paused());
+
+        vm.prank(admin);
+        accountant.emergencyRateUpdate(0.8e18);
+
+        assertFalse(accountant.paused());
+        assertEq(accountant.lastExchangeRate(), 0.8e18);
+    }
+
+    function test_emergencyRateUpdate_worksWhenNotPaused() public {
+        assertFalse(accountant.paused());
+
+        vm.prank(admin);
+        accountant.emergencyRateUpdate(0.8e18);
+
+        assertFalse(accountant.paused());
+        assertEq(accountant.lastExchangeRate(), 0.8e18);
+    }
+
+    function test_emergencyRateUpdate_settlesFees() public {
+        uint256 totalShares = 100_000e18;
+        vault.setTotalSupply(totalShares);
+
+        // Prime the fee snapshot via a normal update first
+        _skipCooldown();
+        _doUpdate(1.005e18);
+        assertEq(accountant.totalSharesLastSettle(), totalShares);
+
+        // Advance time so fees accrue
+        vm.warp(block.timestamp + 30 days);
+
+        uint256 timeElapsed = block.timestamp - accountant.lastFeeSettleTimestamp();
+        uint256 expectedShares = (totalShares * MANAGEMENT_FEE_BPS * timeElapsed) / (10_000 * 365 days);
+
+        vm.expectEmit(false, false, false, true);
+        emit Accountant.FeesDistributed(expectedShares);
+
+        vm.prank(admin);
+        accountant.emergencyRateUpdate(0.5e18);
+
+        assertEq(vault.lastFeeShares(), expectedShares);
+    }
+
+    function test_emergencyRateUpdate_blocksNormalUpdateAfterwards() public {
+        vm.prank(admin);
+        accountant.emergencyRateUpdate(0.5e18);
+
+        // Normal update with 100% deviation triggers circuit breaker → pause
+        _skipCooldown();
+        _doUpdate(1e18);
+        assertTrue(accountant.paused());
+        assertEq(accountant.lastExchangeRate(), 0.5e18, "Rate should NOT be overwritten");
+    }
+
+    function testFuzz_emergencyRateUpdate(uint64 newRate) public {
+        newRate = uint64(bound(newRate, 1, type(uint64).max));
+
+        vm.prank(admin);
+        accountant.emergencyRateUpdate(newRate);
+
+        assertEq(accountant.lastExchangeRate(), newRate);
+        assertEq(accountant.lastUpdateTimestamp(), block.timestamp);
+        assertEq(accountant.lastComputeTimestamp(), block.timestamp);
+    }
 
     // =============================================================
     //                    SET VAULT
@@ -890,7 +1020,7 @@ contract AccountantTest is Test {
         assertEq(accountant.lastExchangeRate(), newRate);
     }
 
-    function testFuzz_revertOutsideDeviation(uint256 rateDelta) public {
+    function testFuzz_pausesOutsideDeviation(uint256 rateDelta) public {
         uint256 maxDev = accountant.maxAllowedDeviation();
         uint256 minBadDelta = (INITIAL_RATE * (maxDev + 1)) / 10_000;
         rateDelta = bound(rateDelta, minBadDelta, INITIAL_RATE / 2);
@@ -899,8 +1029,10 @@ contract AccountantTest is Test {
 
         uint64 newRate = uint64(INITIAL_RATE + rateDelta);
 
-        vm.expectRevert();
         _doUpdate(newRate);
+
+        assertTrue(accountant.paused());
+        assertEq(accountant.lastExchangeRate(), INITIAL_RATE, "Rate should NOT be updated");
     }
 
     function testFuzz_setManagementFeeRate(uint256 rate) public {
@@ -982,9 +1114,7 @@ contract AccountantExecutorTest is Test {
 
         AccountantExecutor impl = new AccountantExecutor();
         beacon = new UpgradeableBeacon(address(impl), admin);
-        BeaconProxy proxy = new BeaconProxy(
-            address(beacon), abi.encodeCall(AccountantExecutor.initialize, (address(mockAccountant), admin))
-        );
+        BeaconProxy proxy = new BeaconProxy(address(beacon), abi.encodeCall(AccountantExecutor.initialize, (admin)));
         executor = AccountantExecutor(address(proxy));
 
         bytes32 executeRole = executor.BOT_ROLE();
@@ -997,7 +1127,6 @@ contract AccountantExecutorTest is Test {
     // =============================================================
 
     function test_initialize_setsStateCorrectly() public view {
-        assertEq(address(executor.accountant()), address(mockAccountant));
         assertTrue(executor.hasRole(executor.DEFAULT_ADMIN_ROLE(), admin));
         assertEq(executor.getRoleAdmin(executor.BOT_ROLE()), executor.DEFAULT_ADMIN_ROLE());
         assertEq(executor.getRoleAdmin(executor.DEFAULT_ADMIN_ROLE()), executor.DEFAULT_ADMIN_ROLE());
@@ -1005,19 +1134,12 @@ contract AccountantExecutorTest is Test {
 
     function test_initialize_revertsOnDoubleInit() public {
         vm.expectRevert();
-        executor.initialize(address(mockAccountant), admin);
-    }
-
-    function test_initialize_revertsWhenAccountantIsZero() public {
-        vm.expectRevert(AccountantExecutor.ZeroAddress.selector);
-        new BeaconProxy(address(beacon), abi.encodeCall(AccountantExecutor.initialize, (address(0), admin)));
+        executor.initialize(admin);
     }
 
     function test_initialize_revertsWhenAdminIsZero() public {
         vm.expectRevert(AccountantExecutor.ZeroAddress.selector);
-        new BeaconProxy(
-            address(beacon), abi.encodeCall(AccountantExecutor.initialize, (address(mockAccountant), address(0)))
-        );
+        new BeaconProxy(address(beacon), abi.encodeCall(AccountantExecutor.initialize, (address(0))));
     }
 
     // =============================================================
@@ -1031,7 +1153,6 @@ contract AccountantExecutorTest is Test {
         beacon.upgradeTo(address(newImpl));
 
         assertEq(beacon.implementation(), address(newImpl));
-        assertEq(address(executor.accountant()), address(mockAccountant));
         assertTrue(executor.hasRole(executor.DEFAULT_ADMIN_ROLE(), admin));
     }
 
@@ -1052,7 +1173,7 @@ contract AccountantExecutorTest is Test {
         uint64 computeTs = uint64(block.timestamp);
 
         vm.prank(bot);
-        executor.executeUpdateRate(newRate, computeTs);
+        executor.executeUpdateRate(address(mockAccountant), newRate, computeTs);
 
         assertEq(mockAccountant.lastNewRate(), newRate);
         assertEq(mockAccountant.lastComputeTimestamp(), computeTs);
@@ -1067,15 +1188,15 @@ contract AccountantExecutorTest is Test {
         emit AccountantExecutor.RateUpdateExecuted(bot, newRate, computeTs);
 
         vm.prank(bot);
-        executor.executeUpdateRate(newRate, computeTs);
+        executor.executeUpdateRate(address(mockAccountant), newRate, computeTs);
     }
 
     function test_executeUpdateRate_consecutiveCalls() public {
         vm.prank(bot);
-        executor.executeUpdateRate(1.001e18, uint64(block.timestamp));
+        executor.executeUpdateRate(address(mockAccountant), 1.001e18, uint64(block.timestamp));
 
         vm.prank(bot);
-        executor.executeUpdateRate(1.002e18, uint64(block.timestamp + 1));
+        executor.executeUpdateRate(address(mockAccountant), 1.002e18, uint64(block.timestamp + 1));
 
         assertEq(mockAccountant.lastNewRate(), 1.002e18);
         assertEq(mockAccountant.lastComputeTimestamp(), block.timestamp + 1);
@@ -1091,7 +1212,7 @@ contract AccountantExecutorTest is Test {
 
         vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user, role));
         vm.prank(user);
-        executor.executeUpdateRate(1e18, uint64(block.timestamp));
+        executor.executeUpdateRate(address(mockAccountant), 1e18, uint64(block.timestamp));
     }
 
     function test_executeUpdateRate_revertsWhenAdminWithoutExecuteRole() public {
@@ -1099,7 +1220,13 @@ contract AccountantExecutorTest is Test {
 
         vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, admin, role));
         vm.prank(admin);
-        executor.executeUpdateRate(1e18, uint64(block.timestamp));
+        executor.executeUpdateRate(address(mockAccountant), 1e18, uint64(block.timestamp));
+    }
+
+    function test_executeUpdateRate_revertsWhenAccountantIsZero() public {
+        vm.expectRevert(AccountantExecutor.ZeroAddress.selector);
+        vm.prank(bot);
+        executor.executeUpdateRate(address(0), 1e18, uint64(block.timestamp));
     }
 
     // =============================================================
@@ -1133,7 +1260,7 @@ contract AccountantExecutorTest is Test {
             abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, bot, executeRole)
         );
         vm.prank(bot);
-        executor.executeUpdateRate(1e18, uint64(block.timestamp));
+        executor.executeUpdateRate(address(mockAccountant), 1e18, uint64(block.timestamp));
     }
 
     function test_adminCanManageOtherAdmins() public {
@@ -1172,7 +1299,7 @@ contract AccountantExecutorTest is Test {
         computeTs = uint64(bound(computeTs, 1, type(uint64).max));
 
         vm.prank(bot);
-        executor.executeUpdateRate(newRate, computeTs);
+        executor.executeUpdateRate(address(mockAccountant), newRate, computeTs);
 
         assertEq(mockAccountant.lastNewRate(), newRate);
         assertEq(mockAccountant.lastComputeTimestamp(), computeTs);
@@ -1211,9 +1338,8 @@ contract AccountantExecutorIntegrationTest is Test {
 
         AccountantExecutor execImpl = new AccountantExecutor();
         execBeacon = new UpgradeableBeacon(address(execImpl), admin);
-        BeaconProxy execProxy = new BeaconProxy(
-            address(execBeacon), abi.encodeCall(AccountantExecutor.initialize, (address(accountant), admin))
-        );
+        BeaconProxy execProxy =
+            new BeaconProxy(address(execBeacon), abi.encodeCall(AccountantExecutor.initialize, (admin)));
         executor = AccountantExecutor(address(execProxy));
 
         vm.startPrank(admin);
@@ -1230,7 +1356,7 @@ contract AccountantExecutorIntegrationTest is Test {
 
     function _executeUpdate(uint64 newRate) internal {
         vm.prank(bot);
-        executor.executeUpdateRate(newRate, uint64(block.timestamp));
+        executor.executeUpdateRate(address(accountant), newRate, uint64(block.timestamp));
     }
 
     // =============================================================
@@ -1244,7 +1370,7 @@ contract AccountantExecutorIntegrationTest is Test {
         uint64 computeTs = uint64(block.timestamp);
 
         vm.prank(bot);
-        executor.executeUpdateRate(newRate, computeTs);
+        executor.executeUpdateRate(address(accountant), newRate, computeTs);
 
         assertEq(accountant.lastExchangeRate(), newRate);
         assertEq(accountant.getRate(), newRate);
@@ -1256,13 +1382,13 @@ contract AccountantExecutorIntegrationTest is Test {
 
         uint64 computeTs1 = uint64(block.timestamp);
         vm.prank(bot);
-        executor.executeUpdateRate(1.005e18, computeTs1);
+        executor.executeUpdateRate(address(accountant), 1.005e18, computeTs1);
 
         uint64 computeTs2 = computeTs1 + uint64(accountant.minUpdateInterval()) + 1;
         vm.warp(computeTs2);
 
         vm.prank(bot);
-        executor.executeUpdateRate(1.009e18, computeTs2);
+        executor.executeUpdateRate(address(accountant), 1.009e18, computeTs2);
 
         assertEq(accountant.lastExchangeRate(), 1.009e18);
         assertEq(accountant.lastComputeTimestamp(), computeTs2);
@@ -1286,7 +1412,7 @@ contract AccountantExecutorIntegrationTest is Test {
     function test_integration_revertsWhenCooldownNotElapsed() public {
         vm.prank(bot);
         vm.expectRevert();
-        executor.executeUpdateRate(1.005e18, uint64(block.timestamp));
+        executor.executeUpdateRate(address(accountant), 1.005e18, uint64(block.timestamp));
     }
 
     function test_integration_succeedsAtExactCooldownBoundary() public {
@@ -1301,34 +1427,32 @@ contract AccountantExecutorIntegrationTest is Test {
     //                  DEVIATION CIRCUIT BREAKER
     // =============================================================
 
-    function test_integration_revertsWhenDeviationExceeded() public {
+    function test_integration_pausesWhenDeviationExceeded() public {
         _skipCooldown();
 
-        // Default maxAllowedDeviation = 100 bps (1%). A 2% jump should revert.
         uint64 tooHighRate = 1.02e18;
-        uint256 deviationBps = 200;
 
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                Accountant.DeviationExceeded.selector, deviationBps, accountant.maxAllowedDeviation()
-            )
-        );
+        vm.expectEmit(false, false, false, true);
+        emit Accountant.CircuitBreakerTriggered(200, accountant.maxAllowedDeviation(), tooHighRate);
+
         _executeUpdate(tooHighRate);
+
+        assertTrue(accountant.paused());
+        assertEq(accountant.lastExchangeRate(), INITIAL_RATE, "Rate should NOT be updated");
     }
 
-    function test_integration_revertsWhenDeviationExceeded_rateDrops() public {
+    function test_integration_pausesWhenDeviationExceeded_rateDrops() public {
         _skipCooldown();
 
-        // 2% downward deviation
         uint64 tooLowRate = 0.98e18;
-        uint256 deviationBps = 200;
 
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                Accountant.DeviationExceeded.selector, deviationBps, accountant.maxAllowedDeviation()
-            )
-        );
+        vm.expectEmit(false, false, false, true);
+        emit Accountant.CircuitBreakerTriggered(200, accountant.maxAllowedDeviation(), tooLowRate);
+
         _executeUpdate(tooLowRate);
+
+        assertTrue(accountant.paused());
+        assertEq(accountant.lastExchangeRate(), INITIAL_RATE, "Rate should NOT be updated");
     }
 
     function test_integration_succeedsAtMaxDeviationBoundary() public {
@@ -1349,14 +1473,14 @@ contract AccountantExecutorIntegrationTest is Test {
 
         uint64 computeTs1 = uint64(block.timestamp);
         vm.prank(bot);
-        executor.executeUpdateRate(1.005e18, computeTs1);
+        executor.executeUpdateRate(address(accountant), 1.005e18, computeTs1);
 
         _skipCooldown();
 
         // Use same timestamp as before → stale
         vm.expectRevert(abi.encodeWithSelector(Accountant.StaleComputeTimestamp.selector, computeTs1, computeTs1));
         vm.prank(bot);
-        executor.executeUpdateRate(1.006e18, computeTs1);
+        executor.executeUpdateRate(address(accountant), 1.006e18, computeTs1);
     }
 
     function test_integration_revertsWhenComputeTimestampInFuture() public {
@@ -1366,7 +1490,7 @@ contract AccountantExecutorIntegrationTest is Test {
 
         vm.expectRevert(abi.encodeWithSelector(Accountant.FutureComputeTimestamp.selector, futureTs, block.timestamp));
         vm.prank(bot);
-        executor.executeUpdateRate(1.005e18, futureTs);
+        executor.executeUpdateRate(address(accountant), 1.005e18, futureTs);
     }
 
     function test_integration_revertsWhenComputeTimestampTooOld() public {
@@ -1379,7 +1503,7 @@ contract AccountantExecutorIntegrationTest is Test {
             abi.encodeWithSelector(Accountant.ComputeTimestampTooOld.selector, staleTs, block.timestamp, maxAge)
         );
         vm.prank(bot);
-        executor.executeUpdateRate(1.005e18, staleTs);
+        executor.executeUpdateRate(address(accountant), 1.005e18, staleTs);
     }
 
     // =============================================================
@@ -1495,8 +1619,89 @@ contract AccountantExecutorIntegrationTest is Test {
 
     // =============================================================
     //                 EMERGENCY RATE UPDATE
-    //                 (commented out — function is disabled)
     // =============================================================
+
+    function test_integration_emergencyRateUpdate_succeeds() public {
+        uint64 crashRate = 0.5e18;
+
+        vm.expectEmit(false, false, false, true);
+        emit Accountant.EmergencyRateUpdated(INITIAL_RATE, crashRate, block.timestamp);
+
+        vm.prank(admin);
+        accountant.emergencyRateUpdate(crashRate);
+
+        assertEq(accountant.lastExchangeRate(), crashRate);
+        assertEq(accountant.getRate(), crashRate);
+        assertEq(accountant.lastUpdateTimestamp(), block.timestamp);
+        assertEq(accountant.lastComputeTimestamp(), block.timestamp);
+    }
+
+    function test_integration_emergencyRateUpdate_bypassesDeviationAndCooldown() public {
+        // No cooldown skip and 50% drop — both constraints bypassed
+        uint64 crashRate = 0.5e18;
+
+        vm.prank(admin);
+        accountant.emergencyRateUpdate(crashRate);
+
+        assertEq(accountant.lastExchangeRate(), crashRate);
+    }
+
+    function test_integration_emergencyRateUpdate_revertsWhenNotAdmin() public {
+        bytes32 adminRole = accountant.DEFAULT_ADMIN_ROLE();
+
+        vm.expectRevert(
+            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, bot, adminRole)
+        );
+        vm.prank(bot);
+        accountant.emergencyRateUpdate(0.5e18);
+    }
+
+    function test_integration_emergencyRateUpdate_unpausesWhenPaused() public {
+        vm.prank(admin);
+        accountant.pause();
+        assertTrue(accountant.paused());
+
+        vm.prank(admin);
+        accountant.emergencyRateUpdate(0.8e18);
+
+        assertFalse(accountant.paused());
+        assertEq(accountant.lastExchangeRate(), 0.8e18);
+    }
+
+    function test_integration_emergencyRateUpdate_thenNormalUpdateResumes() public {
+        // Emergency crash to 0.99e18
+        vm.prank(admin);
+        accountant.emergencyRateUpdate(0.99e18);
+
+        // After emergency, normal updates should work within the new rate's deviation band
+        _skipCooldown();
+        uint64 recoveryRate = 0.995e18; // within 1% of 0.99e18
+        _executeUpdate(recoveryRate);
+        assertEq(accountant.lastExchangeRate(), recoveryRate);
+    }
+
+    function test_integration_emergencyRateUpdate_settlesFees() public {
+        uint256 totalShares = 100_000e18;
+        vault.setTotalSupply(totalShares);
+
+        // Prime snapshot via normal update
+        _skipCooldown();
+        _executeUpdate(1.005e18);
+
+        // Advance time for fee accrual
+        vm.warp(block.timestamp + 30 days);
+
+        uint256 timeElapsed = block.timestamp - accountant.lastFeeSettleTimestamp();
+        uint256 expectedShares = (totalShares * MANAGEMENT_FEE_BPS * timeElapsed) / (10_000 * 365 days);
+
+        vm.expectEmit(false, false, false, true);
+        emit Accountant.FeesDistributed(expectedShares);
+
+        vm.prank(admin);
+        accountant.emergencyRateUpdate(0.5e18);
+
+        assertEq(vault.lastFeeShares(), expectedShares);
+    }
 
     // =============================================================
     //                  ADMIN SETTER FUNCTIONS
@@ -1635,9 +1840,8 @@ contract AccountantExecutorIntegrationTest is Test {
         assertEq(accountant.lastExchangeRate(), newRate);
     }
 
-    function testFuzz_integration_revertOutsideDeviation(uint256 rateDelta) public {
+    function testFuzz_integration_pausesOutsideDeviation(uint256 rateDelta) public {
         uint256 maxDev = accountant.maxAllowedDeviation();
-        // (maxDev + 1) ensures floor-division in _checkDeviation still exceeds the cap
         uint256 minBadDelta = (INITIAL_RATE * (maxDev + 1)) / 10_000;
         rateDelta = bound(rateDelta, minBadDelta, INITIAL_RATE / 2);
 
@@ -1645,7 +1849,9 @@ contract AccountantExecutorIntegrationTest is Test {
 
         uint64 newRate = uint64(INITIAL_RATE + rateDelta);
 
-        vm.expectRevert();
         _executeUpdate(newRate);
+
+        assertTrue(accountant.paused());
+        assertEq(accountant.lastExchangeRate(), INITIAL_RATE, "Rate should NOT be updated");
     }
 }

@@ -17,12 +17,6 @@ contract AccountantExecutor is AccessControlUpgradeable, UUPSUpgradeable {
     bytes32 public constant BOT_ROLE = keccak256("BOT_ROLE");
 
     // =============================================================
-    //                      STATE VARIABLES
-    // =============================================================
-
-    IAccountant public accountant;
-
-    // =============================================================
     //                          EVENTS
     // =============================================================
 
@@ -43,12 +37,10 @@ contract AccountantExecutor is AccessControlUpgradeable, UUPSUpgradeable {
         _disableInitializers();
     }
 
-    function initialize(address accountant_, address admin) external initializer {
-        if (accountant_ == address(0) || admin == address(0)) revert ZeroAddress();
+    function initialize(address admin) external initializer {
+        if (admin == address(0)) revert ZeroAddress();
 
         __AccessControl_init();
-
-        accountant = IAccountant(accountant_);
 
         _setRoleAdmin(BOT_ROLE, DEFAULT_ADMIN_ROLE);
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
@@ -59,10 +51,15 @@ contract AccountantExecutor is AccessControlUpgradeable, UUPSUpgradeable {
     // =============================================================
 
     /// @notice Trigger an exchange rate update on the Accountant.
+    /// @param accountant_ The Accountant contract to call
     /// @param newRate The new exchange rate to push
     /// @param computeTimestamp Off-chain computation timestamp for staleness check
-    function executeUpdateRate(uint64 newRate, uint64 computeTimestamp) external onlyRole(BOT_ROLE) {
-        accountant.updateExchangeRate(newRate, computeTimestamp);
+    function executeUpdateRate(address accountant_, uint64 newRate, uint64 computeTimestamp)
+        external
+        onlyRole(BOT_ROLE)
+    {
+        if (accountant_ == address(0)) revert ZeroAddress();
+        IAccountant(accountant_).updateExchangeRate(newRate, computeTimestamp);
         emit RateUpdateExecuted(msg.sender, newRate, computeTimestamp);
     }
 

@@ -63,9 +63,8 @@ contract DeployAccountant is Script {
 
         // ---- 4. Deploy AccountantExecutor behind UUPS proxy (ERC1967Proxy) ----
         executorImpl = new AccountantExecutor();
-        ERC1967Proxy executorProxy = new ERC1967Proxy(
-            address(executorImpl), abi.encodeCall(AccountantExecutor.initialize, (accountantAddr, admin))
-        );
+        ERC1967Proxy executorProxy =
+            new ERC1967Proxy(address(executorImpl), abi.encodeCall(AccountantExecutor.initialize, (admin)));
         executor = AccountantExecutor(address(executorProxy));
         console2.log("[4/5] Executor impl      :", address(executorImpl));
         console2.log("       Executor (UUPS)   :", address(executorProxy));
