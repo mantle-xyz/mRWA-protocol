@@ -20,7 +20,7 @@ import {Script, console2} from "forge-std/Script.sol";
 /// - ADAPTER_PRICE_ORACLE                 (default: address(0))
 contract DeploySubRedManagementAdapter is Script {
     function run() external {
-        uint256 deployerPk = vm.envOr("DEPLOYER_PRIVATE_KEY", vm.envUint("PRIVATE_KEY"));
+        uint256 deployerPk = vm.envUint("F_PRIVATE_KEY");
 
         address vault_ = vm.envAddress("ADAPTER_VAULT");
         address subRedManagement = vm.envAddress("ADAPTER_SUBRED_MANAGEMENT");

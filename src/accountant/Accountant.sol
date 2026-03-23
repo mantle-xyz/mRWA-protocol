@@ -81,6 +81,7 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
     event MaxComputeAgeUpdated(uint256 oldAge, uint256 newAge);
     event VaultUpdated(address indexed oldVault, address indexed newVault);
     event EmergencyRateUpdated(uint256 oldRate, uint256 newRate, uint256 timestamp);
+    event CircuitBreakerTriggered(uint256 deviationBps, uint256 maxAllowed, uint256 proposedRate);
 
     // =============================================================
     //                       CUSTOM ERRORS
@@ -208,7 +209,13 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
 
         AccountantStorage storage s = _getAccountantStorage();
         _checkComputeTimestamp(s, computeTimestamp);
-        _checkDeviation(s, newRate);
+
+        (bool withinBand, uint256 deviationBps) = _checkDeviation(s, newRate);
+        if (!withinBand) {
+            _pause();
+            emit CircuitBreakerTriggered(deviationBps, s.maxAllowedDeviation, newRate);
+            return;
+        }
 
         uint256 cooldownEnd = uint256(s.lastUpdateTimestamp) + s.minUpdateInterval;
         if (block.timestamp < cooldownEnd) {
@@ -224,6 +231,36 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
         s.lastComputeTimestamp = computeTimestamp;
 
         emit ExchangeRateUpdated(oldRate, newRate, block.timestamp);
+    }
+
+    // =============================================================
+    //                   EMERGENCY FUNCTIONS
+    // =============================================================
+
+    /// @notice Force-override the exchange rate during a black swan event
+    ///         (e.g. massive bad debt in the underlying protocol) where the
+    ///         real NAV drop exceeds the normal circuit-breaker threshold.
+    ///         Bypasses deviation and cooldown checks, then triggers a global
+    ///         pause on both the Accountant and the Vault.
+    /// @dev Intended to be called exclusively by a protocol multisig behind a
+    ///      timelock. The Accountant should hold the PAUSER_ROLE on the Vault
+    ///      for the vault-side pause to succeed automatically.
+    /// @param newRate The corrected exchange rate (18-decimal precision)
+    function emergencyRateUpdate(uint64 newRate) external onlyRole(DEFAULT_ADMIN_ROLE) nonReentrant {
+        if (newRate == 0) revert InvalidRate();
+
+        AccountantStorage storage s = _getAccountantStorage();
+        uint256 oldRate = s.lastExchangeRate;
+
+        _settleManagementFee(s);
+
+        s.lastExchangeRate = newRate;
+        s.lastUpdateTimestamp = block.timestamp.toUint64();
+        s.lastComputeTimestamp = block.timestamp.toUint64();
+
+        if (paused()) _unpause();
+
+        emit EmergencyRateUpdated(oldRate, newRate, block.timestamp);
     }
 
     // =============================================================
@@ -309,13 +346,15 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
         }
     }
 
-    /// @dev Reverts if the rate change exceeds maxAllowedDeviation (in bps).
-    function _checkDeviation(AccountantStorage storage s, uint64 newRate) internal view {
+    /// @dev Returns whether the rate change is within maxAllowedDeviation, plus the actual deviation in bps.
+    function _checkDeviation(AccountantStorage storage s, uint64 newRate)
+        internal
+        view
+        returns (bool withinBand, uint256 deviationBps)
+    {
         uint256 cached = s.lastExchangeRate;
         uint256 delta = newRate > cached ? newRate - cached : cached - newRate;
-        uint256 deviationBps = (delta * MAX_BPS) / cached;
-        if (deviationBps > s.maxAllowedDeviation) {
-            revert DeviationExceeded(deviationBps, s.maxAllowedDeviation);
-        }
+        deviationBps = (delta * MAX_BPS) / cached;
+        withinBand = deviationBps <= s.maxAllowedDeviation;
     }
 }
