@@ -124,6 +124,7 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
         s.vault = IMantleYieldVault(vault_);
         s.managementFeeRate = managementFeeRate_;
         s.lastExchangeRate = initialRate;
+        s.lastComputeTimestamp = block.timestamp.toUint64();
         s.lastUpdateTimestamp = block.timestamp.toUint64();
         s.lastFeeSettleTimestamp = block.timestamp.toUint64();
         s.totalSharesLastSettle = IMantleYieldVault(vault_).totalSupply();
