@@ -726,16 +726,22 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
             uint256 originalAlloc = alloc;
             uint256 pendingInvestPos = vault.adapterInvestInFlightTokens(adapter);
             if (pendingInvestPos > 0) {
-                uint256 estimatedPosForAlloc = _estimatePosAmount(adapter, alloc, alloc);
-                if (pendingInvestPos >= estimatedPosForAlloc) {
-                    emit InvestSkipped(adapter, originalAlloc);
-                    continue;
-                }
+                // Compare pending coverage against the adapter's full shortfall, not this round's capped alloc.
+                // If estimation fails (returns 0 via fallback), skip deduction to avoid asset/pos unit mismatch.
+                uint256 estimatedPosForShortfall = _estimatePosAmount(adapter, shortfall, 0);
+                if (estimatedPosForShortfall > 0) {
+                    if (pendingInvestPos >= estimatedPosForShortfall) {
+                        emit InvestSkipped(adapter, originalAlloc);
+                        continue;
+                    }
 
-                alloc = Math.mulDiv(originalAlloc, estimatedPosForAlloc - pendingInvestPos, estimatedPosForAlloc);
-                if (alloc == 0) {
-                    emit InvestSkipped(adapter, originalAlloc);
-                    continue;
+                    uint256 uncoveredShortfall =
+                        Math.mulDiv(shortfall, estimatedPosForShortfall - pendingInvestPos, estimatedPosForShortfall);
+                    alloc = uncoveredShortfall < remaining ? uncoveredShortfall : remaining;
+                    if (alloc == 0) {
+                        emit InvestSkipped(adapter, originalAlloc);
+                        continue;
+                    }
                 }
             }
 
@@ -791,7 +797,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
             uint256 coveredByPending = pendingRedeemAsset >= toWithdrawAsset ? toWithdrawAsset : pendingRedeemAsset;
             uint256 requestAsset = toWithdrawAsset - coveredByPending;
             if (requestAsset == 0) {
-                remaining -= toWithdrawAsset;
+                remaining = _remainingAfterClear(remaining, toWithdrawAsset);
                 continue;
             }
 
@@ -799,18 +805,16 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
                 address token = _posToken(adapter);
                 if (token == address(0)) {
                     emit DivestSkipped(adapter, requestAsset);
-                    if (coveredByPending >= remaining) {
-                        remaining = 0;
-                    } else {
-                        remaining -= coveredByPending;
-                    }
+                    remaining = _remainingAfterClear(remaining, coveredByPending);
                     continue;
                 }
 
                 // Convert asset amount into position-token amount for protocol redeem.
-                uint256 posAmount = _estimatePosAmount(adapter, requestAsset, requestAsset);
+                uint256 posAmount = _estimatePosAmount(adapter, requestAsset, 0);
                 if (posAmount == 0) {
-                    posAmount = requestAsset;
+                    emit DivestSkipped(adapter, requestAsset);
+                    remaining = _remainingAfterClear(remaining, coveredByPending);
+                    continue;
                 }
 
                 vault.approveToAdapter(adapter, token, posAmount);
@@ -818,17 +822,13 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
                 catch {
                     vault.approveToAdapter(adapter, token, 0);
                     emit DivestSkipped(adapter, requestAsset);
-                    if (coveredByPending >= remaining) {
-                        remaining = 0;
-                    } else {
-                        remaining -= coveredByPending;
-                    }
+                    remaining = _remainingAfterClear(remaining, coveredByPending);
                     continue;
                 }
                 vault.approveToAdapter(adapter, token, 0);
 
                 _recordAsyncRedeemInFlight(adapter, token, requestAsset, posAmount);
-                remaining -= (coveredByPending + requestAsset);
+                remaining = _remainingAfterClear(remaining, coveredByPending + requestAsset);
                 continue;
             }
 
@@ -836,37 +836,27 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
             address syncPosToken = _posToken(adapter);
             if (syncPosToken == address(0)) {
                 emit DivestSkipped(adapter, requestAsset);
-                if (coveredByPending >= remaining) {
-                    remaining = 0;
-                } else {
-                    remaining -= coveredByPending;
-                }
+                remaining = _remainingAfterClear(remaining, coveredByPending);
                 continue;
             }
 
-            uint256 syncPosAllowance = _estimatePosAmount(adapter, requestAsset, requestAsset);
-            if (syncPosAllowance == 0) {
-                syncPosAllowance = requestAsset;
+            uint256 syncPosAmount = _estimatePosAmount(adapter, requestAsset, 0);
+            if (syncPosAmount == 0) {
+                emit DivestSkipped(adapter, requestAsset);
+                remaining = _remainingAfterClear(remaining, coveredByPending);
+                continue;
             }
-            vault.approveToAdapter(adapter, syncPosToken, syncPosAllowance);
+            vault.approveToAdapter(adapter, syncPosToken, syncPosAmount);
 
             try IStrategyAdapter(adapter).withdrawSync(requestAsset, adapter) returns (uint256 received) {
-                _recordSyncRedeemInFlight(adapter, syncPosToken, requestAsset, received);
+                _recordSyncRedeemInFlight(adapter, syncPosToken, syncPosAmount, requestAsset, received);
                 vault.approveToAdapter(adapter, syncPosToken, 0);
                 uint256 cleared = coveredByPending + received;
-                if (cleared >= remaining) {
-                    remaining = 0;
-                } else {
-                    remaining -= cleared;
-                }
+                remaining = _remainingAfterClear(remaining, cleared);
             } catch {
                 vault.approveToAdapter(adapter, syncPosToken, 0);
                 emit DivestSkipped(adapter, requestAsset);
-                if (coveredByPending >= remaining) {
-                    remaining = 0;
-                } else {
-                    remaining -= coveredByPending;
-                }
+                remaining = _remainingAfterClear(remaining, coveredByPending);
             }
         }
 
@@ -1057,6 +1047,8 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     }
 
     /// @dev Async redeem path records pending USDC and emits unified in-flight events.
+    ///      `posAmount` is expected/estimated position-token amount used for request and bookkeeping.
+    ///      It may differ from actual protocol consumption under price movement or rounding.
     function _recordAsyncRedeemInFlight(address adapter, address token, uint256 requestedAsset, uint256 posAmount)
         internal
         returns (uint256 inFlightId)
@@ -1070,21 +1062,26 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     }
 
     /// @dev Sync redeem path records pending USDC on adapter and waits for off-chain settlement.
-    function _recordSyncRedeemInFlight(address adapter, address token, uint256 requestedAsset, uint256 receivedAsset)
-        internal
-        returns (uint256 inFlightId)
-    {
-        if (requestedAsset == 0 || receivedAsset == 0) {
+    ///      `posAmount` is expected/estimated position-token amount captured at request time.
+    ///      For redeem flow, settlement accounting is driven by `receivedAsset` (USDC), while
+    ///      `posAmount` remains informational/bookkeeping and can deviate from actual token burn.
+    function _recordSyncRedeemInFlight(
+        address adapter,
+        address token,
+        uint256 posAmount,
+        uint256 requestedAsset,
+        uint256 receivedAsset
+    ) internal returns (uint256 inFlightId) {
+        if (requestedAsset == 0 || receivedAsset == 0 || posAmount == 0) {
             return 0;
-        }
-
-        uint256 posAmount = _estimatePosAmount(adapter, requestedAsset, requestedAsset);
-        if (posAmount == 0) {
-            posAmount = requestedAsset;
         }
 
         inFlightId = vault.createInFlight(adapter, token, posAmount, receivedAsset, false);
         emit RedeemInFlightRecorded(adapter, inFlightId, requestedAsset, receivedAsset, false);
+    }
+
+    function _remainingAfterClear(uint256 remaining, uint256 cleared) internal pure returns (uint256) {
+        return cleared >= remaining ? 0 : remaining - cleared;
     }
 
     function _estimatePosAmount(address adapter, uint256 assetAmount, uint256 fallbackAmount)
