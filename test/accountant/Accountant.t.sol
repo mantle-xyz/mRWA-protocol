@@ -114,7 +114,7 @@ contract AccountantTest is Test {
         assertEq(accountant.lastUpdateTimestamp(), 1000);
         assertEq(accountant.lastFeeSettleTimestamp(), 1000);
         assertEq(accountant.totalSharesLastSettle(), 0);
-        assertEq(accountant.lastComputeTimestamp(), 0);
+        assertEq(accountant.lastComputeTimestamp(), 1000);
     }
 
     function test_initialize_setsRolesCorrectly() public view {
@@ -819,6 +819,7 @@ contract AccountantTest is Test {
         accountant.setRiskParams(200, 0);
 
         // 2% deviation now accepted
+        vm.warp(block.timestamp + 1);
         _doUpdate(1.02e18);
         assertEq(accountant.lastExchangeRate(), 1.02e18);
     }
