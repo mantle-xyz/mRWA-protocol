@@ -66,7 +66,6 @@ contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultA
         whenNotPaused
         returns (uint256 requestId)
     {
-        if (caller != owner) _spendAllowance(owner, caller, shares);
         return _requestRedeem(owner, shares);
     }
 
