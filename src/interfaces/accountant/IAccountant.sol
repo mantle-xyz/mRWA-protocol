@@ -8,7 +8,7 @@ interface IAccountant {
 
     function updateExchangeRate(uint64 newRate, uint64 computeTimestamp) external;
 
-    function getRate() external view returns (uint64);
-    function getRateSafe() external view returns (uint64);
+    function getRate() external view returns (uint256);
+    function getRateSafe() external view returns (uint256);
     function managementFeeRate() external view returns (uint32);
 }

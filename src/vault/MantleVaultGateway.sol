@@ -189,7 +189,7 @@ contract MantleVaultGateway is
     }
 
     function _isSubscribeRedeemPaused() internal view returns (bool paused_) {
-        try IAccountant(vault.accountant()).getRateSafe() returns (uint64) {
+        try IAccountant(vault.accountant()).getRateSafe() returns (uint256) {
             return false;
         } catch {
             return true;
