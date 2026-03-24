@@ -66,7 +66,6 @@ contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultA
         whenNotPaused
         returns (uint256 requestId)
     {
-        if (caller != owner) _spendAllowance(owner, caller, shares);
         return _requestRedeem(owner, shares);
     }
 
@@ -184,7 +183,7 @@ contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultA
             IERC20 token = IERC20(adapter.posToken());
             uint256 tokenAmount = adapterInvestInFlightTokens[adapters[i]] + token.balanceOf(address(this));
             uint256 priceE18 = adapter.getPosTokenPrice();
-            uint256 usdcAmount = tokenAmount.mulDiv(priceE18, 1e18, Math.Rounding.Floor);
+            uint256 usdcAmount = tokenAmount.mulDiv(priceE18, 1e6, Math.Rounding.Floor);
             infos[i + 1] = tokenInfo(adapter.posToken(), tokenAmount, usdcAmount);
         }
         return infos;
