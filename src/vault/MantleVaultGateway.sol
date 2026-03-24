@@ -60,7 +60,10 @@ contract MantleVaultGateway is
     function redeem(uint256 shares) external nonReentrant returns (uint256 assets) {
         if (syncRedeemDisabled) revert IMantleYieldVault.Vault__SyncRedeemDisabled();
         if (_isSubscribeRedeemPaused()) revert EnforcedPause();
-        _requireNotSanctioned(msg.sender);
+        if (isSanctioned(msg.sender)) {
+            vault.routeSanctionedShares(msg.sender, msg.sender, shares);
+            return 0;
+        }
         _requireWhitelisted(msg.sender);
         return vault.redeemFor(msg.sender, shares, msg.sender, msg.sender);
     }
