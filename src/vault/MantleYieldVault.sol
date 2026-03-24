@@ -56,7 +56,7 @@ contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultA
             status: RequestStatus.PENDING
         });
 
-        emit RedeemRequest(owner, requestId, shares);
+        emit RedeemRequest(owner, requestId, shares, estimatedAssets);
     }
 
     function requestRedeemFor(address caller, address owner, uint256 shares)

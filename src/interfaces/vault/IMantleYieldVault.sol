@@ -9,7 +9,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 // =============================================================
 
 interface IERC7540Redeem {
-    event RedeemRequest(address indexed account, uint256 indexed requestId, uint256 shares);
+    event RedeemRequest(address indexed account, uint256 indexed requestId, uint256 shares, uint256 estimatedAssets);
 
     function requestRedeem(uint256 shares) external returns (uint256 requestId);
     function pendingRedeemRequest(address account) external view returns (uint256 shares);
@@ -119,7 +119,7 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     // =============================================================
 
     event SactionSafeIn(address indexed account, address indexed token, uint256 amount);
-    event RedemptionDone(address indexed account, address indexed receiver, uint256 shares, uint256 assets);
+    event RedemptionDone(address indexed account, address indexed receiver, uint256 shares, uint256 assets, uint256 estimatedAssets);
     event RedemptionFeeUpdated(uint256 oldFeeBps, uint256 newFeeBps);
     event MinRedeemAmountUpdated(uint256 oldAmount, uint256 newAmount);
     event MinDepositAmountUpdated(uint256 oldAmount, uint256 newAmount);
