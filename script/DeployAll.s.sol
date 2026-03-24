@@ -41,7 +41,7 @@ import {Script, console2} from "forge-std/Script.sol";
 ///         │  MantleYieldVault    → BeaconProxy (UNINIT — deferred)         │
 ///         │  StrategyController  → BeaconProxy (UNINIT — deferred)         │
 ///         │  Accountant          → BeaconProxy (init: vault)               │
-///         │  OperatorExecutor    → UUPS proxy (init: admin, signer)        │
+///         │  OperatorExecutor    → UUPS proxy (init: admin, bot)           │
 ///         │  AccountantExecutor  → UUPS proxy (init: accountant)           │
 ///         └─────────────────────────────────────────────────────────────────┘
 ///         ┌─ Phase 3: Deferred BeaconProxy initialization ─────────────────┐
@@ -60,7 +60,7 @@ import {Script, console2} from "forge-std/Script.sol";
 ///   F_USDC_ADDRESS               – USDC token address
 ///   F_COMPLIANCE_BOT_ADDRESS     – SanctionsOracle COMPLIANCE_ROLE
 ///   F_BOT_ADDRESS                – AccountantExecutor BOT_ROLE
-///   F_SIGNER_ADDRESS             – OperatorExecutor SIGNER_ROLE (initial signer)
+///   F_SIGNER_ADDRESS             – OperatorExecutor BOT_ROLE (initial bot, legacy env name)
 ///   F_STRATEGY_MANAGER_ADDRESS   – StrategyController STRATEGY_MANAGER_ROLE
 ///   F_TREASURY_ADDRESS           – fee share recipient
 ///   (also used as gateway sanctionSafe init)
@@ -313,8 +313,8 @@ contract DeployAll is Script {
         console2.log("  Has PAUSER:      ", d.controller.hasRole(d.controller.PAUSER_ROLE(), opExecAddr));
         console2.log("");
         console2.log("--- OperatorExecutor ---");
-        console2.log("  Controller:      ", "from signed payload");
-        console2.log("  Has SIGNER:      ", d.operatorExecutor.hasRole(d.operatorExecutor.SIGNER_ROLE(), signer));
+        console2.log("  Controller:      ", "passed per execute call");
+        console2.log("  Has BOT:         ", d.operatorExecutor.hasRole(d.operatorExecutor.BOT_ROLE(), signer));
         console2.log("");
         console2.log("========== Deployment Complete ==========");
     }

@@ -33,6 +33,8 @@ contract MockStrategyAdapter is IStrategyAdapter {
     uint256 public claimCount;
     address public lastClaimToken;
     uint256 public lastClaimAmount;
+    uint256 public sweepReturnAmount;
+    bool public useSweepReturnAmount;
 
     constructor(address asset_, address posToken_) {
         ASSET = asset_;
@@ -51,6 +53,11 @@ contract MockStrategyAdapter is IStrategyAdapter {
 
     function setFailEstimate(bool e) external {
         failEstimate = e;
+    }
+
+    function setSweepReturnAmount(uint256 amount_) external {
+        sweepReturnAmount = amount_;
+        useSweepReturnAmount = true;
     }
 
     function name() external pure returns (string memory) {
@@ -107,6 +114,9 @@ contract MockStrategyAdapter is IStrategyAdapter {
         claimCount++;
         lastClaimToken = token;
         lastClaimAmount = amount;
+        if (useSweepReturnAmount) {
+            return sweepReturnAmount;
+        }
         return amount;
     }
 
@@ -931,13 +941,65 @@ contract StrategyControllerUnitTest is Test {
         assertEq(vault.investInFlightByAdapter(address(asyncAdapter)), 10e18);
         uint256[] memory investInFlightIds = new uint256[](1);
         investInFlightIds[0] = inFlightId;
+        uint256[] memory investSettledAmounts = new uint256[](1);
+        investSettledAmounts[0] = 10e18;
 
         vm.prank(address(executorGateway));
-        controller.settleAdapter(address(asyncAdapter), 0, 0, investInFlightIds, new uint256[](0));
+        controller.settleAdapter(
+            address(asyncAdapter), investInFlightIds, investSettledAmounts, new uint256[](0), new uint256[](0)
+        );
 
         (,,,,,, bool isInvest,, IMantleYieldVault.InFlightStatus status) = vault.inFlightRecords(inFlightId);
         assertTrue(isInvest);
         assertEq(uint8(status), uint8(IMantleYieldVault.InFlightStatus.CONFIRMED));
+        assertEq(asyncAdapter.claimCount(), 1);
+        assertEq(asyncAdapter.lastClaimToken(), address(posToken));
+        assertEq(asyncAdapter.lastClaimAmount(), 10e18);
+        assertEq(vault.investInFlightTotal(), 0);
+        assertEq(vault.investInFlightByAdapter(address(asyncAdapter)), 0);
+    }
+
+    function test_SettleAdapter_InvestFlow_UsesClaimedAsActualSettledAmount() public {
+        _registerSingleAsyncStrategy();
+        uint256 inFlightId = vault.createInFlight(address(asyncAdapter), address(posToken), 100e18, 100e18, true);
+        uint256[] memory investInFlightIds = new uint256[](1);
+        investInFlightIds[0] = inFlightId;
+        uint256[] memory investSettledAmounts = new uint256[](1);
+        investSettledAmounts[0] = 99e18;
+        asyncAdapter.setSweepReturnAmount(99e18);
+
+        vm.prank(address(executorGateway));
+        controller.settleAdapter(
+            address(asyncAdapter), investInFlightIds, investSettledAmounts, new uint256[](0), new uint256[](0)
+        );
+
+        (,,,,, uint256 settledAmount, bool isInvest,, IMantleYieldVault.InFlightStatus status) =
+            vault.inFlightRecords(inFlightId);
+        assertTrue(isInvest);
+        assertEq(uint8(status), uint8(IMantleYieldVault.InFlightStatus.CONFIRMED));
+        assertEq(settledAmount, 99e18);
+        assertEq(vault.investInFlightTotal(), 0);
+    }
+
+    function test_SettleAdapter_AbnormalInvestWhenThirdPartyNotSettledToAdapter() public {
+        _registerSingleAsyncStrategy();
+        uint256 inFlightId = vault.createInFlight(address(asyncAdapter), address(posToken), 100e18, 100e18, true);
+        uint256[] memory investInFlightIds = new uint256[](1);
+        investInFlightIds[0] = inFlightId;
+        uint256[] memory investSettledAmounts = new uint256[](1);
+        investSettledAmounts[0] = 0;
+
+        vm.prank(address(executorGateway));
+        controller.settleAdapter(
+            address(asyncAdapter), investInFlightIds, investSettledAmounts, new uint256[](0), new uint256[](0)
+        );
+
+        (,,,,, uint256 settledAmount, bool isInvest,, IMantleYieldVault.InFlightStatus status) =
+            vault.inFlightRecords(inFlightId);
+        assertTrue(isInvest);
+        assertEq(uint8(status), uint8(IMantleYieldVault.InFlightStatus.CONFIRMED));
+        assertEq(settledAmount, 0);
+        assertEq(asyncAdapter.claimCount(), 0);
         assertEq(vault.investInFlightTotal(), 0);
         assertEq(vault.investInFlightByAdapter(address(asyncAdapter)), 0);
     }
@@ -947,27 +1009,55 @@ contract StrategyControllerUnitTest is Test {
         uint256 inFlightId = vault.createInFlight(address(syncAdapter), address(posToken), 10e18, 10e18, true);
         uint256[] memory investInFlightIds = new uint256[](1);
         investInFlightIds[0] = inFlightId;
+        uint256[] memory investSettledAmounts = new uint256[](1);
+        investSettledAmounts[0] = 10e18;
 
         vm.prank(address(executorGateway));
         vm.expectRevert(abi.encodeWithSelector(StrategyController.InvalidInvestInFlight.selector, inFlightId));
-        controller.settleAdapter(address(asyncAdapter), 0, 0, investInFlightIds, new uint256[](0));
+        controller.settleAdapter(
+            address(asyncAdapter), investInFlightIds, investSettledAmounts, new uint256[](0), new uint256[](0)
+        );
     }
 
     function test_RevertWhen_SettleAdapterInvalidStrategy() public {
         vm.prank(address(executorGateway));
         vm.expectRevert(abi.encodeWithSelector(StrategyController.InvalidStrategy.selector, address(syncAdapter)));
-        controller.settleAdapter(address(syncAdapter), 1, 1, new uint256[](0), new uint256[](0));
+        controller.settleAdapter(
+            address(syncAdapter), new uint256[](0), new uint256[](0), new uint256[](0), new uint256[](0)
+        );
     }
 
     function test_RevertWhen_SettleAdapterMissingInvestInFlightIds() public {
         _registerSingleAsyncStrategy();
         vault.createInFlight(address(asyncAdapter), address(posToken), 10e18, 10e18, true);
+        uint256[] memory investSettledAmounts = new uint256[](1);
+        investSettledAmounts[0] = 1e18;
+
+        vm.prank(address(executorGateway));
+        vm.expectRevert(StrategyController.SettleAmountsLengthMismatch.selector);
+        controller.settleAdapter(
+            address(asyncAdapter), new uint256[](0), investSettledAmounts, new uint256[](0), new uint256[](0)
+        );
+    }
+
+    function test_RevertWhen_SettleAdapterInvestClaimedZeroWithProvidedIds() public {
+        _registerSingleAsyncStrategy();
+        uint256 inFlightId = vault.createInFlight(address(asyncAdapter), address(posToken), 10e18, 10e18, true);
+        uint256[] memory investInFlightIds = new uint256[](1);
+        investInFlightIds[0] = inFlightId;
+        uint256[] memory investSettledAmounts = new uint256[](1);
+        investSettledAmounts[0] = 10e18;
+        asyncAdapter.setSweepReturnAmount(0);
 
         vm.prank(address(executorGateway));
         vm.expectRevert(
-            abi.encodeWithSelector(StrategyController.InvestInFlightIdsRequired.selector, address(asyncAdapter))
+            abi.encodeWithSelector(
+                StrategyController.InvestSweepAmountMismatch.selector, address(asyncAdapter), 10e18, 0
+            )
         );
-        controller.settleAdapter(address(asyncAdapter), 1e18, 0, new uint256[](0), new uint256[](0));
+        controller.settleAdapter(
+            address(asyncAdapter), investInFlightIds, investSettledAmounts, new uint256[](0), new uint256[](0)
+        );
     }
 
     function test_RebalanceInvestAsync_StillInvestsWhenPendingDoesNotCoverFullShortfall() public {
@@ -1101,11 +1191,15 @@ contract StrategyControllerUnitTest is Test {
         assertEq(vault.redeemInFlightByAdapter(address(asyncAdapter)), 100e18);
         uint256[] memory redeemInFlightIds = new uint256[](1);
         redeemInFlightIds[0] = redeemInFlightId;
+        uint256[] memory redeemSettledAmounts = new uint256[](1);
+        redeemSettledAmounts[0] = 100e18;
 
         asset.mint(address(vault), 100e18);
 
         vm.prank(address(executorGateway));
-        controller.settleAdapter(address(asyncAdapter), 0, 100e18, new uint256[](0), redeemInFlightIds);
+        controller.settleAdapter(
+            address(asyncAdapter), new uint256[](0), new uint256[](0), redeemInFlightIds, redeemSettledAmounts
+        );
 
         assertEq(asyncAdapter.claimCount(), 1);
         assertEq(asyncAdapter.lastClaimToken(), address(asset));
@@ -1134,16 +1228,22 @@ contract StrategyControllerUnitTest is Test {
         uint256 investInFlightId = vault.createInFlight(address(asyncAdapter), address(posToken), 25e18, 50e18, true);
         uint256[] memory investInFlightIds = new uint256[](1);
         investInFlightIds[0] = investInFlightId;
+        uint256[] memory investSettledAmounts = new uint256[](1);
+        investSettledAmounts[0] = 25e18;
 
         uint256 redeemInFlightId = vault.createInFlight(address(asyncAdapter), address(posToken), 50e18, 100e18, false);
         uint256[] memory redeemInFlightIds = new uint256[](1);
         redeemInFlightIds[0] = redeemInFlightId;
+        uint256[] memory redeemSettledAmounts = new uint256[](1);
+        redeemSettledAmounts[0] = 100e18;
         assertEq(vault.investInFlightTotal(), 50e18);
         assertEq(vault.redeemInFlightTotal(), 100e18);
 
         asset.mint(address(vault), 100e18);
         vm.prank(address(executorGateway));
-        controller.settleAdapter(address(asyncAdapter), 25e18, 100e18, investInFlightIds, redeemInFlightIds);
+        controller.settleAdapter(
+            address(asyncAdapter), investInFlightIds, investSettledAmounts, redeemInFlightIds, redeemSettledAmounts
+        );
 
         (,,,,,, bool investIsInvest,, IMantleYieldVault.InFlightStatus investStatus) =
             vault.inFlightRecords(investInFlightId);
@@ -1168,28 +1268,39 @@ contract StrategyControllerUnitTest is Test {
         controller.processRedeemBatch(ids);
 
         uint256 investInFlightId = vault.createInFlight(address(asyncAdapter), address(posToken), 25e18, 50e18, true);
-        uint256[] memory investInFlightIds = new uint256[](1);
-        investInFlightIds[0] = investInFlightId;
-
         uint256 redeemInFlightId = vault.createInFlight(address(syncAdapter), address(posToken), 50e18, 100e18, false);
-        uint256[] memory redeemInFlightIds = new uint256[](1);
-        redeemInFlightIds[0] = redeemInFlightId;
         assertEq(vault.investInFlightTotal(), 50e18);
         assertEq(vault.redeemInFlightTotal(), 100e18);
 
         address[] memory adapters = new address[](2);
         adapters[0] = address(asyncAdapter);
         adapters[1] = address(syncAdapter);
-        uint256[] memory posAmounts = new uint256[](2);
-        posAmounts[0] = 25e18;
-        posAmounts[1] = 0;
-        uint256[] memory assetAmounts = new uint256[](2);
-        assetAmounts[0] = 0;
-        assetAmounts[1] = 100e18;
+        uint256[][] memory investInFlightIdsBatch = new uint256[][](2);
+        investInFlightIdsBatch[0] = new uint256[](1);
+        investInFlightIdsBatch[0][0] = investInFlightId;
+        investInFlightIdsBatch[1] = new uint256[](0);
+        uint256[][] memory investSettledAmountsBatch = new uint256[][](2);
+        investSettledAmountsBatch[0] = new uint256[](1);
+        investSettledAmountsBatch[0][0] = 25e18;
+        investSettledAmountsBatch[1] = new uint256[](0);
+        uint256[][] memory redeemInFlightIdsBatch = new uint256[][](2);
+        redeemInFlightIdsBatch[0] = new uint256[](0);
+        redeemInFlightIdsBatch[1] = new uint256[](1);
+        redeemInFlightIdsBatch[1][0] = redeemInFlightId;
+        uint256[][] memory redeemSettledAmountsBatch = new uint256[][](2);
+        redeemSettledAmountsBatch[0] = new uint256[](0);
+        redeemSettledAmountsBatch[1] = new uint256[](1);
+        redeemSettledAmountsBatch[1][0] = 100e18;
 
         asset.mint(address(vault), 100e18);
         vm.prank(address(executorGateway));
-        controller.settleAdapters(adapters, posAmounts, assetAmounts, investInFlightIds, redeemInFlightIds);
+        controller.settleAdapters(
+            adapters,
+            investInFlightIdsBatch,
+            investSettledAmountsBatch,
+            redeemInFlightIdsBatch,
+            redeemSettledAmountsBatch
+        );
 
         assertEq(asyncAdapter.claimCount(), 1);
         assertEq(asyncAdapter.lastClaimToken(), address(posToken));
@@ -1219,50 +1330,85 @@ contract StrategyControllerUnitTest is Test {
 
         address[] memory adapters = new address[](1);
         adapters[0] = address(asyncAdapter);
-        uint256[] memory posAmounts = new uint256[](0);
-        uint256[] memory assetAmounts = new uint256[](1);
-        assetAmounts[0] = 1e18;
+        uint256[][] memory investInFlightIdsBatch = new uint256[][](1);
+        investInFlightIdsBatch[0] = new uint256[](1);
+        investInFlightIdsBatch[0][0] =
+            vault.createInFlight(address(asyncAdapter), address(posToken), 10e18, 10e18, true);
+        uint256[][] memory investSettledAmountsBatch = new uint256[][](0);
+        uint256[][] memory redeemInFlightIdsBatch = new uint256[][](1);
+        redeemInFlightIdsBatch[0] = new uint256[](0);
+        uint256[][] memory redeemSettledAmountsBatch = new uint256[][](1);
+        redeemSettledAmountsBatch[0] = new uint256[](0);
 
         vm.prank(address(executorGateway));
-        vm.expectRevert(StrategyController.ClaimInputsLengthMismatch.selector);
-        controller.settleAdapters(adapters, posAmounts, assetAmounts, new uint256[](0), new uint256[](0));
+        vm.expectRevert(StrategyController.SettleAmountsLengthMismatch.selector);
+        controller.settleAdapters(
+            adapters,
+            investInFlightIdsBatch,
+            investSettledAmountsBatch,
+            redeemInFlightIdsBatch,
+            redeemSettledAmountsBatch
+        );
     }
 
     function test_RevertWhen_SettleAdaptersInvestInFlightAdapterNotIncluded() public {
         _registerTwoStrategies();
         uint256 badInFlightId = vault.createInFlight(address(asyncAdapter), address(posToken), 10e18, 10e18, true);
-        uint256[] memory investInFlightIds = new uint256[](1);
-        investInFlightIds[0] = badInFlightId;
 
         address[] memory adapters = new address[](1);
         adapters[0] = address(syncAdapter);
-        uint256[] memory posAmounts = new uint256[](1);
-        uint256[] memory assetAmounts = new uint256[](1);
+        uint256[][] memory investInFlightIdsBatch = new uint256[][](1);
+        investInFlightIdsBatch[0] = new uint256[](1);
+        investInFlightIdsBatch[0][0] = badInFlightId;
+        uint256[][] memory investSettledAmountsBatch = new uint256[][](1);
+        investSettledAmountsBatch[0] = new uint256[](1);
+        investSettledAmountsBatch[0][0] = 10e18;
+        uint256[][] memory redeemInFlightIdsBatch = new uint256[][](1);
+        redeemInFlightIdsBatch[0] = new uint256[](0);
+        uint256[][] memory redeemSettledAmountsBatch = new uint256[][](1);
+        redeemSettledAmountsBatch[0] = new uint256[](0);
 
         vm.prank(address(executorGateway));
         vm.expectRevert(abi.encodeWithSelector(StrategyController.InvalidInvestInFlight.selector, badInFlightId));
-        controller.settleAdapters(adapters, posAmounts, assetAmounts, investInFlightIds, new uint256[](0));
+        controller.settleAdapters(
+            adapters,
+            investInFlightIdsBatch,
+            investSettledAmountsBatch,
+            redeemInFlightIdsBatch,
+            redeemSettledAmountsBatch
+        );
     }
 
     function test_RevertWhen_SettleAdapterMissingRedeemInFlightIds() public {
         _registerSingleAsyncStrategy();
         vault.createInFlight(address(asyncAdapter), address(posToken), 50e18, 100e18, false);
+        uint256[] memory redeemSettledAmounts = new uint256[](1);
+        redeemSettledAmounts[0] = 1;
 
         vm.prank(address(executorGateway));
-        vm.expectRevert(
-            abi.encodeWithSelector(StrategyController.RedeemInFlightIdsRequired.selector, address(asyncAdapter))
+        vm.expectRevert(StrategyController.SettleAmountsLengthMismatch.selector);
+        controller.settleAdapter(
+            address(asyncAdapter), new uint256[](0), new uint256[](0), new uint256[](0), redeemSettledAmounts
         );
-        controller.settleAdapter(address(asyncAdapter), 0, 1, new uint256[](0), new uint256[](0));
     }
 
     function test_RevertWhen_SettleAdapterHasPendingRedeemInFlightWithoutIds() public {
         _registerSingleAsyncStrategy();
-        vault.createInFlight(address(asyncAdapter), address(posToken), 50e18, 100e18, false);
+        uint256 redeemInFlightId = vault.createInFlight(address(asyncAdapter), address(posToken), 50e18, 100e18, false);
+        uint256[] memory redeemInFlightIds = new uint256[](1);
+        redeemInFlightIds[0] = redeemInFlightId;
+        uint256[] memory redeemSettledAmounts = new uint256[](1);
+        redeemSettledAmounts[0] = 100e18;
+        asyncAdapter.setSweepReturnAmount(0);
 
         vm.prank(address(executorGateway));
         vm.expectRevert(
-            abi.encodeWithSelector(StrategyController.RedeemInFlightIdsRequired.selector, address(asyncAdapter))
+            abi.encodeWithSelector(
+                StrategyController.RedeemSweepAmountMismatch.selector, address(asyncAdapter), 100e18, 0
+            )
         );
-        controller.settleAdapter(address(asyncAdapter), 0, 100e18, new uint256[](0), new uint256[](0));
+        controller.settleAdapter(
+            address(asyncAdapter), new uint256[](0), new uint256[](0), redeemInFlightIds, redeemSettledAmounts
+        );
     }
 }

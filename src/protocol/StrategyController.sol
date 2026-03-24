@@ -114,6 +114,9 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     error InvalidInvestInFlight(uint256 inFlightId);
     error InvestInFlightIdsRequired(address adapter);
     error RedeemInFlightIdsRequired(address adapter);
+    error SettleAmountsLengthMismatch();
+    error InvestSweepAmountMismatch(address adapter, uint256 expected, uint256 claimed);
+    error RedeemSweepAmountMismatch(address adapter, uint256 expected, uint256 claimed);
     error ClaimInputsLengthMismatch();
     error UpdateStrategiesLengthMismatch();
     error DuplicateStrategyUpdate(address adapter);
@@ -554,76 +557,47 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     }
 
     /// @notice Settle one adapter by sweeping assets back to vault and confirming in-flight records.
-    /// @dev If `posAmount > 0` (`assetAmount > 0`) and vault has pending invest (redeem) in-flight for `adapter`,
-    ///      caller must provide at least one matching pending id in `investInFlightIds` (`redeemInFlightIds`),
-    ///      otherwise the call reverts.
-    ///      Every provided in-flight id must belong to `adapter`, match direction (invest/redeem), and be pending.
+    /// @dev `investSettledAmounts` and `redeemSettledAmounts` are per-id actual settled values.
+    ///      Their sums are used as sweep amounts and must match sweep return values.
     function settleAdapter(
         address adapter,
-        uint256 posAmount,
-        uint256 assetAmount,
         uint256[] calldata investInFlightIds,
-        uint256[] calldata redeemInFlightIds
+        uint256[] calldata investSettledAmounts,
+        uint256[] calldata redeemInFlightIds,
+        uint256[] calldata redeemSettledAmounts
     ) external onlyOperatorExecutor nonReentrant {
-        if (
-            posAmount > 0 && vault.adapterInvestInFlightTokens(adapter) > 0
-                && !_hasPendingInvestInFlightForAdapter(adapter, investInFlightIds)
-        ) {
-            revert InvestInFlightIdsRequired(adapter);
-        }
-        if (
-            assetAmount > 0 && vault.adapterRedeemInFlightUsdc(adapter) > 0
-                && !_hasPendingRedeemInFlightForAdapter(adapter, redeemInFlightIds)
-        ) {
-            revert RedeemInFlightIdsRequired(adapter);
-        }
-
-        _sweepAdapterAssetsToVaultInternal(adapter, posAmount, assetAmount);
-        _confirmInvestInFlightIds(adapter, investInFlightIds);
-        _confirmRedeemInFlightIds(redeemInFlightIds, adapter);
+        _settleAdapterInternal(
+            adapter, investInFlightIds, investSettledAmounts, redeemInFlightIds, redeemSettledAmounts
+        );
     }
 
     /// @notice Settle multiple adapters in a single transaction.
-    /// @dev `adapters.length`, `posAmounts.length`, and `assetAmounts.length` must match.
-    ///      For each adapter, when sweep amount is non-zero and vault has pending in-flight,
-    ///      matching in-flight ids must be supplied or the call reverts.
-    ///      `investInFlightIds` and `redeemInFlightIds` are aggregated across all `adapters`;
-    ///      each id must map to one of the provided adapters, match direction, and be pending.
+    /// @dev Inputs are grouped per adapter index.
     function settleAdapters(
         address[] calldata adapters,
-        uint256[] calldata posAmounts,
-        uint256[] calldata assetAmounts,
-        uint256[] calldata investInFlightIds,
-        uint256[] calldata redeemInFlightIds
+        uint256[][] calldata investInFlightIdsBatch,
+        uint256[][] calldata investSettledAmountsBatch,
+        uint256[][] calldata redeemInFlightIdsBatch,
+        uint256[][] calldata redeemSettledAmountsBatch
     ) external onlyOperatorExecutor nonReentrant {
+        if (
+            adapters.length != investInFlightIdsBatch.length || adapters.length != investSettledAmountsBatch.length
+                || adapters.length != redeemInFlightIdsBatch.length
+                || adapters.length != redeemSettledAmountsBatch.length
+        ) {
+            revert SettleAmountsLengthMismatch();
+        }
+
         uint256 len = adapters.length;
-        if (len != posAmounts.length || len != assetAmounts.length) {
-            revert ClaimInputsLengthMismatch();
-        }
-
         for (uint256 i = 0; i < len; i++) {
-            address adapter = adapters[i];
-            uint256 posAmount = posAmounts[i];
-            uint256 assetAmount = assetAmounts[i];
-
-            if (
-                posAmount > 0 && vault.adapterInvestInFlightTokens(adapter) > 0
-                    && !_hasPendingInvestInFlightForAdapter(adapter, investInFlightIds)
-            ) {
-                revert InvestInFlightIdsRequired(adapter);
-            }
-            if (
-                assetAmount > 0 && vault.adapterRedeemInFlightUsdc(adapter) > 0
-                    && !_hasPendingRedeemInFlightForAdapter(adapter, redeemInFlightIds)
-            ) {
-                revert RedeemInFlightIdsRequired(adapter);
-            }
-
-            _sweepAdapterAssetsToVaultInternal(adapter, posAmount, assetAmount);
+            _settleAdapterInternal(
+                adapters[i],
+                investInFlightIdsBatch[i],
+                investSettledAmountsBatch[i],
+                redeemInFlightIdsBatch[i],
+                redeemSettledAmountsBatch[i]
+            );
         }
-
-        _confirmInvestInFlightIdsForAdapters(adapters, investInFlightIds);
-        _confirmRedeemInFlightIdsForAdapters(adapters, redeemInFlightIds);
     }
 
     // =============================================================
@@ -888,22 +862,24 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         emit AdapterAssetsSwept(adapter, token, posClaimed, assetClaimed);
     }
 
-    function _confirmRedeemInFlightIds(uint256[] calldata inFlightIds, address expectedAdapter)
-        internal
-        returns (uint256 clearedAmount)
-    {
+    function _confirmRedeemInFlightIds(
+        address expectedAdapter,
+        uint256[] calldata inFlightIds,
+        uint256[] calldata settledAmounts
+    ) internal {
         uint256 len = inFlightIds.length;
         for (uint256 i = 0; i < len; i++) {
             uint256 inFlightId = inFlightIds[i];
+            uint256 settledAmount = settledAmounts[i];
             (, address recordAdapter,,, uint256 usdcAmount,, bool isInvest,, IMantleYieldVault.InFlightStatus status) =
                 vault.inFlightRecords(inFlightId);
-            bool adapterMismatch = expectedAdapter != address(0) && recordAdapter != expectedAdapter;
-            if (adapterMismatch || isInvest || status != IMantleYieldVault.InFlightStatus.PENDING || usdcAmount == 0) {
+            if (
+                recordAdapter != expectedAdapter || isInvest || status != IMantleYieldVault.InFlightStatus.PENDING
+                    || usdcAmount == 0
+            ) {
                 revert InvalidRedeemInFlight(inFlightId);
             }
-
-            vault.confirmInFlight(inFlightId, usdcAmount, false);
-            clearedAmount += usdcAmount;
+            vault.confirmInFlight(inFlightId, settledAmount, settledAmount == 0);
         }
     }
 
@@ -928,10 +904,15 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         emit RedeemBatchReady(ids.length, required);
     }
 
-    function _confirmInvestInFlightIds(address adapter, uint256[] calldata investInFlightIds) internal {
+    function _confirmInvestInFlightIds(
+        address adapter,
+        uint256[] calldata investInFlightIds,
+        uint256[] calldata settledAmounts
+    ) internal {
         uint256 len = investInFlightIds.length;
         for (uint256 i = 0; i < len; i++) {
             uint256 inFlightId = investInFlightIds[i];
+            uint256 settledAmount = settledAmounts[i];
             (, address recordAdapter,, uint256 tokenAmount,,, bool isInvest,, IMantleYieldVault.InFlightStatus status) =
                 vault.inFlightRecords(inFlightId);
             if (
@@ -940,100 +921,44 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
             ) {
                 revert InvalidInvestInFlight(inFlightId);
             }
-
-            // Invest in-flight settledAmount represents actually received position token amount.
-            vault.confirmInFlight(inFlightId, tokenAmount, false);
+            vault.confirmInFlight(inFlightId, settledAmount, settledAmount == 0);
         }
     }
 
-    function _confirmInvestInFlightIdsForAdapters(address[] calldata adapters, uint256[] calldata investInFlightIds)
-        internal
-    {
-        uint256 len = investInFlightIds.length;
+    function _sumAmounts(uint256[] calldata amounts) internal pure returns (uint256 total) {
+        uint256 len = amounts.length;
         for (uint256 i = 0; i < len; i++) {
-            uint256 inFlightId = investInFlightIds[i];
-            (, address recordAdapter,, uint256 tokenAmount,,, bool isInvest,, IMantleYieldVault.InFlightStatus status) =
-                vault.inFlightRecords(inFlightId);
-            if (
-                !_containsAdapter(adapters, recordAdapter) || !isInvest
-                    || status != IMantleYieldVault.InFlightStatus.PENDING || tokenAmount == 0
-            ) {
-                revert InvalidInvestInFlight(inFlightId);
-            }
-
-            vault.confirmInFlight(inFlightId, tokenAmount, false);
+            total += amounts[i];
         }
     }
 
-    function _confirmRedeemInFlightIdsForAdapters(address[] calldata adapters, uint256[] calldata redeemInFlightIds)
-        internal
-        returns (uint256 clearedAmount)
-    {
-        uint256 len = redeemInFlightIds.length;
-        for (uint256 i = 0; i < len; i++) {
-            uint256 inFlightId = redeemInFlightIds[i];
-            (, address recordAdapter,,, uint256 usdcAmount,, bool isInvest,, IMantleYieldVault.InFlightStatus status) =
-                vault.inFlightRecords(inFlightId);
-            if (
-                !_containsAdapter(adapters, recordAdapter) || isInvest
-                    || status != IMantleYieldVault.InFlightStatus.PENDING || usdcAmount == 0
-            ) {
-                revert InvalidRedeemInFlight(inFlightId);
-            }
-
-            vault.confirmInFlight(inFlightId, usdcAmount, false);
-            clearedAmount += usdcAmount;
+    function _settleAdapterInternal(
+        address adapter,
+        uint256[] calldata investInFlightIds,
+        uint256[] calldata investSettledAmounts,
+        uint256[] calldata redeemInFlightIds,
+        uint256[] calldata redeemSettledAmounts
+    ) internal {
+        if (
+            investInFlightIds.length != investSettledAmounts.length
+                || redeemInFlightIds.length != redeemSettledAmounts.length
+        ) {
+            revert SettleAmountsLengthMismatch();
         }
-    }
 
-    function _hasPendingInvestInFlightForAdapter(address adapter, uint256[] calldata investInFlightIds)
-        internal
-        view
-        returns (bool found)
-    {
-        uint256 len = investInFlightIds.length;
-        for (uint256 i = 0; i < len; i++) {
-            uint256 inFlightId = investInFlightIds[i];
-            (, address recordAdapter,, uint256 tokenAmount,,, bool isInvest,, IMantleYieldVault.InFlightStatus status) =
-                vault.inFlightRecords(inFlightId);
-            if (
-                recordAdapter == adapter && isInvest && status == IMantleYieldVault.InFlightStatus.PENDING
-                    && tokenAmount > 0
-            ) {
-                return true;
-            }
+        uint256 investToSweep = _sumAmounts(investSettledAmounts);
+        uint256 redeemToSweep = _sumAmounts(redeemSettledAmounts);
+        (uint256 posClaimed, uint256 assetClaimed) =
+            _sweepAdapterAssetsToVaultInternal(adapter, investToSweep, redeemToSweep);
+        if (posClaimed != investToSweep) {
+            revert InvestSweepAmountMismatch(adapter, investToSweep, posClaimed);
         }
-        return false;
-    }
+        if (assetClaimed != redeemToSweep) {
+            revert RedeemSweepAmountMismatch(adapter, redeemToSweep, assetClaimed);
+        }
 
-    function _hasPendingRedeemInFlightForAdapter(address adapter, uint256[] calldata redeemInFlightIds)
-        internal
-        view
-        returns (bool found)
-    {
-        uint256 len = redeemInFlightIds.length;
-        for (uint256 i = 0; i < len; i++) {
-            uint256 inFlightId = redeemInFlightIds[i];
-            (, address recordAdapter,,, uint256 usdcAmount,, bool isInvest,, IMantleYieldVault.InFlightStatus status) =
-                vault.inFlightRecords(inFlightId);
-            if (
-                recordAdapter == adapter && !isInvest && status == IMantleYieldVault.InFlightStatus.PENDING
-                    && usdcAmount > 0
-            ) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    function _containsAdapter(address[] calldata adapters, address adapter) internal pure returns (bool found) {
-        uint256 len = adapters.length;
-        for (uint256 i = 0; i < len; i++) {
-            if (adapters[i] == adapter) {
-                return true;
-            }
-        }
-        return false;
+        _confirmInvestInFlightIds(adapter, investInFlightIds, investSettledAmounts);
+        _confirmRedeemInFlightIds(adapter, redeemInFlightIds, redeemSettledAmounts);
     }
 
     /// @dev Invest path records pending position tokens and waits for off-chain settlement.

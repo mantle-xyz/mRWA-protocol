@@ -344,9 +344,6 @@ contract StrategyFlowTest is Test {
         assertEq(uint8(vault.requestStatus(ids[1])), uint8(IMantleYieldVault.RequestStatus.PROCESSING));
         assertEq(vault.totalRedeemInFlight(), 300e18);
 
-        // Simulate T+N settlement funds returned to vault.
-        usdc.mint(address(vault), 300e18);
-
         uint256 redeemInFlightCount = inFlightAfter - inFlightBefore;
         uint256[] memory inFlightIds = new uint256[](redeemInFlightCount);
         for (uint256 i = 0; i < redeemInFlightCount; i++) {
@@ -356,12 +353,57 @@ contract StrategyFlowTest is Test {
         address[] memory adapters = new address[](2);
         adapters[0] = address(adapterISNR);
         adapters[1] = address(adapterUMINT);
-        uint256[] memory posAmounts = new uint256[](2);
-        uint256[] memory assetAmounts = new uint256[](2);
+        uint256[][] memory investInFlightIdsBatch = new uint256[][](2);
+        investInFlightIdsBatch[0] = new uint256[](0);
+        investInFlightIdsBatch[1] = new uint256[](0);
+        uint256[][] memory investSettledAmountsBatch = new uint256[][](2);
+        investSettledAmountsBatch[0] = new uint256[](0);
+        investSettledAmountsBatch[1] = new uint256[](0);
+        uint256[] memory redeemCountByAdapter = new uint256[](2);
+        for (uint256 i = 0; i < redeemInFlightCount; i++) {
+            (, address adapter,,,,,,,) = vault.inFlightRecords(inFlightIds[i]);
+            if (adapter == adapters[0]) redeemCountByAdapter[0]++;
+            else if (adapter == adapters[1]) redeemCountByAdapter[1]++;
+            else revert("UNEXPECTED_ADAPTER");
+        }
+
+        uint256[][] memory redeemInFlightIdsBatch = new uint256[][](2);
+        redeemInFlightIdsBatch[0] = new uint256[](redeemCountByAdapter[0]);
+        redeemInFlightIdsBatch[1] = new uint256[](redeemCountByAdapter[1]);
+        uint256[][] memory redeemSettledAmountsBatch = new uint256[][](2);
+        redeemSettledAmountsBatch[0] = new uint256[](redeemCountByAdapter[0]);
+        redeemSettledAmountsBatch[1] = new uint256[](redeemCountByAdapter[1]);
+
+        uint256[] memory writeIdx = new uint256[](2);
+        for (uint256 i = 0; i < redeemInFlightCount; i++) {
+            uint256 inFlightId = inFlightIds[i];
+            (, address adapter,,, uint256 usdcAmount,,,,) = vault.inFlightRecords(inFlightId);
+            if (adapter == adapters[0]) {
+                uint256 idx = writeIdx[0];
+                redeemInFlightIdsBatch[0][idx] = inFlightId;
+                redeemSettledAmountsBatch[0][idx] = usdcAmount;
+                writeIdx[0] = idx + 1;
+                usdc.mint(adapters[0], usdcAmount);
+            } else if (adapter == adapters[1]) {
+                uint256 idx = writeIdx[1];
+                redeemInFlightIdsBatch[1][idx] = inFlightId;
+                redeemSettledAmountsBatch[1][idx] = usdcAmount;
+                writeIdx[1] = idx + 1;
+                usdc.mint(adapters[1], usdcAmount);
+            } else {
+                revert("UNEXPECTED_ADAPTER");
+            }
+        }
         uint256[] memory settledAssets = new uint256[](2);
         settledAssets[0] = 150e18;
         settledAssets[1] = 150e18;
-        controller.settleAdapters(adapters, posAmounts, assetAmounts, new uint256[](0), inFlightIds);
+        controller.settleAdapters(
+            adapters,
+            investInFlightIdsBatch,
+            investSettledAmountsBatch,
+            redeemInFlightIdsBatch,
+            redeemSettledAmountsBatch
+        );
         controller.finalizeRedeemBatch(ids, settledAssets);
 
         // DONE

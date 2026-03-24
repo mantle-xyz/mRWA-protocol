@@ -8,16 +8,16 @@ interface IStrategyControllerExecutor {
     function finalizeRedeemBatch(uint256[] calldata ids, uint256[] calldata settledAssets) external;
     function settleAdapter(
         address adapter,
-        uint256 posAmount,
-        uint256 assetAmount,
         uint256[] calldata investInFlightIds,
-        uint256[] calldata redeemInFlightIds
+        uint256[] calldata investSettledAmounts,
+        uint256[] calldata redeemInFlightIds,
+        uint256[] calldata redeemSettledAmounts
     ) external;
     function settleAdapters(
         address[] calldata adapters,
-        uint256[] calldata posAmounts,
-        uint256[] calldata assetAmounts,
-        uint256[] calldata investInFlightIds,
-        uint256[] calldata redeemInFlightIds
+        uint256[][] calldata investInFlightIdsBatch,
+        uint256[][] calldata investSettledAmountsBatch,
+        uint256[][] calldata redeemInFlightIdsBatch,
+        uint256[][] calldata redeemSettledAmountsBatch
     ) external;
 }

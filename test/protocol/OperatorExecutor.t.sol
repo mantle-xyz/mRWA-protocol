@@ -45,57 +45,48 @@ contract MockStrategyController is IStrategyControllerExecutor {
 
     function settleAdapter(
         address adapter,
-        uint256 posAmount,
-        uint256 assetAmount,
         uint256[] calldata investInFlightIds,
-        uint256[] calldata redeemInFlightIds
+        uint256[] calldata investSettledAmounts,
+        uint256[] calldata redeemInFlightIds,
+        uint256[] calldata redeemSettledAmounts
     ) external override onlyExecutorGateway {
-        lastSettleHash = keccak256(abi.encode(adapter, posAmount, assetAmount, investInFlightIds, redeemInFlightIds));
+        lastSettleHash = keccak256(
+            abi.encode(adapter, investInFlightIds, investSettledAmounts, redeemInFlightIds, redeemSettledAmounts)
+        );
     }
 
     function settleAdapters(
         address[] calldata adapters,
-        uint256[] calldata posAmounts,
-        uint256[] calldata assetAmounts,
-        uint256[] calldata investInFlightIds,
-        uint256[] calldata redeemInFlightIds
+        uint256[][] calldata investInFlightIdsBatch,
+        uint256[][] calldata investSettledAmountsBatch,
+        uint256[][] calldata redeemInFlightIdsBatch,
+        uint256[][] calldata redeemSettledAmountsBatch
     ) external override onlyExecutorGateway {
         lastSettleBatchHash = keccak256(
-            abi.encode(adapters, posAmounts, assetAmounts, investInFlightIds, redeemInFlightIds)
+            abi.encode(
+                adapters,
+                investInFlightIdsBatch,
+                investSettledAmountsBatch,
+                redeemInFlightIdsBatch,
+                redeemSettledAmountsBatch
+            )
         );
     }
 }
 
 contract OperatorExecutorTest is Test {
-    bytes32 internal constant EIP712_DOMAIN_TYPEHASH =
-        keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
-    bytes32 internal constant REBALANCE_TYPEHASH =
-        keccak256("Rebalance(address controller,uint256 nonce,uint64 deadline)");
-    bytes32 internal constant PROCESS_REDEEM_BATCH_TYPEHASH =
-        keccak256("ProcessRedeemBatch(address controller,bytes32 idsHash,uint256 nonce,uint64 deadline)");
-    bytes32 internal constant FINALIZE_REDEEM_BATCH_TYPEHASH = keccak256(
-        "FinalizeRedeemBatch(address controller,bytes32 idsHash,bytes32 settledAssetsHash,uint256 nonce,uint64 deadline)"
-    );
-    bytes32 internal constant SETTLE_ADAPTER_TYPEHASH = keccak256(
-        "SettleAdapter(address controller,address adapter,uint256 posAmount,uint256 assetAmount,bytes32 investInFlightIdsHash,bytes32 redeemInFlightIdsHash,uint256 nonce,uint64 deadline)"
-    );
-    bytes32 internal constant SETTLE_ADAPTERS_TYPEHASH = keccak256(
-        "SettleAdapters(address controller,bytes32 adaptersHash,bytes32 posAmountsHash,bytes32 assetAmountsHash,bytes32 investInFlightIdsHash,bytes32 redeemInFlightIdsHash,uint256 nonce,uint64 deadline)"
-    );
+    bytes32 internal constant BOT_ROLE = keccak256("BOT_ROLE");
 
     MockStrategyController internal controller;
     OperatorExecutor internal executor;
 
-    uint256 internal signerPk;
-    address internal signer;
     address internal admin = makeAddr("admin");
+    address internal bot = makeAddr("bot");
 
     function setUp() public {
         controller = new MockStrategyController();
-        signerPk = 0xA11CE;
-        signer = vm.addr(signerPk);
         OperatorExecutor implementation = new OperatorExecutor();
-        bytes memory initData = abi.encodeCall(OperatorExecutor.initialize, (admin, signer));
+        bytes memory initData = abi.encodeCall(OperatorExecutor.initialize, (admin, bot));
         executor = OperatorExecutor(address(new ERC1967Proxy(address(implementation), initData)));
         controller.setExecutorGateway(address(executor));
     }
@@ -105,15 +96,11 @@ contract OperatorExecutorTest is Test {
         controller.rebalance();
     }
 
-    function test_ExecuteRebalance_Success() public {
-        uint256 nonce = 0;
-        uint64 deadline = uint64(block.timestamp + 1 hours);
-        bytes memory sig = _signRebalance(address(controller), nonce, deadline, signerPk);
-
-        executor.executeRebalance(address(controller), nonce, deadline, sig);
+    function test_ExecuteRebalance_Routes() public {
+        vm.prank(bot);
+        executor.executeRebalance(address(controller));
 
         assertEq(controller.rebalanceCount(), 1);
-        assertEq(executor.nonces(signer), 1);
     }
 
     function test_ExecuteProcessBatch_Routes() public {
@@ -121,26 +108,20 @@ contract OperatorExecutorTest is Test {
         ids[0] = 1;
         ids[1] = 3;
 
-        uint256 nonce = 0;
-        uint64 deadline = uint64(block.timestamp + 1 hours);
-        bytes memory sig = _signProcessRedeemBatch(address(controller), ids, nonce, deadline, signerPk);
-
-        executor.executeProcessRedeemBatch(address(controller), ids, nonce, deadline, sig);
+        vm.prank(bot);
+        executor.executeProcessRedeemBatch(address(controller), ids);
 
         assertEq(controller.lastProcessHash(), keccak256(abi.encode(ids)));
     }
 
-    function test_ExecuteAllocateBatch_Routes() public {
+    function test_ExecuteFinalizeBatch_Routes() public {
         uint256[] memory ids = new uint256[](1);
         ids[0] = 9;
         uint256[] memory settledAssets = new uint256[](1);
         settledAssets[0] = 123;
 
-        uint256 nonce = 0;
-        uint64 deadline = uint64(block.timestamp + 1 hours);
-        bytes memory sig = _signFinalizeRedeemBatch(address(controller), ids, settledAssets, nonce, deadline, signerPk);
-
-        executor.executeFinalizeRedeemBatch(address(controller), ids, settledAssets, nonce, deadline, sig);
+        vm.prank(bot);
+        executor.executeFinalizeRedeemBatch(address(controller), ids, settledAssets);
 
         assertEq(controller.lastAllocateHash(), keccak256(abi.encode(ids, settledAssets)));
     }
@@ -148,30 +129,30 @@ contract OperatorExecutorTest is Test {
     function test_ExecuteSettleAdapter_Routes() public {
         uint256[] memory investInFlightIds = new uint256[](1);
         investInFlightIds[0] = 7;
+        uint256[] memory investSettledAmounts = new uint256[](1);
+        investSettledAmounts[0] = 11;
         uint256[] memory redeemInFlightIds = new uint256[](1);
         redeemInFlightIds[0] = 9;
+        uint256[] memory redeemSettledAmounts = new uint256[](1);
+        redeemSettledAmounts[0] = 22;
 
-        uint256 nonce = 0;
-        uint64 deadline = uint64(block.timestamp + 1 hours);
-        bytes memory sig = _signSettleAdapter(
+        vm.prank(bot);
+        executor.executeSettleAdapter(
             address(controller),
             address(0xBEEF),
-            11,
-            22,
             investInFlightIds,
+            investSettledAmounts,
             redeemInFlightIds,
-            nonce,
-            deadline,
-            signerPk
-        );
-
-        executor.executeSettleAdapter(
-            address(controller), address(0xBEEF), 11, 22, investInFlightIds, redeemInFlightIds, nonce, deadline, sig
+            redeemSettledAmounts
         );
 
         assertEq(
             controller.lastSettleHash(),
-            keccak256(abi.encode(address(0xBEEF), uint256(11), uint256(22), investInFlightIds, redeemInFlightIds))
+            keccak256(
+                abi.encode(
+                    address(0xBEEF), investInFlightIds, investSettledAmounts, redeemInFlightIds, redeemSettledAmounts
+                )
+            )
         );
     }
 
@@ -179,244 +160,96 @@ contract OperatorExecutorTest is Test {
         address[] memory adapters = new address[](2);
         adapters[0] = address(0xA1);
         adapters[1] = address(0xB2);
-        uint256[] memory posAmounts = new uint256[](2);
-        posAmounts[0] = 11;
-        posAmounts[1] = 22;
-        uint256[] memory assetAmounts = new uint256[](2);
-        assetAmounts[0] = 33;
-        assetAmounts[1] = 44;
-        uint256[] memory investInFlightIds = new uint256[](1);
-        investInFlightIds[0] = 7;
-        uint256[] memory redeemInFlightIds = new uint256[](1);
-        redeemInFlightIds[0] = 9;
 
-        uint256 nonce = 0;
-        uint64 deadline = uint64(block.timestamp + 1 hours);
-        bytes memory sig = _signSettleAdapters(
-            address(controller),
-            adapters,
-            posAmounts,
-            assetAmounts,
-            investInFlightIds,
-            redeemInFlightIds,
-            nonce,
-            deadline,
-            signerPk
-        );
+        uint256[][] memory investInFlightIdsBatch = new uint256[][](2);
+        investInFlightIdsBatch[0] = new uint256[](1);
+        investInFlightIdsBatch[0][0] = 7;
+        investInFlightIdsBatch[1] = new uint256[](0);
 
+        uint256[][] memory investSettledAmountsBatch = new uint256[][](2);
+        investSettledAmountsBatch[0] = new uint256[](1);
+        investSettledAmountsBatch[0][0] = 11;
+        investSettledAmountsBatch[1] = new uint256[](0);
+
+        uint256[][] memory redeemInFlightIdsBatch = new uint256[][](2);
+        redeemInFlightIdsBatch[0] = new uint256[](0);
+        redeemInFlightIdsBatch[1] = new uint256[](1);
+        redeemInFlightIdsBatch[1][0] = 9;
+
+        uint256[][] memory redeemSettledAmountsBatch = new uint256[][](2);
+        redeemSettledAmountsBatch[0] = new uint256[](0);
+        redeemSettledAmountsBatch[1] = new uint256[](1);
+        redeemSettledAmountsBatch[1][0] = 22;
+
+        vm.prank(bot);
         executor.executeSettleAdapters(
             address(controller),
             adapters,
-            posAmounts,
-            assetAmounts,
-            investInFlightIds,
-            redeemInFlightIds,
-            nonce,
-            deadline,
-            sig
+            investInFlightIdsBatch,
+            investSettledAmountsBatch,
+            redeemInFlightIdsBatch,
+            redeemSettledAmountsBatch
         );
 
         assertEq(
             controller.lastSettleBatchHash(),
-            keccak256(abi.encode(adapters, posAmounts, assetAmounts, investInFlightIds, redeemInFlightIds))
+            keccak256(
+                abi.encode(
+                    adapters,
+                    investInFlightIdsBatch,
+                    investSettledAmountsBatch,
+                    redeemInFlightIdsBatch,
+                    redeemSettledAmountsBatch
+                )
+            )
         );
     }
 
-    function test_RevertWhen_ReplayNonce() public {
-        uint256 nonce = 0;
-        uint64 deadline = uint64(block.timestamp + 1 hours);
-        bytes memory sig = _signRebalance(address(controller), nonce, deadline, signerPk);
-
-        executor.executeRebalance(address(controller), nonce, deadline, sig);
-
+    function test_RevertWhen_CallerNotBot() public {
+        address notBot = makeAddr("notBot");
+        vm.prank(notBot);
         vm.expectRevert();
-        executor.executeRebalance(address(controller), nonce, deadline, sig);
+        executor.executeRebalance(address(controller));
     }
 
-    function test_RevertWhen_ExpiredDeadline() public {
-        vm.warp(100);
-        uint256 nonce = 0;
-        uint64 deadline = uint64(block.timestamp - 1);
-        bytes memory sig = _signRebalance(address(controller), nonce, deadline, signerPk);
-
-        vm.expectRevert(abi.encodeWithSelector(OperatorExecutor.DeadlineExpired.selector, deadline, block.timestamp));
-        executor.executeRebalance(address(controller), nonce, deadline, sig);
-    }
-
-    function test_RevertWhen_InvalidSigner() public {
-        uint256 nonce = 0;
-        uint64 deadline = uint64(block.timestamp + 1 hours);
-        bytes memory sig = _signRebalance(address(controller), nonce, deadline, 0xB0B);
-
-        vm.expectRevert(OperatorExecutor.InvalidSignature.selector);
-        executor.executeRebalance(address(controller), nonce, deadline, sig);
-    }
-
-    function test_SignerRole_NewSignerCanExecute_AfterGrant() public {
-        uint256 newSignerPk = 0xBEEF;
-        address newSigner = vm.addr(newSignerPk);
+    function test_BotRole_NewBotCanExecute_AfterGrant() public {
+        address newBot = makeAddr("newBot");
 
         vm.prank(admin);
-        executor.setSigner(newSigner, true);
+        executor.grantRole(BOT_ROLE, newBot);
 
-        uint256 nonce = 0;
-        uint64 deadline = uint64(block.timestamp + 1 hours);
-        bytes memory sig = _signRebalance(address(controller), nonce, deadline, newSignerPk);
-        executor.executeRebalance(address(controller), nonce, deadline, sig);
+        vm.prank(newBot);
+        executor.executeRebalance(address(controller));
 
         assertEq(controller.rebalanceCount(), 1);
-        assertEq(executor.nonces(newSigner), 1);
     }
 
-    function test_SignerRole_RevokedSignerCannotExecute() public {
+    function test_BotRole_RevokedBotCannotExecute() public {
         vm.prank(admin);
-        executor.setSigner(signer, false);
+        executor.revokeRole(BOT_ROLE, bot);
 
-        uint256 nonce = 0;
-        uint64 deadline = uint64(block.timestamp + 1 hours);
-        bytes memory sig = _signRebalance(address(controller), nonce, deadline, signerPk);
-
-        vm.expectRevert(OperatorExecutor.InvalidSignature.selector);
-        executor.executeRebalance(address(controller), nonce, deadline, sig);
+        vm.prank(bot);
+        vm.expectRevert();
+        executor.executeRebalance(address(controller));
     }
 
-    function test_RevertWhen_SetSignerByNonAdmin() public {
+    function test_RevertWhen_GrantRoleByNonAdmin() public {
         vm.prank(makeAddr("notAdmin"));
         vm.expectRevert();
-        executor.setSigner(makeAddr("hsm"), true);
+        executor.grantRole(BOT_ROLE, makeAddr("hsm"));
     }
 
     function test_RevertWhen_ZeroController() public {
-        uint256 nonce = 0;
-        uint64 deadline = uint64(block.timestamp + 1 hours);
-        bytes memory sig = _signRebalance(address(0), nonce, deadline, signerPk);
-
+        vm.prank(bot);
         vm.expectRevert(OperatorExecutor.InvalidAddress.selector);
-        executor.executeRebalance(address(0), nonce, deadline, sig);
+        executor.executeRebalance(address(0));
     }
 
     function test_RevertWhen_ControllerIsEOA() public {
         address eoaController = makeAddr("eoaController");
-        uint256 nonce = 0;
-        uint64 deadline = uint64(block.timestamp + 1 hours);
-        bytes memory sig = _signRebalance(eoaController, nonce, deadline, signerPk);
 
+        vm.prank(bot);
         vm.expectRevert(abi.encodeWithSelector(OperatorExecutor.InvalidController.selector, eoaController));
-        executor.executeRebalance(eoaController, nonce, deadline, sig);
-    }
-
-    function _signRebalance(address controller_, uint256 nonce, uint64 deadline, uint256 pk)
-        internal
-        view
-        returns (bytes memory)
-    {
-        bytes32 structHash = keccak256(abi.encode(REBALANCE_TYPEHASH, controller_, nonce, deadline));
-        return _signTypedData(structHash, pk);
-    }
-
-    function _signProcessRedeemBatch(
-        address controller_,
-        uint256[] memory ids,
-        uint256 nonce,
-        uint64 deadline,
-        uint256 pk
-    ) internal view returns (bytes memory) {
-        bytes32 structHash = keccak256(
-            abi.encode(PROCESS_REDEEM_BATCH_TYPEHASH, controller_, keccak256(abi.encodePacked(ids)), nonce, deadline)
-        );
-        return _signTypedData(structHash, pk);
-    }
-
-    function _signFinalizeRedeemBatch(
-        address controller_,
-        uint256[] memory ids,
-        uint256[] memory settledAssets,
-        uint256 nonce,
-        uint64 deadline,
-        uint256 pk
-    ) internal view returns (bytes memory) {
-        bytes32 structHash = keccak256(
-            abi.encode(
-                FINALIZE_REDEEM_BATCH_TYPEHASH,
-                controller_,
-                keccak256(abi.encodePacked(ids)),
-                keccak256(abi.encodePacked(settledAssets)),
-                nonce,
-                deadline
-            )
-        );
-        return _signTypedData(structHash, pk);
-    }
-
-    function _signSettleAdapter(
-        address controller_,
-        address adapter,
-        uint256 posAmount,
-        uint256 assetAmount,
-        uint256[] memory investInFlightIds,
-        uint256[] memory redeemInFlightIds,
-        uint256 nonce,
-        uint64 deadline,
-        uint256 pk
-    ) internal view returns (bytes memory) {
-        bytes32 structHash = keccak256(
-            abi.encode(
-                SETTLE_ADAPTER_TYPEHASH,
-                controller_,
-                adapter,
-                posAmount,
-                assetAmount,
-                keccak256(abi.encodePacked(investInFlightIds)),
-                keccak256(abi.encodePacked(redeemInFlightIds)),
-                nonce,
-                deadline
-            )
-        );
-        return _signTypedData(structHash, pk);
-    }
-
-    function _signSettleAdapters(
-        address controller_,
-        address[] memory adapters,
-        uint256[] memory posAmounts,
-        uint256[] memory assetAmounts,
-        uint256[] memory investInFlightIds,
-        uint256[] memory redeemInFlightIds,
-        uint256 nonce,
-        uint64 deadline,
-        uint256 pk
-    ) internal view returns (bytes memory) {
-        bytes32 structHash = keccak256(
-            abi.encode(
-                SETTLE_ADAPTERS_TYPEHASH,
-                controller_,
-                keccak256(abi.encodePacked(adapters)),
-                keccak256(abi.encodePacked(posAmounts)),
-                keccak256(abi.encodePacked(assetAmounts)),
-                keccak256(abi.encodePacked(investInFlightIds)),
-                keccak256(abi.encodePacked(redeemInFlightIds)),
-                nonce,
-                deadline
-            )
-        );
-        return _signTypedData(structHash, pk);
-    }
-
-    function _signTypedData(bytes32 structHash, uint256 pk) internal view returns (bytes memory) {
-        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", _domainSeparator(), structHash));
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(pk, digest);
-        return abi.encodePacked(r, s, v);
-    }
-
-    function _domainSeparator() internal view returns (bytes32) {
-        return keccak256(
-            abi.encode(
-                EIP712_DOMAIN_TYPEHASH,
-                keccak256(bytes("OperatorExecutor")),
-                keccak256(bytes("1")),
-                block.chainid,
-                address(executor)
-            )
-        );
+        executor.executeRebalance(eoaController);
     }
 }
