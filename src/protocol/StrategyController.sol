@@ -661,8 +661,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     // =============================================================
 
     function _invest(uint256 excessCash) internal {
-        uint256 totalAssets =
-            asset.balanceOf(address(vault)) + _totalStrategyValue() + vault.totalInvestInFlight()
+        uint256 totalAssets = asset.balanceOf(address(vault)) + _totalStrategyValue() + vault.totalInvestInFlight()
             + vault.totalRedeemInFlight();
         uint256 requested = excessCash;
         uint256 remaining = excessCash;

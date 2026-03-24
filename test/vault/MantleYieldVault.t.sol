@@ -475,12 +475,16 @@ contract SyncRedeemTest is VaultTestBase {
 contract AsyncRedeemTest is VaultTestBase {
     function test_requestRedeemCreatesRequest() public {
         uint256 shares = 500e6;
+        uint256 treasuryShare = (shares * FEE_BPS + BPS_DENOMINATOR - 1) / BPS_DENOMINATOR;
 
         vm.prank(alice);
+        vm.expectEmit(true, false, false, true, address(vault));
+        emit IMantleYieldVault.FeeSharesMinted(treasuryAddr, treasuryShare, IMantleYieldVault.FeeType.Redemption);
         uint256 requestId = gateway.requestRedeem(shares);
 
         assertEq(requestId, 1);
         assertEq(vault.balanceOf(alice), INITIAL_DEPOSIT - shares);
+        assertEq(vault.balanceOf(treasuryAddr), treasuryShare);
         assertGt(vault.totalLockedShares(), 0);
     }
 
@@ -909,6 +913,18 @@ contract RedemptionFeeTest is VaultTestBase {
         assertEq(usdc.balanceOf(address(vault)), vaultBalBefore);
     }
 
+    function test_syncRedeemEmitsRedemptionFee() public {
+        uint256 shares = 100e6;
+        uint256 treasuryShare = (shares * FEE_BPS + BPS_DENOMINATOR - 1) / BPS_DENOMINATOR;
+
+        vm.prank(alice);
+        vm.expectEmit(true, false, false, true, address(vault));
+        emit IMantleYieldVault.FeeSharesMinted(treasuryAddr, treasuryShare, IMantleYieldVault.FeeType.Redemption);
+        gateway.redeem(shares);
+
+        assertEq(vault.balanceOf(treasuryAddr), treasuryShare);
+    }
+
     function test_feeIncreasesFreeCashOnRedeem() public {
         uint256 shares = 100e6;
         uint256 freeCashBefore = vault.getFreeCash();
@@ -1182,6 +1198,8 @@ contract MintFeeSharesTest is VaultTestBase {
         uint256 toMint = totalBefore * 100 / BPS_DENOMINATOR; // 1% of supply
 
         vm.prank(accountantAddr);
+        vm.expectEmit(true, false, false, true, address(vault));
+        emit IMantleYieldVault.FeeSharesMinted(treasuryAddr, toMint, IMantleYieldVault.FeeType.Management);
         vault.mintFeeShares(toMint);
 
         assertEq(vault.balanceOf(treasuryAddr), toMint);
