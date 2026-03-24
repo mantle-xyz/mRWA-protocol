@@ -144,7 +144,8 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
         uint256 usdcAmount,
         uint256 settledAmount
     );
-    event FeeSharesMinted(address indexed treasury, uint256 shares);
+    enum FeeType { Management, Redemption }
+    event FeeSharesMinted(address indexed treasury, uint256 shares, FeeType feeType);
     event ControllerUpdated(address indexed oldController, address indexed newController);
     event AccountantUpdated(address indexed oldAccountant, address indexed newAccountant);
     event TreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
