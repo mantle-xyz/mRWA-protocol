@@ -25,6 +25,7 @@ contract MockStrategyAdapter is IStrategyAdapter {
     bool public failDeposit;
     bool public failWithdraw;
     bool public failAsync;
+    bool public failEstimate;
 
     uint256 public depositCount;
     uint256 public withdrawCount;
@@ -48,6 +49,10 @@ contract MockStrategyAdapter is IStrategyAdapter {
         failAsync = a;
     }
 
+    function setFailEstimate(bool e) external {
+        failEstimate = e;
+    }
+
     function name() external pure returns (string memory) {
         return "MockStrategyAdapter";
     }
@@ -68,7 +73,8 @@ contract MockStrategyAdapter is IStrategyAdapter {
         return 0;
     }
 
-    function estimatePosAmount(uint256 assetAmount) external pure returns (uint256 positionAmount) {
+    function estimatePosAmount(uint256 assetAmount) external view returns (uint256 positionAmount) {
+        if (failEstimate) revert("ESTIMATE_FAIL");
         return assetAmount;
     }
 
@@ -964,7 +970,7 @@ contract StrategyControllerUnitTest is Test {
         controller.settleAdapter(address(asyncAdapter), 1e18, 0, new uint256[](0), new uint256[](0));
     }
 
-    function test_RebalanceInvestAsync_DoesNotCreateDuplicateInFlightWhenPendingExists() public {
+    function test_RebalanceInvestAsync_StillInvestsWhenPendingDoesNotCoverFullShortfall() public {
         _registerSingleAsyncStrategy();
         // Existing pending invest in-flight has large token amount for this adapter.
         vault.createInFlight(address(asyncAdapter), address(posToken), 1_000e18, 1_000e18, true);
@@ -974,11 +980,12 @@ contract StrategyControllerUnitTest is Test {
         vm.prank(address(executorGateway));
         controller.rebalance();
 
-        assertEq(vault.inFlightIdCursor(), 1);
-        assertEq(vault.investInFlightTotal(), 1_000e18);
+        assertEq(asyncAdapter.depositCount(), 1);
+        assertEq(vault.inFlightIdCursor(), 2);
+        assertEq(vault.investInFlightTotal(), 1_800e18);
     }
 
-    function test_RebalanceInvestAsync_PartialPendingDeductsEstimatedCoverage() public {
+    function test_RebalanceInvestAsync_PartialPendingWithRemainingCapStillInvestsFully() public {
         _registerSingleAsyncStrategy();
         // Pending invest covers part of the new target gap.
         vault.createInFlight(address(asyncAdapter), address(posToken), 400e18, 400e18, true);
@@ -988,12 +995,34 @@ contract StrategyControllerUnitTest is Test {
         vm.prank(address(executorGateway));
         controller.rebalance();
 
-        // New in-flight = 460e18 (860 target invest request - 400 pending coverage estimate).
+        // Pending only partially covers shortfall; because remaining is lower than uncovered shortfall,
+        // this round still invests the full remaining amount.
         assertEq(vault.inFlightIdCursor(), 2);
-        assertEq(vault.investInFlightTotal(), 860e18);
+        assertEq(vault.investInFlightTotal(), 1_260e18);
     }
 
-    function test_RebalanceInvestSync_DoesNotCreateDuplicateInFlightWhenPendingExists() public {
+    function test_RebalanceInvestAsync_DoesNotSkipWhenPendingOnlyCoversCappedAlloc() public {
+        _registerSingleAsyncStrategy();
+
+        vm.prank(manager);
+        controller.setRiskParams(0, 0, 0);
+
+        // Historical pending is large and covers this round's capped alloc, but does not cover
+        // the adapter's full target shortfall.
+        vault.createInFlight(address(asyncAdapter), address(posToken), 1_481_000_000, 1_481_000_000, true);
+        asset.mint(address(vault), 2_000_000);
+
+        vm.warp(2 hours);
+        vm.prank(address(executorGateway));
+        controller.rebalance();
+
+        // Should still invest the uncovered delta (~2,000,000) instead of skipping.
+        assertEq(asyncAdapter.depositCount(), 1);
+        assertEq(vault.inFlightIdCursor(), 2);
+        assertEq(vault.investInFlightTotal(), 1_483_000_000);
+    }
+
+    function test_RebalanceInvestSync_StillInvestsWhenPendingDoesNotCoverFullShortfall() public {
         _registerSingleSyncStrategy();
         vault.createInFlight(address(syncAdapter), address(posToken), 1_000e18, 1_000e18, true);
         asset.mint(address(vault), 1_000e18);
@@ -1002,9 +1031,9 @@ contract StrategyControllerUnitTest is Test {
         vm.prank(address(executorGateway));
         controller.rebalance();
 
-        assertEq(syncAdapter.depositCount(), 0);
-        assertEq(vault.inFlightIdCursor(), 1);
-        assertEq(vault.investInFlightTotal(), 1_000e18);
+        assertEq(syncAdapter.depositCount(), 1);
+        assertEq(vault.inFlightIdCursor(), 2);
+        assertEq(vault.investInFlightTotal(), 1_800e18);
     }
 
     function test_RebalanceDivestSync_SkipsWhenCoveredByPendingRedeem() public {
@@ -1021,6 +1050,40 @@ contract StrategyControllerUnitTest is Test {
         assertEq(syncAdapter.withdrawCount(), 0);
         assertEq(vault.inFlightIdCursor(), 1);
         assertEq(vault.redeemInFlightTotal(), 300e18);
+    }
+
+    function test_RebalanceDivestAsync_SkipsWhenEstimateFails() public {
+        _registerSingleAsyncStrategy();
+        asyncAdapter.setTotalValue(500e18);
+        asyncAdapter.setFailEstimate(true);
+
+        uint256[] memory ids = new uint256[](1);
+        ids[0] = 811;
+        vault.setRequest(811, 300e18, 0, IMantleYieldVault.RequestStatus.PENDING);
+
+        vm.prank(address(executorGateway));
+        controller.processRedeemBatch(ids);
+
+        assertEq(asyncAdapter.asyncCount(), 0);
+        assertEq(vault.inFlightIdCursor(), 0);
+        assertEq(vault.redeemInFlightTotal(), 0);
+    }
+
+    function test_RebalanceDivestSync_SkipsWhenEstimateFails() public {
+        _registerSingleSyncStrategy();
+        syncAdapter.setTotalValue(500e18);
+        syncAdapter.setFailEstimate(true);
+
+        uint256[] memory ids = new uint256[](1);
+        ids[0] = 812;
+        vault.setRequest(812, 300e18, 0, IMantleYieldVault.RequestStatus.PENDING);
+
+        vm.prank(address(executorGateway));
+        controller.processRedeemBatch(ids);
+
+        assertEq(syncAdapter.withdrawCount(), 0);
+        assertEq(vault.inFlightIdCursor(), 0);
+        assertEq(vault.redeemInFlightTotal(), 0);
     }
 
     function test_SettleAdapter_RedeemFlow_ClaimsAndConfirms() public {
