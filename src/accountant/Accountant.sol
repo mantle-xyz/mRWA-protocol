@@ -51,10 +51,10 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
         // ── slot 1 ──
         uint32 maxComputeAge; // seconds (e.g. 5 minutes)
         uint64 lastComputeTimestamp;
-        uint64 lastExchangeRate;
+        uint64 lastFeeSettleTimestamp;
         uint64 lastUpdateTimestamp;
         // ── slot 2 ──
-        uint64 lastFeeSettleTimestamp;
+        uint256 lastExchangeRate;
         // ── slot 3 ──
         uint256 totalSharesLastSettle;
     }
@@ -159,7 +159,7 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
         return _getAccountantStorage().minUpdateInterval;
     }
 
-    function lastExchangeRate() external view returns (uint64) {
+    function lastExchangeRate() external view returns (uint256) {
         return _getAccountantStorage().lastExchangeRate;
     }
 
@@ -184,12 +184,12 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
     }
 
     /// @notice Returns the current exchange rate (always accessible).
-    function getRate() external view returns (uint64) {
+    function getRate() external view returns (uint256) {
         return _getAccountantStorage().lastExchangeRate;
     }
 
     /// @notice Returns the current exchange rate; reverts when the contract is paused.
-    function getRateSafe() external view whenNotPaused returns (uint64) {
+    function getRateSafe() external view whenNotPaused returns (uint256) {
         return _getAccountantStorage().lastExchangeRate;
     }
 
