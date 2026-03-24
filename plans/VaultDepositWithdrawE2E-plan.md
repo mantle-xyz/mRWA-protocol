@@ -1,7 +1,7 @@
 # Test Plan: VaultDepositWithdrawE2E
 
 - **Contract**: `src/vault/MantleYieldVault.sol` + `src/protocol/StrategyController.sol`
-- **Date**: 2026-03-12 (updated: 2026-03-20)
+- **Date**: 2026-03-12 (updated: 2026-03-23)
 - **Author**: AI Agent
 - **Status**: Approved (all paths passed — A, B, C)
 
@@ -9,7 +9,7 @@
 
 End-to-end integration test simulating a **real user** performing deposit → withdraw on the deployed MantleYieldVault (Ethereum Sepolia). Covers both sync withdraw (ERC-4626) and async redeem (ERC-7540) paths.
 
-Since **OperatorExecutor's off-chain signing service is not yet developed**, all operator actions (rebalance, processRedeemBatch, finalizeRedeemBatch) are driven via **`cast` commands** directly against StrategyController, after temporarily granting `EXECUTOR_ROLE` to the admin address.
+Since **OperatorExecutor now uses simple `BOT_ROLE` access control** (EIP-712 signature verification has been removed), all operator actions (rebalance, processRedeemBatch, finalizeRedeemBatch, settleAdapter) are driven via **`cast` commands** directly against StrategyController, after temporarily granting `OPERATOR_EXECUTOR_ROLE` to the admin address.
 
 ### Architecture Overview
 
@@ -18,14 +18,15 @@ User (USER_PRIVATE_KEY)
   │
   ├─ deposit(USDC) ──────────────► MantleYieldVault ◄── controller ── StrategyController
   ├─ withdraw(assets) ────────────►       │                                   │
-  ├─ requestRedeem(shares) ───────►       │          EXECUTOR_ROLE            │
-  └─ (no claimRedeem — finalizeRedeemBatch transfers directly) ───────►       │     ┌────(bypassed)────► OperatorExecutor
-                                          │     │                       (off-chain N/A)
+  ├─ requestRedeem(shares) ───────►       │     OPERATOR_EXECUTOR_ROLE        │
+  └─ (no claimRedeem — finalizeRedeemBatch transfers directly) ───────►       │     ┌─── OperatorExecutor (BOT_ROLE)
+                                          │     │      (no EIP-712, direct calls)
                                           │     │
 Admin (ADMIN_PRIVATE_KEY)                 │     │
   │                                       │     │
-  ├─ grantRole(EXECUTOR_ROLE) ───► StrategyController
+  ├─ grantRole(OPERATOR_EXECUTOR_ROLE) ──► StrategyController
   ├─ processRedeemBatch() ───────► StrategyController ─► vault.updateRequestBatch(PROCESSING)
+  ├─ settleAdapter() ───────────► StrategyController ─► sweep + confirmInFlight (per-id amounts)
   └─ finalizeRedeemBatch() ──────► StrategyController ─► vault.markRequestsDone()
 ```
 
@@ -36,7 +37,8 @@ Admin (ADMIN_PRIVATE_KEY)                 │     │
 | Vault Admin / DEFAULT_ADMIN_ROLE | `0x65Cf61678Cf120a8F40c2F3aEDCb50BBA0e85c78` | `ADMIN_PRIVATE_KEY` |
 | Vault Controller | StrategyController proxy (from `plans/addresses.yaml`) | — |
 | Vault Accountant | Accountant proxy (from `plans/addresses.yaml`) | — |
-| StrategyController EXECUTOR_ROLE | OperatorExecutor (deployed), **+ Admin** (granted for testing) | `ADMIN_PRIVATE_KEY` |
+| StrategyController OPERATOR_EXECUTOR_ROLE | OperatorExecutor (deployed), **+ Admin** (granted for testing) | `ADMIN_PRIVATE_KEY` |
+| OperatorExecutor BOT_ROLE | Bot address (direct calls, no EIP-712 signatures) | — |
 | StrategyController STRATEGY_MANAGER_ROLE | Admin | `ADMIN_PRIVATE_KEY` |
 | User (depositor / redeemer) | Derived from `USER_PRIVATE_KEY` | `USER_PRIVATE_KEY` |
 
@@ -163,11 +165,11 @@ Admin (rebalance)
   │                                 │  emit SubscribeSettled
   │
   ├─ settleAdapter() ─────────► StrategyController
-  │    (via OperatorExecutor        │  _sweepAdapterAssetsToVaultInternal(adapter, posAmount, 0)
-  │     or admin w/ EXECUTOR_ROLE)  │     └─ adapter.sweepToVault(posToken, posAmount)
-  │                                 │        └─ ST token: adapter → vault (if any residual on adapter)
-  │                                 │  _confirmInvestInFlightIds(adapter, investInFlightIds)
-  │                                 │     └─ vault.confirmInFlight(id, posAmount, true)
+  │    (via OperatorExecutor        │  _settleAdapterInternal(adapter, investIds, investAmts, redeemIds, redeemAmts)
+  │     or admin w/ EXECUTOR_ROLE)  │     └─ sum investSettledAmounts → sweep posToken from adapter
+  │                                 │     └─ validate swept == sum (InvestSweepAmountMismatch)
+  │                                 │     └─ _confirmInvestInFlightIds(adapter, ids, settledAmounts)
+  │                                 │        └─ vault.confirmInFlight(id, settledAmount, settledAmount==0)
   │                                 │        └─ clears adapterInvestInFlightTokens
   │
   └─ (now vault holds ST tokens, freeCash available for withdraw)
@@ -196,7 +198,7 @@ Admin (rebalance)
 | C7 | Off-chain | **settleSubscribe — BLOCKED** (requires off-chain settlement service; `SubRedManagement.settleSubscribe` cannot be called directly via `cast` — the deployed contract interface differs from source and/or has access control requiring the off-chain service). **Test pauses here until off-chain settlement completes.** | _off-chain service triggers settlement_ | ST token minted to adapter |
 | C8 | — | Verify adapter received ST token | `cast call $MockSTToken "balanceOf(address)(uint256)" $SubRedAdapter --rpc-url $RPC` | == minted amount |
 | C9 | — | Read investInFlight ID | `cast call $MantleYieldVault "nextInFlightId()(uint256)" --rpc-url $RPC` | save `$IN_FLIGHT_ID = nextInFlightId - 1` |
-| C10 | Admin | **settleAdapter — sweep ST tokens to vault + confirm investInFlight** (combined in one tx; guard requires investInFlightIds when posAmount > 0 and in-flights exist) | `cast send $StrategyController "settleAdapter(address,uint256,uint256,uint256[],uint256[])" $SubRedAdapter $ST_AMOUNT 0 "[$IN_FLIGHT_ID]" "[]" --rpc-url $RPC --private-key $ADMIN_PRIVATE_KEY` | ST tokens swept to vault, investInFlight confirmed |
+| C10 | Admin | **settleAdapter — sweep ST tokens to vault + confirm investInFlight** (new signature: per-id settled amounts; `investSettledAmounts` must match sweep return) | `cast send $StrategyController "settleAdapter(address,uint256[],uint256[],uint256[],uint256[])" $SubRedAdapter "[$IN_FLIGHT_ID]" "[$ST_AMOUNT]" "[]" "[]" --rpc-url $RPC --private-key $ADMIN_PRIVATE_KEY` | ST tokens swept to vault, investInFlight confirmed |
 | C11 | — | Verify investInFlight cleared | `cast call $MantleYieldVault "adapterInvestInFlightTokens(address)(uint256)" $SubRedAdapter --rpc-url $RPC` | == 0 |
 | C12 | — | Verify adapter totalValue | `cast call $SubRedAdapter "totalValue()(uint256)" --rpc-url $RPC` | > 0 (ST token value in vault) |
 
@@ -212,7 +214,7 @@ Admin (rebalance)
 | C18 | Admin | **processRedeemBatch** (triggers divest → `adapter.requestRedeemAsync` → `SubRed.redeem`) | `cast send $StrategyController "processRedeemBatch(uint256[])" "[$REQ_ID]" --rpc-url $RPC --private-key $ADMIN_PRIVATE_KEY` | request → PROCESSING, `AsyncRedeemRequested` emitted, redeemInFlight created |
 | C18a | Off-chain | **settleRedeem — BLOCKED** (requires off-chain settlement service; same limitation as C7) | _off-chain service triggers settlement_ | USDC sent to adapter |
 | C18b | — | Verify adapter received USDC | `cast call $MockUSDC "balanceOf(address)(uint256)" $SubRedAdapter --rpc-url $RPC` | == 509490000 |
-| C18c | Admin | **settleAdapter** (sweep USDC from adapter to vault + confirm redeemInFlight) | `cast send $StrategyController "settleAdapter(address,uint256,uint256,uint256[],uint256[])" $SubRedAdapter 0 509490000 "[]" "[$REDEEM_INFLIGHT_ID]" --rpc-url $RPC --private-key $ADMIN_PRIVATE_KEY` | USDC swept to vault, redeemInFlight cleared |
+| C18c | Admin | **settleAdapter** (sweep USDC from adapter to vault + confirm redeemInFlight; per-id settled amounts) | `cast send $StrategyController "settleAdapter(address,uint256[],uint256[],uint256[],uint256[])" $SubRedAdapter "[]" "[]" "[$REDEEM_INFLIGHT_ID]" "[509490000]" --rpc-url $RPC --private-key $ADMIN_PRIVATE_KEY` | USDC swept to vault, redeemInFlight cleared |
 | C18d | — | Verify vault has enough USDC | `cast call $MockUSDC "balanceOf(address)(uint256)" $MantleYieldVault --rpc-url $RPC` | >= 509490000 |
 | C19 | Admin | **finalizeRedeemBatch** (vault must have sufficient USDC) | `cast send $StrategyController "finalizeRedeemBatch(uint256[],uint256[])" "[$REQ_ID]" "[509490000]" --rpc-url $RPC --private-key $ADMIN_PRIVATE_KEY` | request → DONE, USDC transferred to user via `markRequestsDone` |
 | C20 | — | Verify request status | `cast call $MantleYieldVault "requests(uint256)(uint256,address,uint256,uint256,uint256,uint256,uint8)" $REQ_ID --rpc-url $RPC` | status=3 (DONE), settledAssets = 509490000 |
@@ -285,7 +287,7 @@ Paths A & B run against deployed contracts with no additional mocks. Path C addi
 
 1. **Duplicate keys in `addresses.yaml`**: The file contains two sets of deployed addresses (old and new). When loading with `yq`, the **last** occurrence wins. Verify the loaded addresses match the intended deployment.
 
-2. **OperatorExecutor bypass**: We grant `EXECUTOR_ROLE` directly to admin on StrategyController, bypassing OperatorExecutor's EIP-712 signature verification. This is a **testing shortcut only** — production must use OperatorExecutor with proper signatures.
+2. **OperatorExecutor bypass**: We grant `OPERATOR_EXECUTOR_ROLE` directly to admin on StrategyController, bypassing OperatorExecutor. OperatorExecutor no longer uses EIP-712 signatures — it now uses simple `BOT_ROLE` access control. Production must use OperatorExecutor with `BOT_ROLE` granted to the bot address.
 
 3. **Request ID tracking**: `requestRedeem` returns the request ID. When using `cast send`, extract it from `nextRequestId()` **before** calling `requestRedeem`, since `cast send` doesn't directly return Solidity return values.
 
@@ -310,3 +312,7 @@ Paths A & B run against deployed contracts with no additional mocks. Path C addi
 13. **CRITICAL — USDC approval must target Vault, not Gateway**: The Gateway calls `vault.depositFor(caller, assets, receiver)`, and the Vault executes `IERC20.transferFrom(caller, vault, assets)`. Therefore, the user must approve the **Vault** address, not the Gateway. Approving the Gateway will cause an arithmetic underflow revert in `transferFrom`.
 
 14. **Path C — SubRedManagement settlement is off-chain only**: The `SubRedManagement` contract's `settleSubscribe` and `settleRedeem` functions are triggered by an external off-chain service. They cannot be called directly via `cast send` in E2E testing. Path C tests must pause after `rebalance()` (invest) at step C7 and after `processRedeemBatch()` (divest) at step C18a, waiting for the off-chain settlement service to complete before proceeding with `settleAdapter` and `finalizeRedeemBatch`.
+
+15. **`settleAdapter` signature change (2026-03-23)**: The `settleAdapter` function signature has changed from `settleAdapter(address,uint256,uint256,uint256[],uint256[])` (adapter, posAmount, assetAmount, investInFlightIds, redeemInFlightIds) to `settleAdapter(address,uint256[],uint256[],uint256[],uint256[])` (adapter, investInFlightIds, investSettledAmounts, redeemInFlightIds, redeemSettledAmounts). The new signature requires **per-id settled amounts** instead of bulk sweep amounts. The contract validates that the sum of settled amounts matches the actual sweep return (`InvestSweepAmountMismatch` / `RedeemSweepAmountMismatch` errors on mismatch).
+
+16. **Gateway `redeem()` sanctioned user handling (2026-03-23)**: `MantleVaultGateway.redeem()` no longer reverts for sanctioned users. Instead, it routes shares to `sanctionSafe` and returns 0, consistent with `requestRedeem()` behavior.
