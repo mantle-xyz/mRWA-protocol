@@ -78,8 +78,29 @@ contract MockSanctionsOracle is ISanctionsOracle {
     function updateWhitelistStatusBatch(address[] calldata, bool) external override {}
 }
 
+contract MockPosToken is ERC20 {
+    constructor() ERC20("Position Token", "POS") {}
+
+    function decimals() public pure override returns (uint8) {
+        return 6;
+    }
+
+    function mint(address to, uint256 amount) external {
+        _mint(to, amount);
+    }
+
+    function burn(address from, uint256 amount) external {
+        _burn(from, amount);
+    }
+}
+
 contract MockStrategyAdapter is IStrategyAdapter {
-    uint256 public mockTotalValue;
+    MockPosToken public mockPosToken;
+    uint256 public mockPrice = 1e18;
+
+    constructor() {
+        mockPosToken = new MockPosToken();
+    }
 
     function name() external pure override returns (string memory) {
         return "MockAdapter";
@@ -89,16 +110,20 @@ contract MockStrategyAdapter is IStrategyAdapter {
         return address(0);
     }
 
-    function posToken() external pure override returns (address) {
-        return address(0);
+    function posToken() external view override returns (address) {
+        return address(mockPosToken);
     }
 
     function priceOracle() external pure override returns (address) {
         return address(0);
     }
 
-    function getPosTokenPrice() external pure override returns (uint256) {
-        return 1e18;
+    function getPosTokenPrice() external view override returns (uint256) {
+        return mockPrice;
+    }
+
+    function setMockPrice(uint256 price) external {
+        mockPrice = price;
     }
 
     function estimatePosAmount(uint256 assetAmount) external pure override returns (uint256) {
@@ -109,12 +134,18 @@ contract MockStrategyAdapter is IStrategyAdapter {
         return address(0);
     }
 
-    function totalValue() external view override returns (uint256) {
-        return mockTotalValue;
+    function totalValue() external pure override returns (uint256) {
+        return 0;
     }
 
-    function setTotalValue(uint256 v) external {
-        mockTotalValue = v;
+    /// @dev Adjust posToken balance of the vault to simulate adapter value
+    function setTotalValue(uint256 v, address vaultAddr) external {
+        uint256 currentBalance = mockPosToken.balanceOf(vaultAddr);
+        if (v > currentBalance) {
+            mockPosToken.mint(vaultAddr, v - currentBalance);
+        } else if (v < currentBalance) {
+            mockPosToken.burn(vaultAddr, currentBalance - v);
+        }
     }
 
     function deposit(uint256, address) external pure override returns (uint256) {
@@ -983,7 +1014,7 @@ contract TotalAssetsTest is VaultTestBase {
         vm.prank(controllerAddr);
         vault.registerAdapter(address(adapter));
 
-        adapter.setTotalValue(500e6);
+        adapter.setTotalValue(500e6, address(vault));
 
         assertEq(vault.totalAssets(), INITIAL_DEPOSIT + 500e6);
     }
@@ -1354,7 +1385,7 @@ contract ZeroCashBufferTest is VaultTestBase {
         assertEq(vault.getFreeCash(), 0, "freeCash should be 0");
 
         // Settlement: adapter now holds the value
-        adapter.setTotalValue(INITIAL_DEPOSIT);
+        adapter.setTotalValue(INITIAL_DEPOSIT, address(vault));
         vm.prank(controllerAddr);
         vault.confirmInFlight(1, INITIAL_DEPOSIT, false);
 
@@ -1399,7 +1430,7 @@ contract ZeroCashBufferTest is VaultTestBase {
 
         // Step 3c: Controller initiates async redeem from adapter
         //   adapter.totalValue drops (tokens leaving adapter), in-flight bridges the gap
-        adapter.setTotalValue(10e6); // 1000 - 990 withdrawn
+        adapter.setTotalValue(10e6, address(vault)); // 1000 - 990 withdrawn
         vm.prank(controllerAddr);
         vault.createInFlight(address(adapter), address(usdc), netAssets, netAssets, false);
 
@@ -1444,7 +1475,7 @@ contract ZeroCashBufferTest is VaultTestBase {
 
         vm.prank(address(adapter));
         usdc.transferFrom(address(vault), address(adapter), INITIAL_DEPOSIT);
-        adapter.setTotalValue(INITIAL_DEPOSIT);
+        adapter.setTotalValue(INITIAL_DEPOSIT, address(vault));
         vm.prank(controllerAddr);
         vault.confirmInFlight(1, INITIAL_DEPOSIT, false);
 
@@ -1469,7 +1500,7 @@ contract ZeroCashBufferTest is VaultTestBase {
 
         vm.prank(address(adapter));
         usdc.transferFrom(address(vault), address(adapter), bobDeposit);
-        adapter.setTotalValue(INITIAL_DEPOSIT + bobDeposit);
+        adapter.setTotalValue(INITIAL_DEPOSIT + bobDeposit, address(vault));
         vm.prank(controllerAddr);
         vault.confirmInFlight(2, bobDeposit, false);
 
@@ -1502,7 +1533,7 @@ contract ZeroCashBufferTest is VaultTestBase {
         assertEq(vault.totalAssets(), INITIAL_DEPOSIT, "step3: in-flight bridges the gap");
 
         // Step 4: Settlement + confirm
-        adapter.setTotalValue(INITIAL_DEPOSIT);
+        adapter.setTotalValue(INITIAL_DEPOSIT, address(vault));
         vm.prank(controllerAddr);
         vault.confirmInFlight(1, INITIAL_DEPOSIT, false);
         // totalAssets = 0 (vault) + 0 (investInFlight) + 1000 (adapter) - 0 = 1000
@@ -1520,7 +1551,7 @@ contract ZeroCashBufferTest is VaultTestBase {
         vm.stopPrank();
         vm.prank(address(adapter));
         usdc.transferFrom(address(vault), address(adapter), INITIAL_DEPOSIT);
-        adapter.setTotalValue(INITIAL_DEPOSIT);
+        adapter.setTotalValue(INITIAL_DEPOSIT, address(vault));
         vm.prank(controllerAddr);
         vault.confirmInFlight(1, INITIAL_DEPOSIT, false);
 
@@ -1537,7 +1568,7 @@ contract ZeroCashBufferTest is VaultTestBase {
 
         // --- Adapter async redeem settles with friction ---
         uint256 actualReceived = netAssets - friction; // 985e6
-        adapter.setTotalValue(INITIAL_DEPOSIT - actualReceived);
+        adapter.setTotalValue(INITIAL_DEPOSIT - actualReceived, address(vault));
         vm.prank(controllerAddr);
         vault.createInFlight(address(adapter), address(usdc), netAssets, netAssets, false);
         vm.prank(address(adapter));

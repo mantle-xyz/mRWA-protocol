@@ -11,6 +11,7 @@ import {
 import {ERC4626Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC4626Upgradeable.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 /**
@@ -182,6 +183,7 @@ contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultA
 
     function getTokenInfos() external view returns (tokenInfo[] memory) {
         uint256 len = adapters.length;
+        uint256 assetScale = 10 ** IERC20Metadata(asset()).decimals();
         tokenInfo[] memory infos = new tokenInfo[](len + 1);
         infos[0] = tokenInfo(
             asset(),
@@ -190,11 +192,12 @@ contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultA
         );
         for (uint256 i = 0; i < len; i++) {
             IStrategyAdapter adapter = IStrategyAdapter(adapters[i]);
-            IERC20 token = IERC20(adapter.posToken());
-            uint256 tokenAmount = adapterInvestInFlightTokens[adapters[i]] + token.balanceOf(address(this));
+            address posToken = adapter.posToken();
+            uint256 tokenScale = 10 ** IERC20Metadata(posToken).decimals();
+            uint256 tokenAmount = adapterInvestInFlightTokens[adapters[i]] + IERC20(posToken).balanceOf(address(this));
             uint256 priceE18 = adapter.getPosTokenPrice();
-            uint256 usdcAmount = tokenAmount.mulDiv(priceE18, 1e6, Math.Rounding.Floor);
-            infos[i + 1] = tokenInfo(adapter.posToken(), tokenAmount, usdcAmount);
+            uint256 usdcAmount = tokenAmount.mulDiv(priceE18 * assetScale, 1e18 * tokenScale, Math.Rounding.Floor);
+            infos[i + 1] = tokenInfo(posToken, tokenAmount, usdcAmount);
         }
         return infos;
     }
@@ -239,9 +242,15 @@ contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultA
 
     function totalAssets() public view override(ERC4626Upgradeable, IERC4626) returns (uint256) {
         uint256 total = IERC20(asset()).balanceOf(address(this)) + totalInvestInFlight + totalRedeemInFlight;
+        uint256 assetScale = 10 ** IERC20Metadata(asset()).decimals();
         uint256 len = adapters.length;
         for (uint256 i = 0; i < len; i++) {
-            total += IStrategyAdapter(adapters[i]).totalValue();
+            IStrategyAdapter adapter = IStrategyAdapter(adapters[i]);
+            uint256 priceE18 = adapter.getPosTokenPrice();
+            address posToken = adapter.posToken();
+            uint256 tokenScale = 10 ** IERC20Metadata(posToken).decimals();
+            uint256 tokenBalance = IERC20(posToken).balanceOf(address(this));
+            total += tokenBalance.mulDiv(priceE18 * assetScale, 1e18 * tokenScale, Math.Rounding.Floor);
         }
         uint256 floatingLocked = previewRedeem(totalLockedShares);
         if (total <= floatingLocked) return 0;
