@@ -26,6 +26,7 @@ contract MockStrategyAdapter is IStrategyAdapter {
     bool public failWithdraw;
     bool public failAsync;
     bool public failEstimate;
+    bool public depositReturnZero;
 
     uint256 public depositCount;
     uint256 public withdrawCount;
@@ -53,6 +54,10 @@ contract MockStrategyAdapter is IStrategyAdapter {
 
     function setFailEstimate(bool e) external {
         failEstimate = e;
+    }
+
+    function setDepositReturnZero(bool z) external {
+        depositReturnZero = z;
     }
 
     function setSweepReturnAmount(uint256 amount_) external {
@@ -96,7 +101,7 @@ contract MockStrategyAdapter is IStrategyAdapter {
     function deposit(uint256 amount, address) external returns (uint256 sharesOrPos) {
         if (failDeposit) revert("DEPOSIT_FAIL");
         depositCount++;
-        return amount;
+        return depositReturnZero ? 0 : amount;
     }
 
     function withdrawSync(uint256 amount, address) external returns (uint256 actualUSDC) {
@@ -1124,6 +1129,65 @@ contract StrategyControllerUnitTest is Test {
         assertEq(syncAdapter.depositCount(), 1);
         assertEq(vault.inFlightIdCursor(), 2);
         assertEq(vault.investInFlightTotal(), 1_800e18);
+    }
+
+    function test_RebalanceInvest_EstimateFailAndDepositReturnsZero_Reverts() public {
+        _registerSingleAsyncStrategy();
+        asyncAdapter.setFailEstimate(true);
+        asyncAdapter.setDepositReturnZero(true);
+        asset.mint(address(vault), 1_000e18);
+
+        vm.warp(2 hours);
+        vm.prank(address(executorGateway));
+        // alloc = 900e18 (freeCash 1000e18 - targetCash 100e18)
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                StrategyController.InvestPosAmountUnavailable.selector, address(asyncAdapter), 900e18
+            )
+        );
+        controller.rebalance();
+    }
+
+    function test_RebalanceInvest_DepositReturnsZeroButEstimateSucceeds() public {
+        _registerSingleAsyncStrategy();
+        asyncAdapter.setDepositReturnZero(true);
+        // estimatePosAmount still works (not failed)
+        asset.mint(address(vault), 1_000e18);
+
+        vm.warp(2 hours);
+        vm.prank(address(executorGateway));
+        controller.rebalance();
+
+        // deposit called, sharesOrPos=0, but estimate gives valid pos → in-flight recorded
+        assertEq(asyncAdapter.depositCount(), 1);
+        assertEq(vault.inFlightIdCursor(), 1);
+        (,,, uint256 tokenAmount, uint256 usdcAmount,,,,) = vault.inFlightRecords(1);
+        assertEq(usdcAmount, 900e18);
+        assertEq(tokenAmount, 900e18); // from estimatePosAmount
+    }
+
+    function test_RebalanceInvest_EstimateFailButDepositReturnsPos_UsesSharosOrPos() public {
+        _registerSingleAsyncStrategy();
+        asyncAdapter.setFailEstimate(true);
+        // deposit returns normal amount (not zero)
+        asset.mint(address(vault), 1_000e18);
+
+        vm.warp(2 hours);
+        vm.prank(address(executorGateway));
+        controller.rebalance();
+
+        assertEq(asyncAdapter.depositCount(), 1);
+        assertEq(vault.inFlightIdCursor(), 1);
+
+        // alloc = 900e18, deposit returns 900e18 (sharesOrPos=amount in mock)
+        // estimate reverted, fallback=sharesOrPos=900e18
+        (,,, uint256 tokenAmount, uint256 usdcAmount,,,,) = vault.inFlightRecords(1);
+        assertEq(usdcAmount, 900e18);
+        // sharesOrPos != 0, so posAmount = sharesOrPos = 900e18
+        // In this mock, asset and pos have the same decimals, so it looks correct.
+        // For a real adapter (asset=6dec, pos=18dec), sharesOrPos could still be wrong
+        // if deposit() returns asset-denominated value instead of pos-denominated.
+        assertEq(tokenAmount, 900e18);
     }
 
     function test_RebalanceDivestSync_SkipsWhenCoveredByPendingRedeem() public {

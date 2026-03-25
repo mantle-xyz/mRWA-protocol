@@ -120,6 +120,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     error ClaimInputsLengthMismatch();
     error UpdateStrategiesLengthMismatch();
     error DuplicateStrategyUpdate(address adapter);
+    error InvestPosAmountUnavailable(address adapter, uint256 assetAmount);
     error StrategyAlreadyActive(address adapter);
     error StrategyAlreadyInactive(address adapter);
     error StrategyInOrder(address adapter);
@@ -721,9 +722,12 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
 
             vault.approveToAdapter(adapter, address(asset), alloc);
             try IStrategyAdapter(adapter).deposit(alloc, adapter) returns (uint256 sharesOrPos) {
-                uint256 posAmount = _estimatePosAmount(adapter, alloc, sharesOrPos);
+                uint256 posAmount = sharesOrPos;
                 if (posAmount == 0) {
-                    posAmount = sharesOrPos == 0 ? alloc : sharesOrPos;
+                    posAmount = _estimatePosAmount(adapter, alloc, 0);
+                }
+                if (posAmount == 0) {
+                    revert InvestPosAmountUnavailable(adapter, alloc);
                 }
 
                 _recordInvestInFlight(adapter, alloc, posAmount);
