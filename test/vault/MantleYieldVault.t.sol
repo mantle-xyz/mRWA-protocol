@@ -1425,10 +1425,12 @@ contract ZeroCashBufferTest is VaultTestBase {
         // Final state verification (markRequestsDone transfers USDC directly)
         // ====================================================
 
+        uint256 treasuryShares = (aliceShares * FEE_BPS + BPS_DENOMINATOR - 1) / BPS_DENOMINATOR;
         assertEq(usdc.balanceOf(alice), netAssets, "alice received 990 USDC");
         assertEq(usdc.balanceOf(address(vault)), 0, "vault back to 0 cash");
         assertEq(vault.totalLockedShares(), 0, "locked shares cleared");
-        assertEq(vault.totalSupply(), 0, "no shares outstanding");
+        assertEq(vault.totalSupply(), treasuryShares, "only treasury fee shares outstanding");
+        assertEq(vault.balanceOf(treasuryAddr), treasuryShares, "treasury holds fee shares");
         assertEq(vault.totalAssets(), 10e6, "fee retained in adapter");
     }
 
