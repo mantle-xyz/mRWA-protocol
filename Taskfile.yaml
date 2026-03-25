@@ -94,8 +94,63 @@ tasks:
           EXTRA_ARGS: ${ROOT_DIR}/script/strategy/RegisterStrategy.s.sol {{.CLI_ARGS}}
 
 
-  UpgradeStrategyControllerImpl:
+  UpgradeStrategyController:
     cmds:
       - task: _script
         vars:
-          EXTRA_ARGS: ${ROOT_DIR}/script/strategy/UpgradeStrategyControllerImpl.s.sol {{.CLI_ARGS}}
+          EXTRA_ARGS: ${ROOT_DIR}/script/strategy/UpgradeStrategyController.s.sol {{.CLI_ARGS}}
+
+  UpgradeSanctionsOracle:
+    cmds:
+      - task: _script
+        vars:
+          EXTRA_ARGS: ${ROOT_DIR}/script/compliance/UpgradeSanctionsOracle.s.sol {{.CLI_ARGS}}
+
+  UpgradeGateway:
+    cmds:
+      - task: _script
+        vars:
+          EXTRA_ARGS: ${ROOT_DIR}/script/vault/UpgradeGateway.s.sol {{.CLI_ARGS}}
+
+  UpgradeVault:
+    cmds:
+      - task: _script
+        vars:
+          EXTRA_ARGS: ${ROOT_DIR}/script/vault/UpgradeVault.s.sol {{.CLI_ARGS}}
+
+  UpgradeOperatorExecutor:
+    cmds:
+      - task: _script
+        vars:
+          EXTRA_ARGS: ${ROOT_DIR}/script/protocol/UpgradeOperatorExecutor.s.sol {{.CLI_ARGS}}
+
+  UpgradeAccountantExecutor:
+    cmds:
+      - task: _script
+        vars:
+          EXTRA_ARGS: ${ROOT_DIR}/script/accountant/UpgradeAccountantExecutor.s.sol {{.CLI_ARGS}}
+
+  UpgradeAll:
+    desc: Upgrade all upgradeable contracts (BeaconProxy + UUPS)
+    cmds:
+      - task: UpgradeSanctionsOracle
+        vars:
+          CLI_ARGS: "{{.CLI_ARGS}}"
+      - task: UpgradeAccountant
+        vars:
+          CLI_ARGS: "{{.CLI_ARGS}}"
+      - task: UpgradeStrategyController
+        vars:
+          CLI_ARGS: "{{.CLI_ARGS}}"
+      - task: UpgradeGateway
+        vars:
+          CLI_ARGS: "{{.CLI_ARGS}}"
+      - task: UpgradeVault
+        vars:
+          CLI_ARGS: "{{.CLI_ARGS}}"
+      - task: UpgradeOperatorExecutor
+        vars:
+          CLI_ARGS: "{{.CLI_ARGS}}"
+      - task: UpgradeAccountantExecutor
+        vars:
+          CLI_ARGS: "{{.CLI_ARGS}}"
