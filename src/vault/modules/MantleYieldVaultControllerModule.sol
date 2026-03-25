@@ -110,7 +110,7 @@ abstract contract MantleYieldVaultControllerModule is MantleYieldVaultStorage {
                 emit SactionSafeIn(req.owner, asset(), actual);
             } else {
                 IERC20(asset()).safeTransfer(receiver, actual);
-                emit RedemptionDone(req.owner, receiver, req.shares, actual);
+                emit RedemptionDone(req.owner, receiver, req.shares, actual, req.estimatedAssets);
             }
             physicalCash -= actual;
         }

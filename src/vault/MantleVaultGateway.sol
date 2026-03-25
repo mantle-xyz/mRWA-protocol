@@ -158,6 +158,10 @@ contract MantleVaultGateway is
         return vault.redemptionFeeBps();
     }
 
+    function minRedeemAmount() external view override returns (uint256) {
+        return vault.minRedeemAmount();
+    }
+
     function exchangeRate() external view override returns (uint256) {
         return vault.exchangeRate();
     }

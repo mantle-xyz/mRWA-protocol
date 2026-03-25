@@ -46,6 +46,7 @@ interface IMantleVaultGateway {
     function previewRedeem(uint256 shares) external view returns (uint256);
     function managementFeeRate() external view returns (uint256);
     function redemptionFeeBps() external view returns (uint256);
+    function minRedeemAmount() external view returns (uint256);
     function exchangeRate() external view returns (uint256);
     function totalAssets() external view returns (uint256);
     function getTokenInfos() external view returns (IMantleYieldVault.tokenInfo[] memory);
