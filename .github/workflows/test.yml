@@ -1,8 +1,28 @@
 name: CI
 
+# Same Solidity roots as `forge fmt` (src / test / script). Pure doc-only commits skip CI.
+# push: only main/develop (post-merge / direct-to-default); pull_request: all PRs (avoids duplicate runs on feature branches).
+# Also: toolchain files that affect build/fmt, and this workflow file. Manual runs have no path filter.
 on:
   push:
+    branches:
+      - main
+      - develop
+    paths:
+      - "src/**"
+      - "test/**"
+      - "script/**"
+      - "foundry.toml"
+      - "remappings.txt"
+      - ".github/workflows/**"
   pull_request:
+    paths:
+      - "src/**"
+      - "test/**"
+      - "script/**"
+      - "foundry.toml"
+      - "remappings.txt"
+      - ".github/workflows/**"
   workflow_dispatch:
 
 env:
