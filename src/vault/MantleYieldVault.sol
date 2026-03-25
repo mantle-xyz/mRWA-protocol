@@ -37,11 +37,16 @@ contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultA
 
         uint256 grossAssets = _convertToAssets(shares, Math.Rounding.Floor);
         uint256 fee = grossAssets.mulDiv(redemptionFeeBps, FEE_BASIS, Math.Rounding.Ceil);
+        uint256 treasuryShare = shares.mulDiv(redemptionFeeBps, FEE_BASIS, Math.Rounding.Ceil);
         uint256 estimatedAssets = grossAssets - fee;
 
         if (estimatedAssets < minRedeemAmount) revert Vault__BelowMinRedeem(estimatedAssets, minRedeemAmount);
 
         _burn(owner, shares);
+        if (treasuryShare > 0) {
+            _mint(treasury, treasuryShare);
+            emit FeeSharesMinted(treasury, treasuryShare, FeeType.Redemption);
+        }
 
         totalLockedShares += shares;
         _pendingShares[owner] += shares;
@@ -57,7 +62,7 @@ contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultA
             status: RequestStatus.PENDING
         });
 
-        emit RedeemRequest(owner, requestId, shares);
+        emit RedeemRequest(owner, requestId, shares, estimatedAssets);
     }
 
     function requestRedeemFor(address caller, address owner, uint256 shares)
@@ -117,7 +122,12 @@ contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultA
         if (shares > maxShares) {
             revert ERC4626ExceededMaxRedeem(owner, shares, maxShares);
         }
+        uint256 treasuryShare = shares.mulDiv(redemptionFeeBps, FEE_BASIS, Math.Rounding.Ceil);
         assets = previewRedeem(shares);
+        if (treasuryShare > 0) {
+            _mint(treasury, treasuryShare);
+            emit FeeSharesMinted(treasury, treasuryShare, FeeType.Redemption);
+        }
         _withdraw(caller, receiver, owner, assets, shares);
     }
 

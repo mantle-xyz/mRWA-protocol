@@ -84,7 +84,7 @@ abstract contract MantleYieldVaultAdminModule is MantleYieldVaultStorage {
 
     function mintFeeShares(uint256 shares) external onlyAccountant whenNotPaused {
         _mint(treasury, shares);
-        emit FeeSharesMinted(treasury, shares);
+        emit FeeSharesMinted(treasury, shares, FeeType.Management);
     }
 
     // =============================================================
