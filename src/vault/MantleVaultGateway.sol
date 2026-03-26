@@ -162,6 +162,10 @@ contract MantleVaultGateway is
         return vault.minRedeemAmount();
     }
 
+    function minDepositAmount() external view override returns (uint256) {
+        return vault.minDepositAmount();
+    }
+
     function exchangeRate() external view override returns (uint256) {
         return vault.exchangeRate();
     }
