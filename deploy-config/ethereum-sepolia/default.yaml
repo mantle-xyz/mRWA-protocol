@@ -22,7 +22,12 @@ envs:
   F_STRATEGY_MANAGER_ADDRESS: "0x3C8af6063c934dc25F7dB727bBB6c7DeEBE21Bb2" # StrategyController STRATEGY_MANAGER_ROLE
   F_TREASURY_ADDRESS: "0x3C8af6063c934dc25F7dB727bBB6c7DeEBE21Bb2"         # Vault fee share recipient
   F_PAUSER_ADDRESS: "0x3C8af6063c934dc25F7dB727bBB6c7DeEBE21Bb2"           # Vault PAUSER_ROLE
-  F_ACCOUNTANT_FACTORY: "0xF7C79c9183421b6E1DF5F04BD11E88e317Cc2aCA"
+  F_ACCOUNTANT_FACTORY: "0x37f91bf7aab61707a4d21043e8f99622ea78a9ac"
+  F_SANCTIONS_ORACLE_FACTORY: "0x857b339b894d00806031ac13ab3cb17cb588749c"
+  F_VAULT_FACTORY: "0x0cf7ce1b8bc6b506680a902faddc90da40d195c4"
+  F_GATEWAY_FACTORY: "0x9e0973be913a51bcb0738920854a31c0c379ab45"
+  F_ACCOUNTANT_EXECUTOR: "0x7efaa6a98622f54d650189963121b97a8cfe859b"
+  F_OPERATOR_EXECUTOR: "0x2394456594ccbfc8d5c492ea82f9ae08950edb4e"
 
   # ── Accountant params ────────────────────────────────────────
   F_INITIAL_RATE: "1000000000000000000" # 1e18
@@ -50,7 +55,7 @@ envs:
   ADAPTER_ACCOUNTANT: "0x93a44c2c92c9ec8a290bcf6a5efb8459c3ee184d"
   ADAPTER_PRICE_ORACLE: "0x0000000000000000000000000000000000000000"  # optional, default: address(0)
 
-  # ── UpgradeStrategyControllerImpl params ─────────────────────
+  # ── UpgradeStrategyController params ─────────────────────
   F_STRATEGY_CONTROLLER_FACTORY: "0x5899e2c2e5dd3e9e88811e6fb905c64f8e906479"
 
   # ── Vault params ─────────────────────────────────────────────
