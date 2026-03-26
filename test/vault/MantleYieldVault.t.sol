@@ -1308,7 +1308,8 @@ contract ERC7540ViewTest is VaultTestBase {
         vm.prank(alice);
         gateway.requestRedeem(500e6);
 
-        assertEq(vault.pendingRedeemRequest(alice), 500e6);
+        uint256 treasuryShare = (500e6 * FEE_BPS + BPS_DENOMINATOR - 1) / BPS_DENOMINATOR;
+        assertEq(vault.pendingRedeemRequest(alice), 500e6 - treasuryShare);
     }
 }
 
@@ -1417,9 +1418,12 @@ contract ZeroCashBufferTest is VaultTestBase {
         uint256 reqId = gateway.requestRedeem(aliceShares);
 
         uint256 netAssets = 990e6; // 1000e6 - 1% fee (10e6)
-        assertEq(vault.totalLockedShares(), aliceShares, "locked shares = redeemed shares");
+        uint256 aliceTreasuryShare = (aliceShares * FEE_BPS + BPS_DENOMINATOR - 1) / BPS_DENOMINATOR;
+        uint256 aliceNetShares = aliceShares - aliceTreasuryShare;
+        assertEq(vault.totalLockedShares(), aliceNetShares, "locked shares = net redeemed shares");
         assertEq(vault.balanceOf(alice), 0, "shares burned");
-        uint256 floatingLocked = vault.previewRedeem(vault.totalLockedShares());
+        // floatingLocked = _convertToAssets(totalLockedShares, Ceil), no fee re-applied
+        uint256 floatingLocked = vault.totalLockedShares() * vault.exchangeRate() / 1e18;
         assertEq(vault.totalAssets(), INITIAL_DEPOSIT - floatingLocked, "totalAssets = total - floatingLocked");
 
         // Step 3b: Controller moves to PROCESSING
@@ -1586,7 +1590,9 @@ contract ZeroCashBufferTest is VaultTestBase {
         vault.markRequestsDone(ids, settled);
 
         // Shares released; USDC transferred directly to alice
-        assertEq(vault.totalLockedShares(), lockedSharesBefore - aliceShares, "locked shares released");
+        uint256 aliceTreasuryShareFriction = (aliceShares * FEE_BPS + BPS_DENOMINATOR - 1) / BPS_DENOMINATOR;
+        uint256 aliceNetSharesFriction = aliceShares - aliceTreasuryShareFriction;
+        assertEq(vault.totalLockedShares(), lockedSharesBefore - aliceNetSharesFriction, "locked shares released");
         assertEq(usdc.balanceOf(alice), actualReceived, "alice receives 985 USDC (990 - 5 friction) directly");
 
         // estimatedAssets preserved, settledAssets = actual
@@ -1621,7 +1627,9 @@ contract ZeroCashBufferTest is VaultTestBase {
         vm.prank(controllerAddr);
         vault.markRequestsDone(ids, settled);
 
-        assertEq(vault.totalLockedShares(), lockedSharesBefore - redeemShares, "locked shares released");
+        uint256 redeemTreasuryShare = (redeemShares * FEE_BPS + BPS_DENOMINATOR - 1) / BPS_DENOMINATOR;
+        uint256 redeemNetShares = redeemShares - redeemTreasuryShare;
+        assertEq(vault.totalLockedShares(), lockedSharesBefore - redeemNetShares, "locked shares released");
         assertEq(usdc.balanceOf(alice), settledAmount, "alice receives surplus directly");
     }
 
@@ -1704,7 +1712,8 @@ contract SyncRedeemDisabledTest is VaultTestBase {
         vm.prank(alice);
         gateway.requestRedeem(shares);
 
-        assertEq(vault.pendingRedeemRequest(alice), shares);
+        uint256 treasuryShare = (shares * FEE_BPS + BPS_DENOMINATOR - 1) / BPS_DENOMINATOR;
+        assertEq(vault.pendingRedeemRequest(alice), shares - treasuryShare);
     }
 
     function test_redeemWorksAfterReenabling() public {

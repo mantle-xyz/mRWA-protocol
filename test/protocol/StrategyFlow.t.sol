@@ -199,20 +199,20 @@ contract MockVaultFlow {
     function requests(uint256 requestId)
         external
         view
-        returns (uint256, address, uint256, uint256, uint256, uint256, IMantleYieldVault.RequestStatus)
+        returns (uint256, address, uint256, uint256, uint256, uint256, uint256, IMantleYieldVault.RequestStatus)
     {
         uint256 assets = liabilities[requestId];
         IMantleYieldVault.RequestStatus status = requestStatus[requestId];
-        return
-            (
-                requestId,
-                address(0),
-                assets,
-                assets,
-                status == IMantleYieldVault.RequestStatus.DONE ? assets : 0,
-                0,
-                status
-            );
+        return (
+            requestId,
+            address(0),
+            assets,
+            0, // feeShares
+            assets,
+            status == IMantleYieldVault.RequestStatus.DONE ? assets : 0,
+            0,
+            status
+        );
     }
 
     function inFlightRecords(uint256 inFlightId)
