@@ -567,7 +567,7 @@ contract AsyncRedeemTest is VaultTestBase {
         vm.prank(controllerAddr);
         vault.updateRequestBatch(ids, IMantleYieldVault.RequestStatus.PROCESSING);
 
-        (,,, uint256 reqAssets,,,) = vault.requests(requestId);
+        (,,,, uint256 reqAssets,,,) = vault.requests(requestId);
         uint256[] memory settled = new uint256[](1);
         settled[0] = reqAssets;
 
@@ -590,8 +590,8 @@ contract AsyncRedeemTest is VaultTestBase {
         ids[1] = id2;
 
         uint256[] memory settled = new uint256[](2);
-        (,,, settled[0],,,) = vault.requests(id1);
-        (,,, settled[1],,,) = vault.requests(id2);
+        (,,,, settled[0],,,) = vault.requests(id1);
+        (,,,, settled[1],,,) = vault.requests(id2);
 
         uint256 balBefore = usdc.balanceOf(alice);
         vm.prank(controllerAddr);
@@ -1590,7 +1590,7 @@ contract ZeroCashBufferTest is VaultTestBase {
         assertEq(usdc.balanceOf(alice), actualReceived, "alice receives 985 USDC (990 - 5 friction) directly");
 
         // estimatedAssets preserved, settledAssets = actual
-        (,,, uint256 estAssets, uint256 settled_,, IMantleYieldVault.RequestStatus status) = vault.requests(reqId);
+        (,,,, uint256 estAssets, uint256 settled_,, IMantleYieldVault.RequestStatus status) = vault.requests(reqId);
         assertEq(estAssets, netAssets, "estimatedAssets preserved");
         assertEq(settled_, actualReceived, "settledAssets = actual settlement");
         assertTrue(status == IMantleYieldVault.RequestStatus.DONE, "request is DONE");
@@ -1608,7 +1608,7 @@ contract ZeroCashBufferTest is VaultTestBase {
         vm.prank(controllerAddr);
         vault.updateRequestBatch(ids, IMantleYieldVault.RequestStatus.PROCESSING);
 
-        (,,, uint256 estAssets,,,) = vault.requests(reqId);
+        (,,,, uint256 estAssets,,,) = vault.requests(reqId);
         uint256 surplus = 10e6;
         uint256 settledAmount = estAssets + surplus;
         uint256[] memory settled = new uint256[](1);

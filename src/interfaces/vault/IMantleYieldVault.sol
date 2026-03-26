@@ -9,7 +9,9 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 // =============================================================
 
 interface IERC7540Redeem {
-    event RedeemRequest(address indexed account, uint256 indexed requestId, uint256 shares, uint256 estimatedAssets);
+    event RedeemRequest(
+        address indexed account, uint256 indexed requestId, uint256 netShares, uint256 estimatedAssets, uint256 feeShares
+    );
 
     function requestRedeem(uint256 shares) external returns (uint256 requestId);
     function pendingRedeemRequest(address account) external view returns (uint256 shares);
@@ -61,7 +63,8 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     struct RedemptionRequest {
         uint256 id;
         address owner;
-        uint256 shares;
+        uint256 shares; // Net shares after fee deduction (shares - treasuryShare)
+        uint256 feeShares; // Fee shares minted to treasury at request time
         uint256 estimatedAssets; // Estimated payout at requestRedeem time (reference only, may differ from settlement)
         uint256 settledAssets; // Actual payout (set by markRequestsDone, 0 until settled)
         uint256 timestamp;
@@ -118,7 +121,7 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     // Events (vault-specific; RedeemRequest is inherited from IERC7540Redeem)
     // =============================================================
 
-    event SactionSafeIn(address indexed account, address indexed token, uint256 amount);
+    event SanctionSafeIn(address indexed account, address indexed token, uint256 amount);
     event RedemptionDone(
         address indexed account, address indexed receiver, uint256 shares, uint256 assets, uint256 estimatedAssets
     );
@@ -199,6 +202,7 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
             uint256 id,
             address owner,
             uint256 shares,
+            uint256 feeShares,
             uint256 estimatedAssets,
             uint256 settledAssets,
             uint256 timestamp,

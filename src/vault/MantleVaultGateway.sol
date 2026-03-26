@@ -74,7 +74,6 @@ contract MantleVaultGateway is
             vault.routeSanctionedShares(msg.sender, msg.sender, shares);
             return 0;
         }
-        _requireNotSanctioned(msg.sender);
         _requireWhitelisted(msg.sender);
         return vault.requestRedeemFor(msg.sender, msg.sender, shares);
     }
