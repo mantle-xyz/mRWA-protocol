@@ -10,7 +10,11 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 interface IERC7540Redeem {
     event RedeemRequest(
-        address indexed account, uint256 indexed requestId, uint256 netShares, uint256 estimatedAssets, uint256 feeShares
+        address indexed account,
+        uint256 indexed requestId,
+        uint256 netShares,
+        uint256 estimatedAssets,
+        uint256 feeShares
     );
 
     function requestRedeem(uint256 shares) external returns (uint256 requestId);

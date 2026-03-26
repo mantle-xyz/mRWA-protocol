@@ -199,8 +199,8 @@ contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultA
             uint256 tokenScale = 10 ** IERC20Metadata(posToken).decimals();
             uint256 tokenAmount = adapterInvestInFlightTokens[adapters[i]] + IERC20(posToken).balanceOf(address(this));
             uint256 priceE18 = adapter.getPosTokenPrice();
-            uint256 usdcAmount =
-                tokenAmount.mulDiv(priceE18, 1e18, Math.Rounding.Floor).mulDiv(assetScale, tokenScale, Math.Rounding.Floor);
+            uint256 usdcAmount = tokenAmount.mulDiv(priceE18, 1e18, Math.Rounding.Floor)
+                .mulDiv(assetScale, tokenScale, Math.Rounding.Floor);
             infos[i + 1] = tokenInfo(posToken, tokenAmount, usdcAmount);
         }
         return infos;
@@ -254,9 +254,8 @@ contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultA
             address posToken = adapter.posToken();
             uint256 tokenScale = 10 ** IERC20Metadata(posToken).decimals();
             uint256 tokenBalance = IERC20(posToken).balanceOf(address(this));
-            total += tokenBalance.mulDiv(priceE18, 1e18, Math.Rounding.Floor).mulDiv(
-                assetScale, tokenScale, Math.Rounding.Floor
-            );
+            total += tokenBalance.mulDiv(priceE18, 1e18, Math.Rounding.Floor)
+                .mulDiv(assetScale, tokenScale, Math.Rounding.Floor);
         }
         uint256 floatingLocked = _convertToAssets(totalLockedShares, Math.Rounding.Ceil);
         if (total <= floatingLocked) return 0;
