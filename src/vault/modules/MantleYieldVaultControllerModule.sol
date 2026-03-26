@@ -107,7 +107,7 @@ abstract contract MantleYieldVaultControllerModule is MantleYieldVaultStorage {
                 : (req.owner, false);
             if (sanctioned) {
                 IERC20(asset()).safeTransfer(receiver, actual);
-                emit SactionSafeIn(req.owner, asset(), actual);
+                emit SanctionSafeIn(req.owner, asset(), actual);
             } else {
                 IERC20(asset()).safeTransfer(receiver, actual);
                 emit RedemptionDone(req.owner, receiver, req.shares, actual, req.estimatedAssets);

@@ -296,10 +296,10 @@ contract MockControllerVault {
     function requests(uint256 requestId)
         external
         view
-        returns (uint256, address, uint256, uint256, uint256, uint256, IMantleYieldVault.RequestStatus)
+        returns (uint256, address, uint256, uint256, uint256, uint256, uint256, IMantleYieldVault.RequestStatus)
     {
         Req memory r = reqs[requestId];
-        return (requestId, address(0), r.shares, r.estimatedAssets, r.settledAssets, 0, r.status);
+        return (requestId, address(0), r.shares, 0, r.estimatedAssets, r.settledAssets, 0, r.status);
     }
 
     function inFlightRecords(uint256 inFlightId)
@@ -904,7 +904,7 @@ contract StrategyControllerUnitTest is Test {
         assertFalse(isInvest);
         assertEq(uint8(status), uint8(IMantleYieldVault.InFlightStatus.PENDING));
         assertEq(vault.totalRedeemInFlight(), 10e18);
-        (,,,, uint256 settledAssets,, IMantleYieldVault.RequestStatus reqStatus) = vault.requests(22);
+        (,,,,, uint256 settledAssets,, IMantleYieldVault.RequestStatus reqStatus) = vault.requests(22);
         assertEq(settledAssets, 100e18);
         assertEq(uint8(reqStatus), uint8(IMantleYieldVault.RequestStatus.DONE));
     }
@@ -1274,7 +1274,7 @@ contract StrategyControllerUnitTest is Test {
         assertEq(vault.redeemInFlightTotal(), 0);
         assertEq(vault.redeemInFlightByAdapter(address(asyncAdapter)), 0);
 
-        (,,,, uint256 settledAssets,, IMantleYieldVault.RequestStatus reqStatus) = vault.requests(requestId);
+        (,,,,, uint256 settledAssets,, IMantleYieldVault.RequestStatus reqStatus) = vault.requests(requestId);
         assertEq(settledAssets, 0);
         assertEq(uint8(reqStatus), uint8(IMantleYieldVault.RequestStatus.PROCESSING));
     }
@@ -1384,7 +1384,7 @@ contract StrategyControllerUnitTest is Test {
         assertEq(vault.investInFlightTotal(), 0);
         assertEq(vault.redeemInFlightTotal(), 0);
 
-        (,,,, uint256 settledAssets,, IMantleYieldVault.RequestStatus reqStatus) = vault.requests(requestId);
+        (,,,,, uint256 settledAssets,, IMantleYieldVault.RequestStatus reqStatus) = vault.requests(requestId);
         assertEq(settledAssets, 0);
         assertEq(uint8(reqStatus), uint8(IMantleYieldVault.RequestStatus.PROCESSING));
     }

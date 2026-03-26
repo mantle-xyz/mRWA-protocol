@@ -1046,7 +1046,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
             revert ClaimInputsLengthMismatch();
         }
         for (uint256 i = 0; i < ids.length; i++) {
-            (,,,,,, IMantleYieldVault.RequestStatus status) = vault.requests(ids[i]);
+            (,,,,,,, IMantleYieldVault.RequestStatus status) = vault.requests(ids[i]);
             if (status != IMantleYieldVault.RequestStatus.PROCESSING) {
                 revert InvalidRequestState(ids[i], status);
             }
@@ -1058,7 +1058,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     function _batchTotalBySharesAndRate(uint256[] calldata ids) internal view returns (uint256 totalAssets) {
         uint256 rate = vault.exchangeRate();
         for (uint256 i = 0; i < ids.length; i++) {
-            (,, uint256 shares,,,,) = vault.requests(ids[i]);
+            (,, uint256 shares,,,,,) = vault.requests(ids[i]);
             totalAssets += Math.mulDiv(shares, rate, 1e18, Math.Rounding.Floor);
         }
     }

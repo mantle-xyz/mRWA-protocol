@@ -200,7 +200,7 @@ contract RequestRedeem is SignerHelper {
         uint256 requestId = gateway.requestRedeem(shares);
         vm.stopBroadcast();
 
-        (,, uint256 reqShares, uint256 reqAssets,,,) = vault.requests(requestId);
+        (,, uint256 reqShares,, uint256 reqAssets,,,) = vault.requests(requestId);
 
         console.log("\nRequest ID:", requestId);
         console.log("Shares burned:", reqShares);
@@ -260,7 +260,7 @@ contract MarkRequestsDone is SignerHelper {
         console.log("Controller:", controller);
         console.log("Signing mode:", useLedger ? "Ledger" : "PrivateKey");
         for (uint256 i = 0; i < ids.length; i++) {
-            (,,, uint256 originalAssets,,,) = vault.requests(ids[i]);
+            (,,,, uint256 originalAssets,,,) = vault.requests(ids[i]);
             console.log("  ID:", ids[i]);
             console.log("    Original assets:", originalAssets);
             console.log("    Settled assets:", settled[i]);

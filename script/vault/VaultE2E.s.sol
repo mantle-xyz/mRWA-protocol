@@ -379,7 +379,7 @@ contract VaultE2E is Script {
         uint256 reqId = gateway.requestRedeem(redeemShares);
         console.log("[async] Step 1 - requestRedeem: id =", reqId);
 
-        (,, uint256 reqShares, uint256 reqAssets, uint256 settled,, IMantleYieldVault.RequestStatus status) =
+        (,, uint256 reqShares,, uint256 reqAssets, uint256 settled,, IMantleYieldVault.RequestStatus status) =
             vault.requests(reqId);
         require(status == IMantleYieldVault.RequestStatus.PENDING, "not PENDING");
         require(reqShares == redeemShares, "req shares mismatch");
@@ -421,7 +421,7 @@ contract VaultE2E is Script {
         vm.broadcast(aliceKey);
         uint256 reqId = gateway.requestRedeem(redeemShares);
 
-        (,,, uint256 estAssets,,,) = vault.requests(reqId);
+        (,,,, uint256 estAssets,,,) = vault.requests(reqId);
         uint256 friction = 5e6;
         uint256 actualSettled = estAssets - friction;
 
@@ -442,7 +442,7 @@ contract VaultE2E is Script {
         require(usdc.balanceOf(alice) == usdcBefore + actualSettled, "usdc not received");
         require(vault.totalLockedShares() == lockedBefore, "lockedShares not back to original");
 
-        (,,, uint256 storedEstAssets, uint256 storedSettled,,) = vault.requests(reqId);
+        (,,,, uint256 storedEstAssets, uint256 storedSettled,,) = vault.requests(reqId);
         require(storedEstAssets == estAssets, "estimatedAssets should be unchanged");
         require(storedSettled == actualSettled, "settledAssets wrong");
 

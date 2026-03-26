@@ -48,24 +48,26 @@ contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultA
             emit FeeSharesMinted(treasury, treasuryShare, FeeType.Redemption);
         }
 
-        totalLockedShares += shares;
-        _pendingShares[owner] += shares;
+        uint256 netShares = shares - treasuryShare;
+        totalLockedShares += netShares;
+        _pendingShares[owner] += netShares;
 
         requestId = nextRequestId++;
         requests[requestId] = RedemptionRequest({
             id: requestId,
             owner: owner,
-            shares: shares,
+            shares: netShares,
+            feeShares: treasuryShare,
             estimatedAssets: estimatedAssets,
             settledAssets: 0,
             timestamp: block.timestamp,
             status: RequestStatus.PENDING
         });
 
-        emit RedeemRequest(owner, requestId, shares, estimatedAssets);
+        emit RedeemRequest(owner, requestId, netShares, estimatedAssets, treasuryShare);
     }
 
-    function requestRedeemFor(address caller, address owner, uint256 shares)
+    function requestRedeemFor(address, address owner, uint256 shares)
         external
         onlyGateway
         nonReentrant
@@ -86,7 +88,7 @@ contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultA
         address safe = IMantleVaultGateway(gateway).sanctionSafe();
         if (safe == address(0)) revert Vault__ZeroAddress();
         super._update(owner, safe, shares);
-        emit SactionSafeIn(owner, asset(), shares);
+        emit SanctionSafeIn(owner, asset(), shares);
     }
 
     /// @notice User interactions are exposed on MantleVaultGateway to keep this vault lean.
@@ -157,6 +159,7 @@ contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultA
         uint256 freeCash = getFreeCash();
         uint256 assetsForAll = previewRedeem(shares);
         if (assetsForAll <= freeCash) return shares;
+        if (redemptionFeeBps >= FEE_BASIS) return 0;
         uint256 grossFromCash = redemptionFeeBps > 0
             ? freeCash.mulDiv(FEE_BASIS, FEE_BASIS - redemptionFeeBps, Math.Rounding.Floor)
             : freeCash;
@@ -176,7 +179,7 @@ contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultA
 
     function getFreeCash() public view returns (uint256) {
         uint256 physicalBalance = IERC20(asset()).balanceOf(address(this));
-        uint256 floatingLocked = previewRedeem(totalLockedShares);
+        uint256 floatingLocked = _convertToAssets(totalLockedShares, Math.Rounding.Ceil);
         if (physicalBalance <= floatingLocked) return 0;
         return physicalBalance - floatingLocked;
     }
@@ -196,7 +199,8 @@ contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultA
             uint256 tokenScale = 10 ** IERC20Metadata(posToken).decimals();
             uint256 tokenAmount = adapterInvestInFlightTokens[adapters[i]] + IERC20(posToken).balanceOf(address(this));
             uint256 priceE18 = adapter.getPosTokenPrice();
-            uint256 usdcAmount = tokenAmount.mulDiv(priceE18 * assetScale, 1e18 * tokenScale, Math.Rounding.Floor);
+            uint256 usdcAmount = tokenAmount.mulDiv(priceE18, 1e18, Math.Rounding.Floor)
+                .mulDiv(assetScale, tokenScale, Math.Rounding.Floor);
             infos[i + 1] = tokenInfo(posToken, tokenAmount, usdcAmount);
         }
         return infos;
@@ -250,9 +254,10 @@ contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultA
             address posToken = adapter.posToken();
             uint256 tokenScale = 10 ** IERC20Metadata(posToken).decimals();
             uint256 tokenBalance = IERC20(posToken).balanceOf(address(this));
-            total += tokenBalance.mulDiv(priceE18 * assetScale, 1e18 * tokenScale, Math.Rounding.Floor);
+            total += tokenBalance.mulDiv(priceE18, 1e18, Math.Rounding.Floor)
+                .mulDiv(assetScale, tokenScale, Math.Rounding.Floor);
         }
-        uint256 floatingLocked = previewRedeem(totalLockedShares);
+        uint256 floatingLocked = _convertToAssets(totalLockedShares, Math.Rounding.Ceil);
         if (total <= floatingLocked) return 0;
         return total - floatingLocked;
     }
