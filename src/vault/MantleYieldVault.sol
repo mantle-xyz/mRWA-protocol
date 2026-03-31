@@ -42,10 +42,10 @@ contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultA
 
         if (estimatedAssets < minRedeemAmount) revert Vault__BelowMinRedeem(estimatedAssets, minRedeemAmount);
 
-        _burn(owner, shares);
+        _burn(owner, shares - treasuryShare);
         if (treasuryShare > 0) {
-            _mint(treasury, treasuryShare);
-            emit FeeSharesMinted(treasury, treasuryShare, FeeType.Redemption);
+            super._update(owner, treasury, treasuryShare);
+            emit FeeSharesReceived(treasury, treasuryShare, FeeType.Redemption);
         }
 
         uint256 netShares = shares - treasuryShare;
@@ -127,10 +127,10 @@ contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultA
         uint256 treasuryShare = shares.mulDiv(redemptionFeeBps, FEE_BASIS, Math.Rounding.Ceil);
         assets = previewRedeem(shares);
         if (treasuryShare > 0) {
-            _mint(treasury, treasuryShare);
-            emit FeeSharesMinted(treasury, treasuryShare, FeeType.Redemption);
+            super._update(owner, treasury, treasuryShare);
+            emit FeeSharesReceived(treasury, treasuryShare, FeeType.Redemption);
         }
-        _withdraw(caller, receiver, owner, assets, shares);
+        _withdraw(caller, receiver, owner, assets, shares - treasuryShare);
     }
 
     function previewRedeem(uint256 shares) public view override(ERC4626Upgradeable, IERC4626) returns (uint256) {
