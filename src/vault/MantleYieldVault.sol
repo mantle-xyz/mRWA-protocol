@@ -42,11 +42,11 @@ contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultA
 
         if (estimatedAssets < minRedeemAmount) revert Vault__BelowMinRedeem(estimatedAssets, minRedeemAmount);
 
-        _burn(owner, shares - treasuryShare);
         if (treasuryShare > 0) {
             super._update(owner, treasury, treasuryShare);
             emit FeeSharesReceived(treasury, treasuryShare, FeeType.Redemption);
         }
+        _burn(owner, shares - treasuryShare);
 
         uint256 netShares = shares - treasuryShare;
         totalLockedShares += netShares;
