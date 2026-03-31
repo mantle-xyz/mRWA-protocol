@@ -510,7 +510,7 @@ contract AsyncRedeemTest is VaultTestBase {
 
         vm.prank(alice);
         vm.expectEmit(true, false, false, true, address(vault));
-        emit IMantleYieldVault.FeeSharesMinted(treasuryAddr, treasuryShare, IMantleYieldVault.FeeType.Redemption);
+        emit IMantleYieldVault.FeeSharesReceived(treasuryAddr, treasuryShare, IMantleYieldVault.FeeType.Redemption);
         uint256 requestId = gateway.requestRedeem(shares);
 
         assertEq(requestId, 1);
@@ -950,7 +950,7 @@ contract RedemptionFeeTest is VaultTestBase {
 
         vm.prank(alice);
         vm.expectEmit(true, false, false, true, address(vault));
-        emit IMantleYieldVault.FeeSharesMinted(treasuryAddr, treasuryShare, IMantleYieldVault.FeeType.Redemption);
+        emit IMantleYieldVault.FeeSharesReceived(treasuryAddr, treasuryShare, IMantleYieldVault.FeeType.Redemption);
         gateway.redeem(shares);
 
         assertEq(vault.balanceOf(treasuryAddr), treasuryShare);
@@ -1230,7 +1230,7 @@ contract MintFeeSharesTest is VaultTestBase {
 
         vm.prank(accountantAddr);
         vm.expectEmit(true, false, false, true, address(vault));
-        emit IMantleYieldVault.FeeSharesMinted(treasuryAddr, toMint, IMantleYieldVault.FeeType.Management);
+        emit IMantleYieldVault.FeeSharesReceived(treasuryAddr, toMint, IMantleYieldVault.FeeType.Management);
         vault.mintFeeShares(toMint);
 
         assertEq(vault.balanceOf(treasuryAddr), toMint);
