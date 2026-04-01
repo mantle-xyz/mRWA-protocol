@@ -22,14 +22,14 @@ tasks:
   _script:
     internal: true
     # silent: true
-    cmds: 
+    cmds:
+      - task: _config_yaml2json
       - |
         export $(yq '.envs | ... comments="" | to_entries | .[] | select((.value|tostring) != "") | .key + "=" + (.value|tostring)' {{.CONFIG_YAML}})
         source {{.ROOT_DIR}}/lib/func.sh
         if [[ -z "${NETWORK}" ]]; then
           log_error "NETWORK env is empty: NETWORK=anvil task yourTask"
         fi
-        yq -o json {{.CONFIG_YAML}} > {{.CONFIG_JSON}}
 
         mkdir -p $DEPLOYMENTS_DIR
         forge_script {{.EXTRA_ARGS}}
@@ -86,12 +86,6 @@ tasks:
       - task: _script
         vars:
           EXTRA_ARGS: ${ROOT_DIR}/script/strategy/DeployMockSubRedManagement.s.sol {{.CLI_ARGS}}
-
-  RegisterStrategy:
-    cmds:
-      - task: _script
-        vars:
-          EXTRA_ARGS: ${ROOT_DIR}/script/strategy/RegisterStrategy.s.sol {{.CLI_ARGS}}
 
 
   UpgradeStrategyController:
