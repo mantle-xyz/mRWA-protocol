@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import {SubRedManagementAdapter} from "../../src/adapters/digift/SubRedManagementAdapter.sol";
 import {ISubRedManagement} from "../../src/interfaces/adapters/digift/ISubRedManagement.sol";
+import {IStrategyControllerExecutor} from "../../src/interfaces/strategy/IStrategyControllerExecutor.sol";
 import {IMantleYieldVault} from "../../src/interfaces/vault/IMantleYieldVault.sol";
 import {StrategyController} from "../../src/protocol/StrategyController.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
@@ -353,12 +354,12 @@ contract StrategyFlowTest is Test {
         address[] memory adapters = new address[](2);
         adapters[0] = address(adapterISNR);
         adapters[1] = address(adapterUMINT);
-        uint256[][] memory investInFlightIdsBatch = new uint256[][](2);
-        investInFlightIdsBatch[0] = new uint256[](0);
-        investInFlightIdsBatch[1] = new uint256[](0);
-        uint256[][] memory investSettledAmountsBatch = new uint256[][](2);
-        investSettledAmountsBatch[0] = new uint256[](0);
-        investSettledAmountsBatch[1] = new uint256[](0);
+        IStrategyControllerExecutor.InvestSettlementInput[] memory investBatch =
+            new IStrategyControllerExecutor.InvestSettlementInput[](2);
+        investBatch[0] =
+            IStrategyControllerExecutor.InvestSettlementInput(new uint256[](0), new uint256[](0), new uint256[](0));
+        investBatch[1] =
+            IStrategyControllerExecutor.InvestSettlementInput(new uint256[](0), new uint256[](0), new uint256[](0));
         uint256[] memory redeemCountByAdapter = new uint256[](2);
         for (uint256 i = 0; i < redeemInFlightCount; i++) {
             (, address adapter,,,,,,,) = vault.inFlightRecords(inFlightIds[i]);
@@ -367,12 +368,14 @@ contract StrategyFlowTest is Test {
             else revert("UNEXPECTED_ADAPTER");
         }
 
-        uint256[][] memory redeemInFlightIdsBatch = new uint256[][](2);
-        redeemInFlightIdsBatch[0] = new uint256[](redeemCountByAdapter[0]);
-        redeemInFlightIdsBatch[1] = new uint256[](redeemCountByAdapter[1]);
-        uint256[][] memory redeemSettledAmountsBatch = new uint256[][](2);
-        redeemSettledAmountsBatch[0] = new uint256[](redeemCountByAdapter[0]);
-        redeemSettledAmountsBatch[1] = new uint256[](redeemCountByAdapter[1]);
+        IStrategyControllerExecutor.RedeemSettlementInput[] memory redeemBatch =
+            new IStrategyControllerExecutor.RedeemSettlementInput[](2);
+        redeemBatch[0] = IStrategyControllerExecutor.RedeemSettlementInput(
+            new uint256[](redeemCountByAdapter[0]), new uint256[](redeemCountByAdapter[0])
+        );
+        redeemBatch[1] = IStrategyControllerExecutor.RedeemSettlementInput(
+            new uint256[](redeemCountByAdapter[1]), new uint256[](redeemCountByAdapter[1])
+        );
 
         uint256[] memory writeIdx = new uint256[](2);
         for (uint256 i = 0; i < redeemInFlightCount; i++) {
@@ -380,14 +383,14 @@ contract StrategyFlowTest is Test {
             (, address adapter,,, uint256 usdcAmount,,,,) = vault.inFlightRecords(inFlightId);
             if (adapter == adapters[0]) {
                 uint256 idx = writeIdx[0];
-                redeemInFlightIdsBatch[0][idx] = inFlightId;
-                redeemSettledAmountsBatch[0][idx] = usdcAmount;
+                redeemBatch[0].inFlightIds[idx] = inFlightId;
+                redeemBatch[0].settledAssetAmounts[idx] = usdcAmount;
                 writeIdx[0] = idx + 1;
                 usdc.mint(adapters[0], usdcAmount);
             } else if (adapter == adapters[1]) {
                 uint256 idx = writeIdx[1];
-                redeemInFlightIdsBatch[1][idx] = inFlightId;
-                redeemSettledAmountsBatch[1][idx] = usdcAmount;
+                redeemBatch[1].inFlightIds[idx] = inFlightId;
+                redeemBatch[1].settledAssetAmounts[idx] = usdcAmount;
                 writeIdx[1] = idx + 1;
                 usdc.mint(adapters[1], usdcAmount);
             } else {
@@ -397,13 +400,7 @@ contract StrategyFlowTest is Test {
         uint256[] memory settledAssets = new uint256[](2);
         settledAssets[0] = 150e18;
         settledAssets[1] = 150e18;
-        controller.settleAdapters(
-            adapters,
-            investInFlightIdsBatch,
-            investSettledAmountsBatch,
-            redeemInFlightIdsBatch,
-            redeemSettledAmountsBatch
-        );
+        controller.settleAdapters(adapters, investBatch, redeemBatch);
         controller.finalizeRedeemBatch(ids, settledAssets);
 
         // DONE

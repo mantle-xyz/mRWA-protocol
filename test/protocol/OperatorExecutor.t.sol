@@ -45,32 +45,27 @@ contract MockStrategyController is IStrategyControllerExecutor {
 
     function settleAdapter(
         address adapter,
-        uint256[] calldata investInFlightIds,
-        uint256[] calldata investSettledAmounts,
-        uint256[] calldata redeemInFlightIds,
-        uint256[] calldata redeemSettledAmounts
+        InvestSettlementInput calldata invest,
+        RedeemSettlementInput calldata redeem
     ) external override onlyExecutorGateway {
         lastSettleHash = keccak256(
-            abi.encode(adapter, investInFlightIds, investSettledAmounts, redeemInFlightIds, redeemSettledAmounts)
+            abi.encode(
+                adapter,
+                invest.inFlightIds,
+                invest.settledPosAmounts,
+                invest.refundAssetAmounts,
+                redeem.inFlightIds,
+                redeem.settledAssetAmounts
+            )
         );
     }
 
     function settleAdapters(
         address[] calldata adapters,
-        uint256[][] calldata investInFlightIdsBatch,
-        uint256[][] calldata investSettledAmountsBatch,
-        uint256[][] calldata redeemInFlightIdsBatch,
-        uint256[][] calldata redeemSettledAmountsBatch
+        InvestSettlementInput[] calldata investBatch,
+        RedeemSettlementInput[] calldata redeemBatch
     ) external override onlyExecutorGateway {
-        lastSettleBatchHash = keccak256(
-            abi.encode(
-                adapters,
-                investInFlightIdsBatch,
-                investSettledAmountsBatch,
-                redeemInFlightIdsBatch,
-                redeemSettledAmountsBatch
-            )
-        );
+        lastSettleBatchHash = keccak256(abi.encode(adapters, investBatch, redeemBatch));
     }
 }
 
@@ -127,30 +122,33 @@ contract OperatorExecutorTest is Test {
     }
 
     function test_ExecuteSettleAdapter_Routes() public {
-        uint256[] memory investInFlightIds = new uint256[](1);
-        investInFlightIds[0] = 7;
-        uint256[] memory investSettledAmounts = new uint256[](1);
-        investSettledAmounts[0] = 11;
-        uint256[] memory redeemInFlightIds = new uint256[](1);
-        redeemInFlightIds[0] = 9;
-        uint256[] memory redeemSettledAmounts = new uint256[](1);
-        redeemSettledAmounts[0] = 22;
+        IStrategyControllerExecutor.InvestSettlementInput memory invest;
+        invest.inFlightIds = new uint256[](1);
+        invest.inFlightIds[0] = 7;
+        invest.settledPosAmounts = new uint256[](1);
+        invest.settledPosAmounts[0] = 11;
+        invest.refundAssetAmounts = new uint256[](1);
+        invest.refundAssetAmounts[0] = 5;
+
+        IStrategyControllerExecutor.RedeemSettlementInput memory redeem;
+        redeem.inFlightIds = new uint256[](1);
+        redeem.inFlightIds[0] = 9;
+        redeem.settledAssetAmounts = new uint256[](1);
+        redeem.settledAssetAmounts[0] = 22;
 
         vm.prank(bot);
-        executor.executeSettleAdapter(
-            address(controller),
-            address(0xBEEF),
-            investInFlightIds,
-            investSettledAmounts,
-            redeemInFlightIds,
-            redeemSettledAmounts
-        );
+        executor.executeSettleAdapter(address(controller), address(0xBEEF), invest, redeem);
 
         assertEq(
             controller.lastSettleHash(),
             keccak256(
                 abi.encode(
-                    address(0xBEEF), investInFlightIds, investSettledAmounts, redeemInFlightIds, redeemSettledAmounts
+                    address(0xBEEF),
+                    invest.inFlightIds,
+                    invest.settledPosAmounts,
+                    invest.refundAssetAmounts,
+                    redeem.inFlightIds,
+                    redeem.settledAssetAmounts
                 )
             )
         );
@@ -161,48 +159,31 @@ contract OperatorExecutorTest is Test {
         adapters[0] = address(0xA1);
         adapters[1] = address(0xB2);
 
-        uint256[][] memory investInFlightIdsBatch = new uint256[][](2);
-        investInFlightIdsBatch[0] = new uint256[](1);
-        investInFlightIdsBatch[0][0] = 7;
-        investInFlightIdsBatch[1] = new uint256[](0);
+        IStrategyControllerExecutor.InvestSettlementInput[] memory investBatch =
+            new IStrategyControllerExecutor.InvestSettlementInput[](2);
+        investBatch[0].inFlightIds = new uint256[](1);
+        investBatch[0].inFlightIds[0] = 7;
+        investBatch[0].settledPosAmounts = new uint256[](1);
+        investBatch[0].settledPosAmounts[0] = 11;
+        investBatch[0].refundAssetAmounts = new uint256[](1);
+        investBatch[0].refundAssetAmounts[0] = 5;
+        investBatch[1].inFlightIds = new uint256[](0);
+        investBatch[1].settledPosAmounts = new uint256[](0);
+        investBatch[1].refundAssetAmounts = new uint256[](0);
 
-        uint256[][] memory investSettledAmountsBatch = new uint256[][](2);
-        investSettledAmountsBatch[0] = new uint256[](1);
-        investSettledAmountsBatch[0][0] = 11;
-        investSettledAmountsBatch[1] = new uint256[](0);
-
-        uint256[][] memory redeemInFlightIdsBatch = new uint256[][](2);
-        redeemInFlightIdsBatch[0] = new uint256[](0);
-        redeemInFlightIdsBatch[1] = new uint256[](1);
-        redeemInFlightIdsBatch[1][0] = 9;
-
-        uint256[][] memory redeemSettledAmountsBatch = new uint256[][](2);
-        redeemSettledAmountsBatch[0] = new uint256[](0);
-        redeemSettledAmountsBatch[1] = new uint256[](1);
-        redeemSettledAmountsBatch[1][0] = 22;
+        IStrategyControllerExecutor.RedeemSettlementInput[] memory redeemBatch =
+            new IStrategyControllerExecutor.RedeemSettlementInput[](2);
+        redeemBatch[0].inFlightIds = new uint256[](0);
+        redeemBatch[0].settledAssetAmounts = new uint256[](0);
+        redeemBatch[1].inFlightIds = new uint256[](1);
+        redeemBatch[1].inFlightIds[0] = 9;
+        redeemBatch[1].settledAssetAmounts = new uint256[](1);
+        redeemBatch[1].settledAssetAmounts[0] = 22;
 
         vm.prank(bot);
-        executor.executeSettleAdapters(
-            address(controller),
-            adapters,
-            investInFlightIdsBatch,
-            investSettledAmountsBatch,
-            redeemInFlightIdsBatch,
-            redeemSettledAmountsBatch
-        );
+        executor.executeSettleAdapters(address(controller), adapters, investBatch, redeemBatch);
 
-        assertEq(
-            controller.lastSettleBatchHash(),
-            keccak256(
-                abi.encode(
-                    adapters,
-                    investInFlightIdsBatch,
-                    investSettledAmountsBatch,
-                    redeemInFlightIdsBatch,
-                    redeemSettledAmountsBatch
-                )
-            )
-        );
+        assertEq(controller.lastSettleBatchHash(), keccak256(abi.encode(adapters, investBatch, redeemBatch)));
     }
 
     function test_RevertWhen_CallerNotBot() public {
