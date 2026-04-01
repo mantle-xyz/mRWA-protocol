@@ -1,97 +1,61 @@
 # mRWA Protocol
 
-当前 `StrategyController` 采用：
+## Prerequisites
 
-- `TimelockUpgradeController`：治理与延迟执行
-- `UpgradeableBeacon`：统一实现地址
-- `BeaconProxy`：每个 Vault 一套实例
+- Foundry is installed
+- `task` and `yq` are installed
+- `.env` is configured (see `.env.example`)
+- `rpc_endpoints` are configured in `foundry.toml`
+- `deploy-config/<network>/<profile>.yaml` is prepared
 
-## 基础要求
-
-- 已安装 Foundry
-- 已配置 `.env`（参考 `.env.example`）
-- `foundry.toml` 中已配置对应 `rpc_endpoints`
-
-## 常用命令
+## Common Commands
 
 ```bash
 make build
 make test
 ```
 
-**提交前自动格式化（仅本仓库）**：在项目根目录执行一次 `make install-hooks`，之后每次 `git commit` 前会自动执行 `forge fmt` 并把改动的 .sol 重新暂存。
+**Pre-commit auto-formatting (repo only):** run `make install-hooks` once at the repository root. After that, every `git commit` will run `forge fmt` and re-stage modified `.sol` files automatically.
 
-## 部署流程
+## Deployment and Upgrades
 
-### 1) 部署治理与 Beacon
+All deployment and upgrade operations are executed through `Taskfile.yaml`.
 
-```bash
-make deploy-strategy-beacon-timelock VERIFY=false
-```
-
-会部署：
-
-- `TimelockUpgradeController`
-- `StrategyController` implementation
-- `UpgradeableBeacon`
-
-若 `STRATEGY_DEPLOY_FIRST_PROXY=true`，会顺带部署首个 `BeaconProxy`。
-
-### 2) 部署某个 Vault 对应的 Strategy 实例
-
-`.env` 至少需要：
-
-- `STRATEGY_BEACON`
-- `STRATEGY_VAULT`
-- `STRATEGY_ADMIN`（通常填 Timelock）
-- `STRATEGY_OPERATOR`（运营多签/运维地址）
-- `STRATEGY_EXECUTOR`（执行器合约或受控地址）
-
-执行：
+Common commands:
 
 ```bash
-make deploy-strategy-beacon-proxy VERIFY=false
+NETWORK=mantle-sepolia task DeployAll
+NETWORK=mantle-sepolia task RegisterStrategy
+NETWORK=mantle-sepolia task UpgradeAll
 ```
 
-每换一个 `STRATEGY_VAULT` 再执行一次，即新增一套实例。
-
-## 升级流程（Beacon）
-
-同一个 Beacon 下的所有 Proxy 会一起升级。
-
-### A. Safe 模式（推荐）
+Upgrade individual modules:
 
 ```bash
-make prepare-strategy-beacon-upgrade-safe
+NETWORK=mantle-sepolia task UpgradeSanctionsOracle
+NETWORK=mantle-sepolia task UpgradeAccountant
+NETWORK=mantle-sepolia task UpgradeStrategyController
+NETWORK=mantle-sepolia task UpgradeGateway
+NETWORK=mantle-sepolia task UpgradeVault
+NETWORK=mantle-sepolia task UpgradeOperatorExecutor
+NETWORK=mantle-sepolia task UpgradeAccountantExecutor
 ```
 
-脚本会输出 `schedule` / `execute` calldata：
-
-1. 先提交 `schedule(...)`
-2. 延迟到期后提交 `execute(...)`
-
-### B. 本地直升（测试用）
+You can also pass through Foundry arguments:
 
 ```bash
-make upgrade-strategy-beacon-local VERIFY=false
+NETWORK=mantle-sepolia task DeployAll -- --broadcast -vvvv
+NETWORK=mantle-sepolia task UpgradeVault -- --broadcast
 ```
 
-该模式适合本地/测试快速验证，不建议直接用于生产治理。
+## Task Parameters
 
-## Make 参数
+- `NETWORK`: maps to `deploy-config/<network>/`
+- `PROFILE`: defaults to `default`
+- `CLI_ARGS`: passed through to `forge script`
 
-- `NETWORK`：默认 `mantle_sepolia`（需在 `foundry.toml` 存在）
-- `VERIFY`：`true/false`，默认 `true`
+## Security Notes
 
-示例：
-
-```bash
-make deploy-strategy-beacon-timelock NETWORK=mantle VERIFY=true
-make deploy-strategy-beacon-proxy NETWORK=mantle_sepolia VERIFY=false
-```
-
-## 安全提示
-
-- 不要提交 `.env`
-- `PRIVATE_KEY` 必须带 `0x` 前缀
-- 私钥一旦泄露，立即更换并迁移权限
+- Do not commit `.env`
+- `F_PRIVATE_KEY` must include the `0x` prefix
+- If a private key is exposed, rotate it immediately and migrate permissions

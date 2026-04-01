@@ -5,10 +5,9 @@ import {SubRedManagementAdapter} from "../../src/adapters/digift/SubRedManagemen
 import {Script, console2} from "forge-std/Script.sol";
 
 /// @title DeploySubRedManagementAdapter
-/// @notice Deploy a SubRed adapter and optionally register it into StrategyController.
+/// @notice Deploy a SubRed adapter using the signer configured by `forge script`.
 ///
 /// Required env:
-/// - DEPLOYER_PRIVATE_KEY (or PRIVATE_KEY)
 /// - ADAPTER_VAULT
 /// - ADAPTER_SUBRED_MANAGEMENT
 /// - ADAPTER_ST_TOKEN
@@ -20,8 +19,6 @@ import {Script, console2} from "forge-std/Script.sol";
 /// - ADAPTER_PRICE_ORACLE                 (default: address(0))
 contract DeploySubRedManagementAdapter is Script {
     function run() external {
-        uint256 deployerPk = vm.envUint("F_PRIVATE_KEY");
-
         address vault_ = vm.envAddress("ADAPTER_VAULT");
         address subRedManagement = vm.envAddress("ADAPTER_SUBRED_MANAGEMENT");
         address stToken = vm.envAddress("ADAPTER_ST_TOKEN");
@@ -30,7 +27,7 @@ contract DeploySubRedManagementAdapter is Script {
         address accountantAddr = vm.envAddress("ADAPTER_ACCOUNTANT");
         address priceOracle = vm.envOr("ADAPTER_PRICE_ORACLE", address(0));
 
-        vm.startBroadcast(deployerPk);
+        vm.startBroadcast();
 
         SubRedManagementAdapter adapter = new SubRedManagementAdapter(
             vault_, subRedManagement, stToken, admin, controllerAddr, accountantAddr, priceOracle
