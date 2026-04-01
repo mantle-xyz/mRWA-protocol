@@ -87,34 +87,22 @@ contract OperatorExecutor is AccessControlUpgradeable, UUPSUpgradeable {
     function executeSettleAdapter(
         address controller_,
         address adapter,
-        uint256[] calldata investInFlightIds,
-        uint256[] calldata investSettledAmounts,
-        uint256[] calldata redeemInFlightIds,
-        uint256[] calldata redeemSettledAmounts
+        IStrategyControllerExecutor.InvestSettlementInput calldata invest,
+        IStrategyControllerExecutor.RedeemSettlementInput calldata redeem
     ) external onlyRole(BOT_ROLE) {
         IStrategyControllerExecutor targetController = _controllerOf(controller_);
-        targetController.settleAdapter(
-            adapter, investInFlightIds, investSettledAmounts, redeemInFlightIds, redeemSettledAmounts
-        );
+        targetController.settleAdapter(adapter, invest, redeem);
         emit SettleAdapterExecuted(msg.sender, controller_, adapter);
     }
 
     function executeSettleAdapters(
         address controller_,
         address[] calldata adapters,
-        uint256[][] calldata investInFlightIdsBatch,
-        uint256[][] calldata investSettledAmountsBatch,
-        uint256[][] calldata redeemInFlightIdsBatch,
-        uint256[][] calldata redeemSettledAmountsBatch
+        IStrategyControllerExecutor.InvestSettlementInput[] calldata investBatch,
+        IStrategyControllerExecutor.RedeemSettlementInput[] calldata redeemBatch
     ) external onlyRole(BOT_ROLE) {
         IStrategyControllerExecutor targetController = _controllerOf(controller_);
-        targetController.settleAdapters(
-            adapters,
-            investInFlightIdsBatch,
-            investSettledAmountsBatch,
-            redeemInFlightIdsBatch,
-            redeemSettledAmountsBatch
-        );
+        targetController.settleAdapters(adapters, investBatch, redeemBatch);
         emit SettleAdaptersExecuted(msg.sender, controller_, keccak256(abi.encodePacked(adapters)));
     }
 

@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {IStrategyAdapter} from "../interfaces/adapters/IStrategyAdapter.sol";
+import {IStrategyControllerExecutor} from "../interfaces/strategy/IStrategyControllerExecutor.sol";
 import {IMantleYieldVault} from "../interfaces/vault/IMantleYieldVault.sol";
 import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import {Initializable} from "@openzeppelin/contracts/proxy/utils/Initializable.sol";
@@ -94,6 +95,9 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     event AdapterAssetsSwept(
         address indexed adapter, address indexed posToken, uint256 posClaimed, uint256 assetClaimed
     );
+    event InvestSettlementRecorded(
+        uint256 indexed inFlightId, address indexed adapter, uint256 settledPosAmount, uint256 refundAssetAmount
+    );
 
     error InvalidAddress();
     error InvalidBps();
@@ -116,6 +120,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     error RedeemInFlightIdsRequired(address adapter);
     error SettleAmountsLengthMismatch();
     error InvestSweepAmountMismatch(address adapter, uint256 expected, uint256 claimed);
+    error InvestRefundSweepAmountMismatch(address adapter, uint256 expected, uint256 claimed);
     error RedeemSweepAmountMismatch(address adapter, uint256 expected, uint256 claimed);
     error ClaimInputsLengthMismatch();
     error UpdateStrategiesLengthMismatch();
@@ -558,46 +563,29 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     }
 
     /// @notice Settle one adapter by sweeping assets back to vault and confirming in-flight records.
-    /// @dev `investSettledAmounts` and `redeemSettledAmounts` are per-id actual settled values.
-    ///      Their sums are used as sweep amounts and must match sweep return values.
+    /// @dev Invest settlement supports both delivered position tokens and refunded underlying assets.
     function settleAdapter(
         address adapter,
-        uint256[] calldata investInFlightIds,
-        uint256[] calldata investSettledAmounts,
-        uint256[] calldata redeemInFlightIds,
-        uint256[] calldata redeemSettledAmounts
+        IStrategyControllerExecutor.InvestSettlementInput calldata invest,
+        IStrategyControllerExecutor.RedeemSettlementInput calldata redeem
     ) external onlyOperatorExecutor nonReentrant {
-        _settleAdapterInternal(
-            adapter, investInFlightIds, investSettledAmounts, redeemInFlightIds, redeemSettledAmounts
-        );
+        _settleAdapterInternal(adapter, invest, redeem);
     }
 
     /// @notice Settle multiple adapters in a single transaction.
     /// @dev Inputs are grouped per adapter index.
     function settleAdapters(
         address[] calldata adapters,
-        uint256[][] calldata investInFlightIdsBatch,
-        uint256[][] calldata investSettledAmountsBatch,
-        uint256[][] calldata redeemInFlightIdsBatch,
-        uint256[][] calldata redeemSettledAmountsBatch
+        IStrategyControllerExecutor.InvestSettlementInput[] calldata investBatch,
+        IStrategyControllerExecutor.RedeemSettlementInput[] calldata redeemBatch
     ) external onlyOperatorExecutor nonReentrant {
-        if (
-            adapters.length != investInFlightIdsBatch.length || adapters.length != investSettledAmountsBatch.length
-                || adapters.length != redeemInFlightIdsBatch.length
-                || adapters.length != redeemSettledAmountsBatch.length
-        ) {
+        if (adapters.length != investBatch.length || adapters.length != redeemBatch.length) {
             revert SettleAmountsLengthMismatch();
         }
 
         uint256 len = adapters.length;
         for (uint256 i = 0; i < len; i++) {
-            _settleAdapterInternal(
-                adapters[i],
-                investInFlightIdsBatch[i],
-                investSettledAmountsBatch[i],
-                redeemInFlightIdsBatch[i],
-                redeemSettledAmountsBatch[i]
-            );
+            _settleAdapterBatchAtIndex(adapters, investBatch, redeemBatch, i);
         }
     }
 
@@ -868,22 +856,11 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
 
     function _confirmRedeemInFlightIds(
         address expectedAdapter,
-        uint256[] calldata inFlightIds,
-        uint256[] calldata settledAmounts
+        IStrategyControllerExecutor.RedeemSettlementInput calldata redeem
     ) internal {
-        uint256 len = inFlightIds.length;
+        uint256 len = redeem.inFlightIds.length;
         for (uint256 i = 0; i < len; i++) {
-            uint256 inFlightId = inFlightIds[i];
-            uint256 settledAmount = settledAmounts[i];
-            (, address recordAdapter,,, uint256 usdcAmount,, bool isInvest,, IMantleYieldVault.InFlightStatus status) =
-                vault.inFlightRecords(inFlightId);
-            if (
-                recordAdapter != expectedAdapter || isInvest || status != IMantleYieldVault.InFlightStatus.PENDING
-                    || usdcAmount == 0
-            ) {
-                revert InvalidRedeemInFlight(inFlightId);
-            }
-            vault.confirmInFlight(inFlightId, settledAmount, settledAmount == 0);
+            _confirmSingleRedeemInFlight(expectedAdapter, redeem.inFlightIds[i], redeem.settledAssetAmounts[i]);
         }
     }
 
@@ -910,23 +887,44 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
 
     function _confirmInvestInFlightIds(
         address adapter,
-        uint256[] calldata investInFlightIds,
-        uint256[] calldata settledAmounts
+        IStrategyControllerExecutor.InvestSettlementInput calldata invest
     ) internal {
-        uint256 len = investInFlightIds.length;
+        uint256 len = invest.inFlightIds.length;
         for (uint256 i = 0; i < len; i++) {
-            uint256 inFlightId = investInFlightIds[i];
-            uint256 settledAmount = settledAmounts[i];
-            (, address recordAdapter,, uint256 tokenAmount,,, bool isInvest,, IMantleYieldVault.InFlightStatus status) =
-                vault.inFlightRecords(inFlightId);
-            if (
-                recordAdapter != adapter || !isInvest || status != IMantleYieldVault.InFlightStatus.PENDING
-                    || tokenAmount == 0
-            ) {
-                revert InvalidInvestInFlight(inFlightId);
-            }
-            vault.confirmInFlight(inFlightId, settledAmount, settledAmount == 0);
+            _confirmSingleInvestInFlight(
+                adapter, invest.inFlightIds[i], invest.settledPosAmounts[i], invest.refundAssetAmounts[i]
+            );
         }
+    }
+
+    function _confirmSingleRedeemInFlight(address expectedAdapter, uint256 inFlightId, uint256 settledAmount) internal {
+        (, address recordAdapter,,, uint256 usdcAmount,, bool isInvest,, IMantleYieldVault.InFlightStatus status) =
+            vault.inFlightRecords(inFlightId);
+        if (
+            recordAdapter != expectedAdapter || isInvest || status != IMantleYieldVault.InFlightStatus.PENDING
+                || usdcAmount == 0
+        ) {
+            revert InvalidRedeemInFlight(inFlightId);
+        }
+        vault.confirmInFlight(inFlightId, settledAmount, settledAmount == 0);
+    }
+
+    function _confirmSingleInvestInFlight(
+        address adapter,
+        uint256 inFlightId,
+        uint256 settledPosAmount,
+        uint256 refundAssetAmount
+    ) internal {
+        (, address recordAdapter,, uint256 tokenAmount,,, bool isInvest,, IMantleYieldVault.InFlightStatus status) =
+            vault.inFlightRecords(inFlightId);
+        if (
+            recordAdapter != adapter || !isInvest || status != IMantleYieldVault.InFlightStatus.PENDING
+                || tokenAmount == 0
+        ) {
+            revert InvalidInvestInFlight(inFlightId);
+        }
+        vault.confirmInFlight(inFlightId, settledPosAmount, settledPosAmount == 0);
+        emit InvestSettlementRecorded(inFlightId, adapter, settledPosAmount, refundAssetAmount);
     }
 
     function _sumAmounts(uint256[] calldata amounts) internal pure returns (uint256 total) {
@@ -936,33 +934,60 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         }
     }
 
+    function _settleAdapterBatchAtIndex(
+        address[] calldata adapters,
+        IStrategyControllerExecutor.InvestSettlementInput[] calldata investBatch,
+        IStrategyControllerExecutor.RedeemSettlementInput[] calldata redeemBatch,
+        uint256 index
+    ) internal {
+        _settleAdapterInternal(adapters[index], investBatch[index], redeemBatch[index]);
+    }
+
+    function _sweepInvestSettlement(address adapter, IStrategyControllerExecutor.InvestSettlementInput calldata invest)
+        internal
+    {
+        uint256 investPosToSweep = _sumAmounts(invest.settledPosAmounts);
+        uint256 investRefundToSweep = _sumAmounts(invest.refundAssetAmounts);
+
+        (uint256 posClaimed, uint256 refundAssetClaimed) =
+            _sweepAdapterAssetsToVaultInternal(adapter, investPosToSweep, investRefundToSweep);
+        if (posClaimed != investPosToSweep) {
+            revert InvestSweepAmountMismatch(adapter, investPosToSweep, posClaimed);
+        }
+        if (refundAssetClaimed != investRefundToSweep) {
+            revert InvestRefundSweepAmountMismatch(adapter, investRefundToSweep, refundAssetClaimed);
+        }
+    }
+
+    function _sweepRedeemSettlement(address adapter, IStrategyControllerExecutor.RedeemSettlementInput calldata redeem)
+        internal
+    {
+        uint256 redeemAssetToSweep = _sumAmounts(redeem.settledAssetAmounts);
+
+        (, uint256 redeemAssetClaimed) = _sweepAdapterAssetsToVaultInternal(adapter, 0, redeemAssetToSweep);
+        if (redeemAssetClaimed != redeemAssetToSweep) {
+            revert RedeemSweepAmountMismatch(adapter, redeemAssetToSweep, redeemAssetClaimed);
+        }
+    }
+
     function _settleAdapterInternal(
         address adapter,
-        uint256[] calldata investInFlightIds,
-        uint256[] calldata investSettledAmounts,
-        uint256[] calldata redeemInFlightIds,
-        uint256[] calldata redeemSettledAmounts
+        IStrategyControllerExecutor.InvestSettlementInput calldata invest,
+        IStrategyControllerExecutor.RedeemSettlementInput calldata redeem
     ) internal {
         if (
-            investInFlightIds.length != investSettledAmounts.length
-                || redeemInFlightIds.length != redeemSettledAmounts.length
+            invest.inFlightIds.length != invest.settledPosAmounts.length
+                || invest.inFlightIds.length != invest.refundAssetAmounts.length
+                || redeem.inFlightIds.length != redeem.settledAssetAmounts.length
         ) {
             revert SettleAmountsLengthMismatch();
         }
 
-        uint256 investToSweep = _sumAmounts(investSettledAmounts);
-        uint256 redeemToSweep = _sumAmounts(redeemSettledAmounts);
-        (uint256 posClaimed, uint256 assetClaimed) =
-            _sweepAdapterAssetsToVaultInternal(adapter, investToSweep, redeemToSweep);
-        if (posClaimed != investToSweep) {
-            revert InvestSweepAmountMismatch(adapter, investToSweep, posClaimed);
-        }
-        if (assetClaimed != redeemToSweep) {
-            revert RedeemSweepAmountMismatch(adapter, redeemToSweep, assetClaimed);
-        }
+        _sweepInvestSettlement(adapter, invest);
+        _sweepRedeemSettlement(adapter, redeem);
 
-        _confirmInvestInFlightIds(adapter, investInFlightIds, investSettledAmounts);
-        _confirmRedeemInFlightIds(adapter, redeemInFlightIds, redeemSettledAmounts);
+        _confirmInvestInFlightIds(adapter, invest);
+        _confirmRedeemInFlightIds(adapter, redeem);
     }
 
     /// @dev Invest path records pending position tokens and waits for off-chain settlement.
