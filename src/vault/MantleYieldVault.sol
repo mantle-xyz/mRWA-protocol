@@ -184,6 +184,13 @@ contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultA
         return physicalBalance - floatingLocked;
     }
 
+    function getCashDeficit() public view returns (uint256) {
+        if (getFreeCash() > 0) return 0;
+        uint256 physicalBalance = IERC20(asset()).balanceOf(address(this));
+        uint256 floatingLocked = _convertToAssets(totalLockedShares, Math.Rounding.Ceil);
+        return floatingLocked > physicalBalance ? floatingLocked - physicalBalance : 0;
+    }
+
     function getTokenInfos() external view returns (tokenInfo[] memory) {
         uint256 len = adapters.length;
         uint256 assetScale = 10 ** IERC20Metadata(asset()).decimals();

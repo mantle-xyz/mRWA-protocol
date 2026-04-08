@@ -210,7 +210,7 @@ abstract contract BaseAdapter is IStrategyAdapter, AccessControl, ReentrancyGuar
         emit AdapterWithdrawSync(address(this), msg.sender, amount, receiver, actualAmount);
     }
 
-    function _emitAdapterRedeemRequested(uint256 amount, address receiver, bytes32 requestId) internal {
-        emit AdapterRedeemRequested(address(this), msg.sender, amount, receiver, requestId);
+    function _emitAdapterRedeemRequested(uint256 amount, address receiver) internal {
+        emit AdapterRedeemRequested(address(this), msg.sender, amount, receiver);
     }
 }

@@ -27,12 +27,12 @@ contract MockSync4626Adapter is BaseSync4626Adapter {
         positionAmount = TARGET_4626.previewDeposit(assetAmount);
     }
 
+    /// @dev Only settled position (4626 shares on adapter + vault). Unsettled ASSET
+    ///      on the adapter is already tracked by vault in-flight accounting.
     function totalValue() external view override returns (uint256) {
-        uint256 idle = ASSET.balanceOf(address(this));
         uint256 shares =
             IERC20(address(TARGET_4626)).balanceOf(address(this)) + IERC20(address(TARGET_4626)).balanceOf(VAULT);
-        uint256 deployed = IERC4626(address(TARGET_4626)).convertToAssets(shares);
-        return idle + deployed;
+        return IERC4626(address(TARGET_4626)).convertToAssets(shares);
     }
 
     function deposit(uint256 amount, address receiver)

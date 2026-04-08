@@ -26,11 +26,11 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
      * @notice Initialize Digift SubRed adapter.
      * @param vault_ Vault that owns strategy funds.
      * @param subRedManagement Digift SubRedManagement contract.
-     * @param stToken Target security token (e.g. iSNR, uMINT).
+     * @param stToken Target security token address supported by SubRedManagement.
      * @param admin Adapter admin role address.
      * @param controller StrategyController role address.
      * @param accountant Accountant role address for manual price updates.
-     * @param priceOracle_ Optional DFeedPriceOracle for ST token (e.g. 0xb5d9870e... for uMINT). Pass address(0) for 1:1 estimate.
+     * @param priceOracle_ Optional DFeedPriceOracle for the ST token. Pass address(0) for 1:1 estimate.
      */
     constructor(
         address vault_,
@@ -129,12 +129,16 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
         return Math.mulDiv(amountPosRaw, priceE18 * assetScale, 1e18 * stScale, Math.Rounding.Floor);
     }
 
+    /**
+     * @notice Settled strategy value: ST tokens held by the vault, converted to asset terms.
+     * @dev Excludes ASSET sitting on the adapter — those are unsettled in-flight
+     *      proceeds already tracked by vault.totalInvestInFlight / totalRedeemInFlight.
+     */
     function totalValue() external view override returns (uint256) {
         uint8 assetDecimals = IERC20Metadata(address(ASSET)).decimals();
         uint8 stDecimals = IERC20Metadata(ST_TOKEN).decimals();
-        uint256 posBalance = IERC20(ST_TOKEN).balanceOf(VAULT);
-        uint256 posValue = _estimateAssetAmount(posBalance, assetDecimals, stDecimals);
-        return ASSET.balanceOf(address(this)) + posValue;
+        uint256 settledVaultPosBalance = IERC20(ST_TOKEN).balanceOf(VAULT);
+        return _estimateAssetAmount(settledVaultPosBalance, assetDecimals, stDecimals);
     }
 
     // =============================================================
@@ -196,7 +200,7 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
      * @notice Register an async redeem request.
      * @param amountAsset Requested redeem amount (asset raw units).
      * @dev amountAsset is asset-denominated; ST quantity is derived via estimatePosAmount(amountAsset).
-     * @param receiver Final receiver used to derive deterministic requestId.
+     * @param receiver Receiver recorded in the standardized async redeem request event.
      * @dev Only callable by controller when not paused.
      * @dev Pulls position token from vault, then submits redeem request to SubRed.
      */
@@ -207,6 +211,28 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
         IERC20(ST_TOKEN).safeTransferFrom(VAULT, address(this), quantity);
         _redeem(quantity, uint64(block.timestamp + redeemDeadlineWindow));
         _registerAsyncRedeem(amountAsset, receiver);
+    }
+
+    /**
+     * @notice Retry async redeem using position tokens currently held by this adapter.
+     * @param retryPosAmount Position-token amount to redeem from adapter local balance.
+     * @param receiver Receiver used for standardized async redeem request events.
+     * @dev Only callable by controller when not paused.
+     */
+    function retryRedeemAsync(uint256 retryPosAmount, address receiver) external override onlyController whenNotPaused {
+        if (retryPosAmount == 0) {
+            revert InvalidAmount();
+        }
+        if (IERC20(ST_TOKEN).balanceOf(address(this)) < retryPosAmount) {
+            revert InvalidAmount();
+        }
+
+        uint8 assetDecimals = IERC20Metadata(address(ASSET)).decimals();
+        uint8 stDecimals = IERC20Metadata(ST_TOKEN).decimals();
+        uint256 retryAssetAmount = _estimateAssetAmount(retryPosAmount, assetDecimals, stDecimals);
+
+        _redeem(retryPosAmount, uint64(block.timestamp + redeemDeadlineWindow));
+        _registerAsyncRedeem(retryAssetAmount, receiver);
     }
 
     // =============================================================
