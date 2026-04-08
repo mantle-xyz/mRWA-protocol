@@ -23,6 +23,11 @@ abstract contract BaseSync4626Adapter is BaseAdapter {
         revert Unsupported();
     }
 
+    /// @notice Sync-only strategies do not support retrying async redeem requests.
+    function retryRedeemAsync(uint256, address) external pure virtual override {
+        revert Unsupported();
+    }
+
     function _erc4626Deposit(uint256 amount, address receiver) internal returns (uint256 sharesOrPos) {
         ASSET.forceApprove(address(TARGET_4626), amount);
         sharesOrPos = TARGET_4626.deposit(amount, receiver);

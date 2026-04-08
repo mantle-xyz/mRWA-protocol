@@ -4,10 +4,8 @@ pragma solidity ^0.8.24;
 import {BaseAdapter} from "../BaseAdapter.sol";
 
 /// @notice Shared async capability for T+N strategies.
-/// @dev In-flight accounting is owned by Vault; adapters only create request ids and call external protocols.
+/// @dev In-flight accounting is owned by Vault; adapters only emit request events and call external protocols.
 abstract contract BaseAsync7540Adapter is BaseAdapter {
-    uint256 public redeemNonce;
-
     constructor(address vault_, address admin, address controller, address accountant, address priceOracle_)
         BaseAdapter(vault_, admin, controller, accountant, priceOracle_)
     {}
@@ -17,10 +15,15 @@ abstract contract BaseAsync7540Adapter is BaseAdapter {
         revert Unsupported();
     }
 
+    /// @notice Retry path is adapter-specific and must be explicitly implemented by concrete async adapters.
+    function retryRedeemAsync(uint256, address) external virtual override {
+        revert Unsupported();
+    }
+
     /**
-     * @notice Create a deterministic async redeem request id.
+     * @notice Emit the standardized async redeem request event.
      * @param amount Requested asset amount (vault asset units, e.g. USDC/USDT).
-     * @param receiver Receiver used to derive deterministic request id.
+     * @param receiver Receiver recorded in the standardized async redeem request event.
      */
     function _registerAsyncRedeem(uint256 amount, address receiver) internal {
         if (amount == 0) {
@@ -30,8 +33,6 @@ abstract contract BaseAsync7540Adapter is BaseAdapter {
             revert InvalidAddress();
         }
 
-        uint256 nonce = ++redeemNonce;
-        bytes32 requestId = keccak256(abi.encode(address(this), receiver, amount, nonce, block.chainid));
-        _emitAdapterRedeemRequested(amount, receiver, requestId);
+        _emitAdapterRedeemRequested(amount, receiver);
     }
 }

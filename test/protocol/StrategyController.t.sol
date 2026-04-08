@@ -26,6 +26,7 @@ contract MockStrategyAdapter is IStrategyAdapter {
     bool public failDeposit;
     bool public failWithdraw;
     bool public failAsync;
+    bool public failRetry;
     bool public failEstimate;
     bool public depositReturnZero;
 
@@ -37,6 +38,9 @@ contract MockStrategyAdapter is IStrategyAdapter {
     uint256 public lastClaimAmount;
     uint256 public sweepReturnAmount;
     bool public useSweepReturnAmount;
+    uint256 public retryCount;
+    uint256 public lastRetryPosAmount;
+    address public lastRetryReceiver;
 
     constructor(address asset_, address posToken_) {
         ASSET = asset_;
@@ -55,6 +59,10 @@ contract MockStrategyAdapter is IStrategyAdapter {
 
     function setFailEstimate(bool e) external {
         failEstimate = e;
+    }
+
+    function setFailRetry(bool r) external {
+        failRetry = r;
     }
 
     function setDepositReturnZero(bool z) external {
@@ -114,6 +122,13 @@ contract MockStrategyAdapter is IStrategyAdapter {
     function requestRedeemAsync(uint256, address) external {
         if (failAsync) revert("ASYNC_FAIL");
         asyncCount++;
+    }
+
+    function retryRedeemAsync(uint256 retryPosAmount, address receiver) external {
+        if (failRetry) revert("RETRY_FAIL");
+        retryCount++;
+        lastRetryPosAmount = retryPosAmount;
+        lastRetryReceiver = receiver;
     }
 
     function sweepToVault(address token, uint256 amount) external returns (uint256 claimed) {
@@ -1258,6 +1273,43 @@ contract StrategyControllerUnitTest is Test {
         assertEq(vault.redeemInFlightTotal(), 300e18);
     }
 
+    function test_RebalanceDivest_DoesNotUseLaterStrategyWhenAsyncPendingRedeemAlreadyCoversShortfall() public {
+        _registerTwoStrategies();
+
+        address[] memory adapters = new address[](2);
+        adapters[0] = address(syncAdapter);
+        adapters[1] = address(asyncAdapter);
+        uint16[] memory weights = new uint16[](2);
+        weights[0] = 5000;
+        weights[1] = 5000;
+        uint16[] memory priorities = new uint16[](2);
+        priorities[0] = 2;
+        priorities[1] = 1;
+        bool[] memory asyncFlags = new bool[](2);
+        asyncFlags[0] = false;
+        asyncFlags[1] = true;
+        address[] memory ordered = new address[](2);
+        ordered[0] = address(asyncAdapter);
+        ordered[1] = address(syncAdapter);
+        vm.prank(manager);
+        controller.updateStrategiesAndOrder(adapters, weights, priorities, asyncFlags, ordered);
+
+        asyncAdapter.setTotalValue(0);
+        syncAdapter.setTotalValue(500e18);
+        vault.createInFlight(address(asyncAdapter), address(posToken), 50e18, 300e18, false);
+
+        uint256[] memory ids = new uint256[](1);
+        ids[0] = 902;
+        vault.setRequest(902, 300e18, 0, IMantleYieldVault.RequestStatus.PENDING);
+        vm.prank(address(executorGateway));
+        controller.processRedeemBatch(ids);
+
+        assertEq(asyncAdapter.asyncCount(), 0);
+        assertEq(vault.inFlightIdCursor(), 1);
+        assertEq(vault.redeemInFlightTotal(), 300e18);
+        assertEq(syncAdapter.withdrawCount(), 0);
+    }
+
     function test_RebalanceDivestAsync_SkipsWhenEstimateFails() public {
         _registerSingleAsyncStrategy();
         asyncAdapter.setTotalValue(500e18);
@@ -1570,5 +1622,47 @@ contract StrategyControllerUnitTest is Test {
         assertTrue(isInvest);
         assertEq(uint8(status), uint8(IMantleYieldVault.InFlightStatus.CONFIRMED));
         assertEq(settledAmount, 0);
+    }
+
+    function test_RetryRedeemInFlight_Success_ForAsyncPendingRedeem() public {
+        _registerSingleAsyncStrategy();
+        uint256 inFlightId = vault.createInFlight(address(asyncAdapter), address(posToken), 50e18, 100e18, false);
+
+        vm.prank(manager);
+        controller.retryRedeemInFlight(address(asyncAdapter), inFlightId, 30e18);
+
+        assertEq(asyncAdapter.retryCount(), 1);
+        assertEq(asyncAdapter.lastRetryPosAmount(), 30e18);
+        assertEq(asyncAdapter.lastRetryReceiver(), address(asyncAdapter));
+
+        (,,,,,, bool isInvest,, IMantleYieldVault.InFlightStatus status) = vault.inFlightRecords(inFlightId);
+        assertFalse(isInvest);
+        assertEq(uint8(status), uint8(IMantleYieldVault.InFlightStatus.PENDING));
+    }
+
+    function test_RevertWhen_RetryRedeemInFlight_PosAmountExceedsOriginalTokenAmount() public {
+        _registerSingleAsyncStrategy();
+        uint256 inFlightId = vault.createInFlight(address(asyncAdapter), address(posToken), 50e18, 100e18, false);
+
+        vm.prank(manager);
+        vm.expectRevert(abi.encodeWithSelector(StrategyController.InvalidRetryAmount.selector));
+        controller.retryRedeemInFlight(address(asyncAdapter), inFlightId, 60e18);
+    }
+
+    function test_RevertWhen_RetryRedeemInFlight_ByNonAdmin() public {
+        _registerSingleAsyncStrategy();
+        uint256 inFlightId = vault.createInFlight(address(asyncAdapter), address(posToken), 50e18, 100e18, false);
+
+        vm.expectRevert();
+        controller.retryRedeemInFlight(address(asyncAdapter), inFlightId, 50e18);
+    }
+
+    function test_RevertWhen_RetryRedeemInFlight_OnSyncStrategy() public {
+        _registerSingleSyncStrategy();
+        uint256 inFlightId = vault.createInFlight(address(syncAdapter), address(posToken), 50e18, 100e18, false);
+
+        vm.prank(manager);
+        vm.expectRevert();
+        controller.retryRedeemInFlight(address(syncAdapter), inFlightId, 50e18);
     }
 }

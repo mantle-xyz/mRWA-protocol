@@ -98,6 +98,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     event InvestSettlementRecorded(
         uint256 indexed inFlightId, address indexed adapter, uint256 settledPosAmount, uint256 refundAssetAmount
     );
+    event RedeemInFlightRetryRequested(address indexed adapter, uint256 indexed inFlightId, uint256 retryPosAmount);
 
     error InvalidAddress();
     error InvalidBps();
@@ -130,6 +131,8 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     error StrategyAlreadyInactive(address adapter);
     error StrategyInOrder(address adapter);
     error StrategyHasInFlight(address adapter, uint256 pendingInvestTokens, uint256 pendingRedeemUsdc);
+    error RetryOnlyAsyncStrategy(address adapter);
+    error InvalidRetryAmount();
 
     constructor() {
         _disableInitializers();
@@ -562,6 +565,37 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         _markBatchReady(ids, settledAssets, batchKey);
     }
 
+    /// @notice Manual retry path for async redeem in-flight requests after off-chain alerting.
+    /// @dev Does not mutate vault in-flight/request status; it only submits a new adapter-level redeem request.
+    function retryRedeemInFlight(address adapter, uint256 inFlightId, uint256 retryPosAmount)
+        external
+        onlyAdmin
+        nonReentrant
+    {
+        StrategyInfo memory info = strategyInfo[adapter];
+        if (!info.exists) {
+            revert InvalidStrategy(adapter);
+        }
+        if (!info.isAsync) {
+            revert RetryOnlyAsyncStrategy(adapter);
+        }
+        if (retryPosAmount == 0) {
+            revert InvalidRetryAmount();
+        }
+
+        (, address recordAdapter,, uint256 tokenAmount,,, bool isInvest,, IMantleYieldVault.InFlightStatus status) =
+            vault.inFlightRecords(inFlightId);
+        if (recordAdapter != adapter || isInvest || status != IMantleYieldVault.InFlightStatus.PENDING) {
+            revert InvalidRedeemInFlight(inFlightId);
+        }
+        if (retryPosAmount > tokenAmount) {
+            revert InvalidRetryAmount();
+        }
+
+        IStrategyAdapter(adapter).retryRedeemAsync(retryPosAmount, adapter);
+        emit RedeemInFlightRetryRequested(adapter, inFlightId, retryPosAmount);
+    }
+
     /// @notice Settle one adapter by sweeping assets back to vault and confirming in-flight records.
     /// @dev Invest settlement supports both delivered position tokens and refunded underlying assets.
     function settleAdapter(
@@ -605,7 +639,9 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
             uint256 threshold
         )
     {
+        // USDC balance of the vault
         totalCash = asset.balanceOf(address(vault));
+        // totalCash - totalLockedShares (convertToAssets)
         freeCash = vault.getFreeCash();
         locked = totalCash > freeCash ? totalCash - freeCash : 0;
         // Net assets uses a unified accounting base:
@@ -746,22 +782,12 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
                 continue;
             }
 
-            uint256 value;
-            try IStrategyAdapter(adapter).totalValue() returns (uint256 v) {
-                value = v;
-            } catch {
-                continue;
-            }
-            if (value == 0) {
+            (uint256 toWithdrawAsset, uint256 coveredByPending, uint256 requestAsset) =
+                _readDivestCoverage(adapter, remaining);
+            if (toWithdrawAsset == 0) {
                 continue;
             }
 
-            // Asset-denominated amount (e.g. USDC/USDT), not position-token amount.
-            uint256 toWithdrawAsset = remaining < value ? remaining : value;
-            // Avoid duplicate redeem requests for both sync/async paths: only withdraw uncovered delta.
-            uint256 pendingRedeemAsset = vault.adapterRedeemInFlightUsdc(adapter);
-            uint256 coveredByPending = pendingRedeemAsset >= toWithdrawAsset ? toWithdrawAsset : pendingRedeemAsset;
-            uint256 requestAsset = toWithdrawAsset - coveredByPending;
             if (requestAsset == 0) {
                 remaining = _remainingAfterClear(remaining, toWithdrawAsset);
                 continue;
@@ -1036,6 +1062,30 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
 
     function _remainingAfterClear(uint256 remaining, uint256 cleared) internal pure returns (uint256) {
         return cleared >= remaining ? 0 : remaining - cleared;
+    }
+
+    function _readDivestCoverage(address adapter, uint256 remaining)
+        internal
+        view
+        returns (uint256 toWithdrawAsset, uint256 coveredByPending, uint256 requestAsset)
+    {
+        uint256 settledValue;
+        try IStrategyAdapter(adapter).totalValue() returns (uint256 v) {
+            settledValue = v;
+        } catch {
+            return (0, 0, 0);
+        }
+
+        uint256 pendingRedeemAsset = vault.adapterRedeemInFlightUsdc(adapter);
+        uint256 totalCover = settledValue + pendingRedeemAsset;
+        if (totalCover == 0) {
+            return (0, 0, 0);
+        }
+
+        // totalCover includes settled strategy value plus vault-tracked pending redeem coverage.
+        toWithdrawAsset = remaining < totalCover ? remaining : totalCover;
+        coveredByPending = pendingRedeemAsset >= toWithdrawAsset ? toWithdrawAsset : pendingRedeemAsset;
+        requestAsset = toWithdrawAsset - coveredByPending;
     }
 
     function _estimatePosAmount(address adapter, uint256 assetAmount, uint256 fallbackAmount)

@@ -6,6 +6,7 @@ import {ISubRedManagement} from "../../src/interfaces/adapters/digift/ISubRedMan
 import {MockDFeedPriceOracle} from "../../src/mocks/strategy/MockDFeedPriceOracle.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {Test} from "forge-std/Test.sol";
+import {Vm} from "forge-std/Vm.sol";
 
 contract MockUSDC is ERC20 {
     constructor() ERC20("MockUSDC", "mUSDC") {}
@@ -87,6 +88,10 @@ contract MockSubRedManagement is ISubRedManagement {
 }
 
 contract SubRedManagementAdapterTest is Test {
+    event AdapterRedeemRequested(
+        address indexed adapter, address indexed caller, uint256 amount, address indexed receiver
+    );
+
     MockUSDC internal usdc;
     MockUSDC internal dustToken;
     MockVaultForAdapter internal vault;
@@ -142,12 +147,70 @@ contract SubRedManagementAdapterTest is Test {
         vault.approveTokenToAdapter(address(stToken), address(adapter), 300e18);
 
         adapter.requestRedeemAsync(200e18, receiver);
-        assertEq(adapter.redeemNonce(), 1);
         assertEq(subRed.redeemCount(), 1);
         assertEq(subRed.lastRedeemStToken(), address(stToken));
         assertEq(subRed.lastRedeemCurrencyToken(), address(usdc));
         assertEq(subRed.lastRedeemQuantity(), 200e18);
         assertEq(stToken.balanceOf(address(adapter)), 200e18);
+    }
+
+    function test_RequestRedeemAsync_EmitsRequestEventWithoutSyntheticRequestId() public {
+        stToken.mint(address(vault), 300e18);
+        vault.approveTokenToAdapter(address(stToken), address(adapter), 300e18);
+
+        vm.expectEmit(true, true, true, true, address(adapter));
+        emit AdapterRedeemRequested(address(adapter), address(this), 200e18, receiver);
+
+        adapter.requestRedeemAsync(200e18, receiver);
+    }
+
+    function test_RetryRedeemAsync_UsesAdapterLocalPosBalance() public {
+        stToken.mint(address(adapter), 300e18);
+
+        adapter.retryRedeemAsync(120e18, receiver);
+        assertEq(subRed.redeemCount(), 1);
+        assertEq(subRed.lastRedeemStToken(), address(stToken));
+        assertEq(subRed.lastRedeemCurrencyToken(), address(usdc));
+        assertEq(subRed.lastRedeemQuantity(), 120e18);
+    }
+
+    function test_RetryRedeemAsync_EmitsRequestEventEstimatedFromRetryPosAmount() public {
+        stToken.mint(address(adapter), 300e18);
+
+        vm.expectEmit(true, true, true, true, address(adapter));
+        emit AdapterRedeemRequested(address(adapter), address(this), 120e18, receiver);
+
+        adapter.retryRedeemAsync(120e18, receiver);
+    }
+
+    function test_RetryRedeemAsync_DoesNotEmitCustomRetryEvent() public {
+        stToken.mint(address(adapter), 300e18);
+
+        vm.recordLogs();
+        adapter.retryRedeemAsync(120e18, receiver);
+
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        bytes32 retryTopic = keccak256("AdapterRedeemRetried(address,address,uint256,uint256,address)");
+        for (uint256 i = 0; i < logs.length; i++) {
+            assertFalse(
+                logs[i].emitter == address(adapter) && logs[i].topics.length > 0 && logs[i].topics[0] == retryTopic
+            );
+        }
+    }
+
+    function test_RevertWhen_RetryRedeemAsyncWithoutEnoughAdapterPosBalance() public {
+        stToken.mint(address(adapter), 80e18);
+
+        vm.expectRevert();
+        adapter.retryRedeemAsync(120e18, receiver);
+    }
+
+    function test_RevertWhen_RetryRedeemAsyncCalledByNonController() public {
+        stToken.mint(address(adapter), 300e18);
+
+        vm.prank(other);
+        vm.expectRevert();
+        adapter.retryRedeemAsync(120e18, receiver);
     }
 
     function test_SweepToVault_ReturnsTokenBalance() public {
@@ -194,7 +257,7 @@ contract SubRedManagementAdapterTest is Test {
         adapter.sweep(address(0), receiver);
     }
 
-    function test_EstimatePosAmount_UsesOraclePrice() public {
+    function test_EstimatePosAmount_UsesOraclePrice() public view {
         // asset decimals = 18, st decimals = 6, price decimals = 8, price = 2
         // position = amountAsset * 1e8 * 1e6 / (2e8 * 1e18) = amountAsset / (2 * 1e12)
         uint256 amountAsset = 1000e18;
@@ -206,6 +269,14 @@ contract SubRedManagementAdapterTest is Test {
         // stToken6 has 6 decimals; mint 500 tokens => 500e6 raw.
         // with price=2 and oracle decimals 8, asset value should be 1000e18.
         stToken6.mint(address(vault), 500e6);
+        uint256 value = adapterWithOracle.totalValue();
+        assertEq(value, 1000e18);
+    }
+
+    function test_TotalValue_IgnoresAdapterLocalAssetPendingSettlement() public {
+        stToken6.mint(address(vault), 500e6);
+        usdc.mint(address(adapterWithOracle), 100e18);
+
         uint256 value = adapterWithOracle.totalValue();
         assertEq(value, 1000e18);
     }
