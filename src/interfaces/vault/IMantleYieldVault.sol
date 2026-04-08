@@ -232,6 +232,7 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     function isAdapter(address adapter) external view returns (bool);
     function getAdapters() external view returns (address[] memory);
     function getFreeCash() external view returns (uint256);
+    function getCashDeficit() external view returns (uint256);
 
     // =============================================================
     // ERC-7575
