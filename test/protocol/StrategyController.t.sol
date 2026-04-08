@@ -236,6 +236,11 @@ contract MockControllerVault {
         return totalCash > locked ? totalCash - locked : 0;
     }
 
+    function getCashDeficit() external view returns (uint256) {
+        uint256 totalCash = token.balanceOf(address(this));
+        return locked > totalCash ? locked - totalCash : 0;
+    }
+
     function approveToAdapter(address adapter, address approveToken, uint256 amount) external {
         ERC20(approveToken).approve(adapter, amount);
     }
@@ -719,6 +724,27 @@ contract StrategyControllerUnitTest is Test {
         assertEq(threshold, 68e18);
     }
 
+    function test_GetRebalanceState_AddsCashDeficitToTargetCash() public {
+        asset.mint(address(vault), 100e18);
+        vault.setLocked(150e18);
+
+        (
+            uint256 totalCash,
+            uint256 locked,
+            uint256 freeCash,
+            uint256 netAssets,
+            uint256 targetCash,
+            uint256 threshold
+        ) = controller.getRebalanceState();
+
+        assertEq(totalCash, 100e18);
+        assertEq(locked, 100e18);
+        assertEq(freeCash, 0);
+        assertEq(netAssets, 100e18);
+        assertEq(targetCash, 60e18);
+        assertEq(threshold, 2e18);
+    }
+
     function test_PreviewRebalance_ReturnsNoneWithinThresholdBand() public {
         asset.mint(address(vault), 1_000e18);
         vault.setLocked(900e18);
@@ -754,6 +780,18 @@ contract StrategyControllerUnitTest is Test {
         assertTrue(shouldRebalance);
         assertEq(action, controller.REBALANCE_ACTION_DIVEST());
         assertEq(amount, 300e18);
+    }
+
+    function test_PreviewRebalance_ReturnsDivestDecision_WhenCashDeficitExists() public {
+        asset.mint(address(vault), 100e18);
+        vault.setLocked(150e18);
+
+        vm.warp(2 hours);
+        (bool shouldRebalance, uint8 action, uint256 amount) = controller.previewRebalance();
+
+        assertTrue(shouldRebalance);
+        assertEq(action, controller.REBALANCE_ACTION_DIVEST());
+        assertEq(amount, 60e18);
     }
 
     function test_PreviewRebalance_ReturnsNoneInsideCooldown() public {

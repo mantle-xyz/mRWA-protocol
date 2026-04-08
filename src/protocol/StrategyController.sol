@@ -642,7 +642,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         // USDC balance of the vault
         totalCash = asset.balanceOf(address(vault));
         // totalCash - totalLockedShares (convertToAssets)
-        freeCash = vault.getFreeCash();
+        freeCash = _freeCash();
         locked = totalCash > freeCash ? totalCash - freeCash : 0;
         // Net assets uses a unified accounting base:
         // vault cash + deployed strategy value + both sides of pending in-flight.
@@ -651,18 +651,12 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         // targetCash is the desired free-cash buffer; threshold is hysteresis band.
         // Rebalance only triggers outside [targetCash - threshold, targetCash + threshold].
         targetCash = (netAssets * bufferTargetBps) / BPS_DENOMINATOR;
-        if (locked == 0) {
-            targetCash += vault.getCashDeficit();
-        }
+        targetCash += vault.getCashDeficit();
         threshold = (netAssets * rebalanceThresholdBps) / BPS_DENOMINATOR;
     }
 
     function _freeCash() internal view returns (uint256) {
         return vault.getFreeCash();
-    }
-
-    function _cashDeficit() internal view returns (uint256) {
-        return vault.getCashDeficit();
     }
 
     function _computeRebalanceDecision(uint256 freeCash, uint256 targetCash, uint256 threshold)
