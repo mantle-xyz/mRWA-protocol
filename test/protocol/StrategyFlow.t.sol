@@ -123,6 +123,11 @@ contract MockVaultFlow {
         return totalCash > lockedTotal ? totalCash - lockedTotal : 0;
     }
 
+    function getCashDeficit() external view returns (uint256) {
+        uint256 totalCash = usdc.balanceOf(address(this));
+        return lockedTotal > totalCash ? lockedTotal - totalCash : 0;
+    }
+
     function approveToAdapter(address adapter, address token, uint256 amount) external {
         ERC20(token).approve(adapter, amount);
     }
