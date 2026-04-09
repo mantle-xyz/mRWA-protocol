@@ -58,8 +58,7 @@ envs:
   F_USDC_ADDRESS: "0xcb89f5acc8f21a115192a0649fdf6b5d75880289"       
 
 
-  # ── DeployMockSubRedManagement params ─────────────────────
-  F_STRATEGY_CONTROLLER_FACTORY: "0xec703779d6f6e9fd93374326af2cf0ffae51fdf7"
+  F_STRATEGY_CONTROLLER_FACTORY: "0xcc9d85bfc8757362caa513c7684489b2effc23f3"
 
   # ── Vault params ─────────────────────────────────────────────
   F_MAX_REDEMPTION_FEE_BPS: "500"      # 5% cap
