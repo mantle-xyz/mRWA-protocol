@@ -641,14 +641,14 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     {
         // USDC balance of the vault
         totalCash = asset.balanceOf(address(vault));
-        // totalCash - totalLockedShares (convertToAssets)
+        // freeCash = max(totalCash - floatingLockedAssets, 0)
         freeCash = _freeCash();
         locked = totalCash > freeCash ? totalCash - freeCash : 0;
         // Net assets uses a unified accounting base:
         // vault cash + deployed strategy value + both sides of pending in-flight.
         // This avoids underestimating AUM during settlement latency.
         netAssets = totalCash + _totalStrategyValue() + vault.totalInvestInFlight() + vault.totalRedeemInFlight();
-        // targetCash is the desired free-cash buffer; threshold is hysteresis band.
+        // targetCash = desired free-cash buffer + any cash deficit required to cover locked liabilities.
         // Rebalance only triggers outside [targetCash - threshold, targetCash + threshold].
         targetCash = (netAssets * bufferTargetBps) / BPS_DENOMINATOR;
         targetCash += vault.getCashDeficit();
@@ -796,14 +796,8 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
 
             if (info.isAsync) {
                 address token = _posToken(adapter);
-                if (token == address(0)) {
-                    emit DivestSkipped(adapter, requestAsset, "");
-                    remaining = _remainingAfterClear(remaining, coveredByPending);
-                    continue;
-                }
-
                 // Convert asset amount into position-token amount for protocol redeem.
-                uint256 posAmount = _estimatePosAmount(adapter, requestAsset, 0);
+                uint256 posAmount = token != address(0) ? _estimatePosAmount(adapter, requestAsset, 0) : 0;
                 if (posAmount == 0) {
                     emit DivestSkipped(adapter, requestAsset, "");
                     remaining = _remainingAfterClear(remaining, coveredByPending);
