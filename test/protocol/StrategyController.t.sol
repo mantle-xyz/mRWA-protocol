@@ -8,6 +8,10 @@ import {StrategyController} from "../../src/protocol/StrategyController.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {Test} from "forge-std/Test.sol";
+import {Vm} from "forge-std/Vm.sol";
+
+error MockDepositCustomError(uint256 amount);
+error MockAsyncCustomError(uint256 amount);
 
 contract MockAsset is ERC20 {
     constructor() ERC20("MockAsset", "mAST") {}
@@ -28,6 +32,8 @@ contract MockStrategyAdapter is IStrategyAdapter {
     bool public failAsync;
     bool public failRetry;
     bool public failEstimate;
+    bool public failDepositCustomError;
+    bool public failAsyncCustomError;
     bool public depositReturnZero;
 
     uint256 public depositCount;
@@ -63,6 +69,14 @@ contract MockStrategyAdapter is IStrategyAdapter {
 
     function setFailRetry(bool r) external {
         failRetry = r;
+    }
+
+    function setFailDepositCustomError(bool r) external {
+        failDepositCustomError = r;
+    }
+
+    function setFailAsyncCustomError(bool r) external {
+        failAsyncCustomError = r;
     }
 
     function setDepositReturnZero(bool z) external {
@@ -108,6 +122,7 @@ contract MockStrategyAdapter is IStrategyAdapter {
     }
 
     function deposit(uint256 amount, address) external returns (uint256 sharesOrPos) {
+        if (failDepositCustomError) revert MockDepositCustomError(amount);
         if (failDeposit) revert("DEPOSIT_FAIL");
         depositCount++;
         return depositReturnZero ? 0 : amount;
@@ -119,7 +134,8 @@ contract MockStrategyAdapter is IStrategyAdapter {
         return amount;
     }
 
-    function requestRedeemAsync(uint256, address) external {
+    function requestRedeemAsync(uint256 amount, address) external {
+        if (failAsyncCustomError) revert MockAsyncCustomError(amount);
         if (failAsync) revert("ASYNC_FAIL");
         asyncCount++;
     }
@@ -357,6 +373,9 @@ contract MockControllerVault {
 contract DummyExecutor {}
 
 contract StrategyControllerUnitTest is Test {
+    event InvestSkipped(address indexed adapter, uint256 amountAsset, bytes revertData);
+    event DivestSkipped(address indexed adapter, uint256 requestedAsset, bytes revertData);
+
     MockAsset internal asset;
     MockAsset internal posToken;
     MockControllerVault internal vault;
@@ -368,6 +387,9 @@ contract StrategyControllerUnitTest is Test {
 
     address internal admin = makeAddr("admin");
     address internal manager = makeAddr("manager");
+
+    bytes32 internal constant INVEST_SKIPPED_EVENT_SIG = keccak256("InvestSkipped(address,uint256,bytes)");
+    bytes32 internal constant DIVEST_SKIPPED_EVENT_SIG = keccak256("DivestSkipped(address,uint256,bytes)");
 
     function setUp() public {
         asset = new MockAsset();
@@ -442,6 +464,41 @@ contract StrategyControllerUnitTest is Test {
     function _toSingletonArray(uint256 value) internal pure returns (uint256[] memory values) {
         values = new uint256[](1);
         values[0] = value;
+    }
+
+    function _errorData(string memory reason) internal pure returns (bytes memory) {
+        return abi.encodeWithSelector(bytes4(keccak256("Error(string)")), reason);
+    }
+
+    function _customErrorData(bytes4 selector, uint256 value) internal pure returns (bytes memory) {
+        return abi.encodeWithSelector(selector, value);
+    }
+
+    function _assertSkippedLog(
+        Vm.Log[] memory logs,
+        bytes32 eventSig,
+        address expectedAdapter,
+        uint256 expectedAmount,
+        bytes memory expectedRevertData
+    ) internal pure {
+        bool found;
+
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].topics.length == 0 || logs[i].topics[0] != eventSig) {
+                continue;
+            }
+
+            address loggedAdapter = address(uint160(uint256(logs[i].topics[1])));
+            (uint256 loggedAmount, bytes memory loggedRevertData) = abi.decode(logs[i].data, (uint256, bytes));
+
+            assertEq(loggedAdapter, expectedAdapter);
+            assertEq(loggedAmount, expectedAmount);
+            assertEq(loggedRevertData, expectedRevertData);
+            found = true;
+            break;
+        }
+
+        assertTrue(found, "expected skipped event not found");
     }
 
     function test_RevertWhen_InitializeWithNonContractExecutor() public {
@@ -852,6 +909,40 @@ contract StrategyControllerUnitTest is Test {
         assertEq(uint8(secondStatus), uint8(IMantleYieldVault.InFlightStatus.PENDING));
     }
 
+    function test_RebalanceInvest_EmitsInvestSkippedWithRevertData_OnDepositRevert() public {
+        _registerSingleSyncStrategy();
+        asset.mint(address(vault), 1_000e18);
+        syncAdapter.setFailFlags(true, false, false);
+
+        vm.recordLogs();
+        vm.warp(2 hours);
+        vm.prank(address(executorGateway));
+        controller.rebalance();
+
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        _assertSkippedLog(logs, INVEST_SKIPPED_EVENT_SIG, address(syncAdapter), 900e18, _errorData("DEPOSIT_FAIL"));
+    }
+
+    function test_RebalanceInvest_EmitsInvestSkippedWithRevertData_OnDepositCustomError() public {
+        _registerSingleSyncStrategy();
+        asset.mint(address(vault), 1_000e18);
+        syncAdapter.setFailDepositCustomError(true);
+
+        vm.recordLogs();
+        vm.warp(2 hours);
+        vm.prank(address(executorGateway));
+        controller.rebalance();
+
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        _assertSkippedLog(
+            logs,
+            INVEST_SKIPPED_EVENT_SIG,
+            address(syncAdapter),
+            900e18,
+            _customErrorData(MockDepositCustomError.selector, 900e18)
+        );
+    }
+
     function test_RebalanceDivestPath_ExecutesSyncAndAsync() public {
         _registerTwoStrategies();
         syncAdapter.setTotalValue(500e18);
@@ -887,6 +978,44 @@ contract StrategyControllerUnitTest is Test {
 
         assertEq(syncAdapter.withdrawCount(), 0);
         assertEq(asyncAdapter.asyncCount(), 1);
+    }
+
+    function test_ProcessRedeemBatch_EmitsDivestSkippedWithRevertData_OnAsyncRedeemRevert() public {
+        _registerSingleAsyncStrategy();
+        asyncAdapter.setTotalValue(700e18);
+        asyncAdapter.setFailFlags(false, false, true);
+        uint256[] memory ids = new uint256[](1);
+        ids[0] = 1;
+        vault.setRequest(1, 700e18, 0, IMantleYieldVault.RequestStatus.PENDING);
+
+        vm.recordLogs();
+        vm.prank(address(executorGateway));
+        controller.processRedeemBatch(ids);
+
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        _assertSkippedLog(logs, DIVEST_SKIPPED_EVENT_SIG, address(asyncAdapter), 700e18, _errorData("ASYNC_FAIL"));
+    }
+
+    function test_ProcessRedeemBatch_EmitsDivestSkippedWithRevertData_OnAsyncRedeemCustomError() public {
+        _registerSingleAsyncStrategy();
+        asyncAdapter.setTotalValue(700e18);
+        asyncAdapter.setFailAsyncCustomError(true);
+        uint256[] memory ids = new uint256[](1);
+        ids[0] = 1;
+        vault.setRequest(1, 700e18, 0, IMantleYieldVault.RequestStatus.PENDING);
+
+        vm.recordLogs();
+        vm.prank(address(executorGateway));
+        controller.processRedeemBatch(ids);
+
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        _assertSkippedLog(
+            logs,
+            DIVEST_SKIPPED_EVENT_SIG,
+            address(asyncAdapter),
+            700e18,
+            _customErrorData(MockAsyncCustomError.selector, 700e18)
+        );
     }
 
     function test_RevertWhen_ProcessRedeemBatchIdsNotSorted() public {
