@@ -75,9 +75,9 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         uint256 threshold
     );
     event InvestExecuted(address indexed adapter, uint256 amountAsset, uint256 sharesOrPos);
-    event InvestSkipped(address indexed adapter, uint256 amountAsset);
+    event InvestSkipped(address indexed adapter, uint256 amountAsset, bytes revertData);
     event RebalanceInvest(uint256 requestedAsset, uint256 investedAsset, uint256 remainingAsset);
-    event DivestSkipped(address indexed adapter, uint256 requestedAsset);
+    event DivestSkipped(address indexed adapter, uint256 requestedAsset, bytes revertData);
     /// @notice Unified redeem in-flight record event for both async and sync paths.
     /// @dev inFlightUsdcAmount semantic differs by path:
     ///      - async: equals requestedAsset
@@ -731,7 +731,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
                 uint256 estimatedPosForShortfall = _estimatePosAmount(adapter, shortfall, 0);
                 if (estimatedPosForShortfall > 0) {
                     if (pendingInvestPos >= estimatedPosForShortfall) {
-                        emit InvestSkipped(adapter, originalAlloc);
+                        emit InvestSkipped(adapter, originalAlloc, "");
                         continue;
                     }
 
@@ -739,7 +739,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
                         Math.mulDiv(shortfall, estimatedPosForShortfall - pendingInvestPos, estimatedPosForShortfall);
                     alloc = uncoveredShortfall < remaining ? uncoveredShortfall : remaining;
                     if (alloc == 0) {
-                        emit InvestSkipped(adapter, originalAlloc);
+                        emit InvestSkipped(adapter, originalAlloc, "");
                         continue;
                     }
                 }
@@ -759,8 +759,8 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
 
                 emit InvestExecuted(adapter, alloc, sharesOrPos);
                 remaining -= alloc;
-            } catch {
-                emit InvestSkipped(adapter, alloc);
+            } catch (bytes memory revertData) {
+                emit InvestSkipped(adapter, alloc, revertData);
             }
             vault.approveToAdapter(adapter, address(asset), 0);
         }
@@ -797,7 +797,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
             if (info.isAsync) {
                 address token = _posToken(adapter);
                 if (token == address(0)) {
-                    emit DivestSkipped(adapter, requestAsset);
+                    emit DivestSkipped(adapter, requestAsset, "");
                     remaining = _remainingAfterClear(remaining, coveredByPending);
                     continue;
                 }
@@ -805,16 +805,16 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
                 // Convert asset amount into position-token amount for protocol redeem.
                 uint256 posAmount = _estimatePosAmount(adapter, requestAsset, 0);
                 if (posAmount == 0) {
-                    emit DivestSkipped(adapter, requestAsset);
+                    emit DivestSkipped(adapter, requestAsset, "");
                     remaining = _remainingAfterClear(remaining, coveredByPending);
                     continue;
                 }
 
                 vault.approveToAdapter(adapter, token, posAmount);
                 try IStrategyAdapter(adapter).requestRedeemAsync(requestAsset, adapter) {}
-                catch {
+                catch (bytes memory revertData) {
                     vault.approveToAdapter(adapter, token, 0);
-                    emit DivestSkipped(adapter, requestAsset);
+                    emit DivestSkipped(adapter, requestAsset, revertData);
                     remaining = _remainingAfterClear(remaining, coveredByPending);
                     continue;
                 }
@@ -828,14 +828,14 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
             // Sync redeem path
             address syncPosToken = _posToken(adapter);
             if (syncPosToken == address(0)) {
-                emit DivestSkipped(adapter, requestAsset);
+                emit DivestSkipped(adapter, requestAsset, "");
                 remaining = _remainingAfterClear(remaining, coveredByPending);
                 continue;
             }
 
             uint256 syncPosAmount = _estimatePosAmount(adapter, requestAsset, 0);
             if (syncPosAmount == 0) {
-                emit DivestSkipped(adapter, requestAsset);
+                emit DivestSkipped(adapter, requestAsset, "");
                 remaining = _remainingAfterClear(remaining, coveredByPending);
                 continue;
             }
@@ -846,9 +846,9 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
                 vault.approveToAdapter(adapter, syncPosToken, 0);
                 uint256 cleared = coveredByPending + received;
                 remaining = _remainingAfterClear(remaining, cleared);
-            } catch {
+            } catch (bytes memory revertData) {
                 vault.approveToAdapter(adapter, syncPosToken, 0);
-                emit DivestSkipped(adapter, requestAsset);
+                emit DivestSkipped(adapter, requestAsset, revertData);
                 remaining = _remainingAfterClear(remaining, coveredByPending);
             }
         }
