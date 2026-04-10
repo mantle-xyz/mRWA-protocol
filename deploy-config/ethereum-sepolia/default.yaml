@@ -14,7 +14,6 @@ envs:
 
   # ── Addresses (roles) ────────────────────────────────────────
   F_ADMIN_ADDRESS: "0x65Cf61678Cf120a8F40c2F3aEDCb50BBA0e85c78"
-  F_USDC_ADDRESS: "0xc40fa5d8cf408baa63019137033d2698377fb243"          # TODO: replace with Ethereum Sepolia USDC
   # 0x3C8af6063c934dc25F7dB727bBB6c7DeEBE21Bb2 is driven by mnemonic index 1
   F_COMPLIANCE_BOT_ADDRESS: "0x3C8af6063c934dc25F7dB727bBB6c7DeEBE21Bb2"   # SanctionsOracle COMPLIANCE_ROLE
   F_BOT_ADDRESS: "0x3C8af6063c934dc25F7dB727bBB6c7DeEBE21Bb2"              # AccountantExecutor BOT_ROLE
@@ -54,6 +53,7 @@ envs:
   ADAPTER_CONTROLLER: "0xa68d8b8886c35c2f37dee48d0b56f399a5d88208"
   ADAPTER_ACCOUNTANT: "0x93a44c2c92c9ec8a290bcf6a5efb8459c3ee184d"
   ADAPTER_PRICE_ORACLE: "0x0000000000000000000000000000000000000000"  # optional, default: address(0)
+  F_USDC_ADDRESS: "0xc40fa5d8cf408baa63019137033d2698377fb243"
 
   # ── UpgradeStrategyController params ─────────────────────
   F_STRATEGY_CONTROLLER_FACTORY: "0x5899e2c2e5dd3e9e88811e6fb905c64f8e906479"

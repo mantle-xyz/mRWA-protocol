@@ -3,24 +3,32 @@ chainId: 5003
 envs:
   # ── Wallet / RPC ──────────────────────────────────────────────
   F_WALLET_TYPE: PRIVATE_KEY # options: AWS_KMS, PRIVATE_KEY, LEDGER, MNEMONIC
-  F_PRIVATE_KEY: "" # set via environment variable or .env file
-  F_MNEMONIC: ""
+  # 0x65Cf61678Cf120a8F40c2F3aEDCb50BBA0e85c78 is driven by mnemonic index 1
+  F_PRIVATE_KEY: "0x31e261ca732cabd3e3cdc349e45a0af87187c798d021d84b6e55b5abe9de4ea3"
+  F_MNEMONIC: "suggest tuition hint exclude shove leave liquid since famous bid mention raise"
   F_MNEMONIC_INDEX: 0
   F_AWS_KMS_KEY_ID: ""
-  F_SENDER: "0xf615c372a0d91412311459bc6f8cb6e666b1ba54"
+  F_SENDER: "0x65Cf61678Cf120a8F40c2F3aEDCb50BBA0e85c78"
   F_VERBOSE: true
-  F_RPC_URL: ""
+  F_RPC_URL: "https://rpc.sepolia.mantle.xyz"
 
   # ── Addresses (roles) ────────────────────────────────────────
-  F_ADMIN_ADDRESS: "0xf615c372a0d91412311459bc6f8cb6e666b1ba54"
-  F_USDC_ADDRESS: "0x0000000000000000000000000000000000000000"          # TODO: replace with Mantle Sepolia USDC
-  F_COMPLIANCE_BOT_ADDRESS: "0xf615c372a0d91412311459bc6f8cb6e666b1ba54" # SanctionsOracle COMPLIANCE_ROLE
-  F_BOT_ADDRESS: "0xf615c372a0d91412311459bc6f8cb6e666b1ba54"           # AccountantExecutor BOT_ROLE
-  F_SIGNER_ADDRESS: "0xf615c372a0d91412311459bc6f8cb6e666b1ba54"        # OperatorExecutor SIGNER_ROLE
-  F_STRATEGY_MANAGER_ADDRESS: "0xf615c372a0d91412311459bc6f8cb6e666b1ba54" # StrategyController STRATEGY_MANAGER_ROLE
-  F_TREASURY_ADDRESS: "0xf615c372a0d91412311459bc6f8cb6e666b1ba54"      # Vault fee share recipient
-  F_PAUSER_ADDRESS: "0xf615c372a0d91412311459bc6f8cb6e666b1ba54"        # Vault PAUSER_ROLE
-  F_ACCOUNTANT_FACTORY: "0x6A6a848D8ca9b6D963CD513a6354B15AF450074f"
+  F_ADMIN_ADDRESS: "0x65Cf61678Cf120a8F40c2F3aEDCb50BBA0e85c78"
+  # 0x3C8af6063c934dc25F7dB727bBB6c7DeEBE21Bb2 is driven by mnemonic index 1
+  F_COMPLIANCE_BOT_ADDRESS: "0x3C8af6063c934dc25F7dB727bBB6c7DeEBE21Bb2"   # SanctionsOracle COMPLIANCE_ROLE
+  F_BOT_ADDRESS: "0x3C8af6063c934dc25F7dB727bBB6c7DeEBE21Bb2"              # AccountantExecutor BOT_ROLE
+  F_SIGNER_ADDRESS: "0x3C8af6063c934dc25F7dB727bBB6c7DeEBE21Bb2"           # OperatorExecutor SIGNER_ROLE
+  F_STRATEGY_MANAGER_ADDRESS: "0x3C8af6063c934dc25F7dB727bBB6c7DeEBE21Bb2" # StrategyController STRATEGY_MANAGER_ROLE
+  F_TREASURY_ADDRESS: "0x3C8af6063c934dc25F7dB727bBB6c7DeEBE21Bb2"         # Vault fee share recipient
+  F_PAUSER_ADDRESS: "0x3C8af6063c934dc25F7dB727bBB6c7DeEBE21Bb2"           # Vault PAUSER_ROLE
+  
+  # -- Factory addresses ────────────────────────────────────────
+  F_ACCOUNTANT_FACTORY: "0x31a1f8de58833d3b0c833616c195f58f3a6ece3f"
+  F_SANCTIONS_ORACLE_FACTORY: "0x0fea4bf1fc99568ed0dae4fc72d9c5866d694284"
+  F_VAULT_FACTORY: "0xb7ae1f29eed58b4a29974fddc47ce2e66919d579"
+  F_GATEWAY_FACTORY: "0x511560d7904434b93aa0e07906ccf96f5f3ab75e"
+  F_ACCOUNTANT_EXECUTOR: "0x87230685b9e61a30e9cf440208548a148e7d97ac"
+  F_OPERATOR_EXECUTOR: "0xcfd9f6b483f3e5749a2ed41cd454c28828c7940b"
 
   # ── Accountant params ────────────────────────────────────────
   F_INITIAL_RATE: "1000000000000000000" # 1e18
@@ -32,24 +40,25 @@ envs:
   F_REBALANCE_COOLDOWN: "3600"         # 1 hour
 
   # ── RegisterStrategy params ──────────────────────────────────
-  F_CONTROLLER_ADDRESS: "0x2D4c86737808972DB9e6B0B9Ce4930e8A4125F0c"     # StrategyController proxy
-  F_STRATEGY_ADAPTER_ADDRESS: "0xF42b55a3d6EDF1d0eDA1ADE86Eee267C3a168f22"
+  F_CONTROLLER_ADDRESS: "0x4b1091880de0ac5068a7a7eccfb786e7f2b58258"     # StrategyController proxy
+  F_STRATEGY_ADAPTER_ADDRESS: "0x85475d000b53cef680aef1bf55b8a61730242e98"
   F_TARGET_WEIGHT_BPS: "10000"       # 100%
   F_PRIORITY: "0"                    # execution priority (lower = higher)
   F_IS_ASYNC: "true"                 # true for ERC-7540, false for ERC-4626
   F_SET_ORDER: "true"                # update strategyOrder after registration
 
   # ── DeploySubRedManagementAdapter params ─────────────────────
-  ADAPTER_VAULT: "0xd39bBd306882bCbd362240be35eb819cEbD408C3"
-  ADAPTER_SUBRED_MANAGEMENT: "0xFb37881656Ffe5261d6F491EDE0554bD98f9157d"
-  ADAPTER_ST_TOKEN: "0x9a437bdbb5Bc3a5904AEB6bb19F7f66F09e3cb19"
-  ADAPTER_ADMIN: "0xf615c372a0d91412311459bc6f8cb6e666b1ba54"
-  ADAPTER_CONTROLLER: "0x2D4c86737808972DB9e6B0B9Ce4930e8A4125F0c"
-  ADAPTER_ACCOUNTANT: "0x2c52d6f3534001c6516107Ba78213eE4398c9483"
-  ADAPTER_PRICE_ORACLE: "0x0000000000000000000000000000000000000000"  # optional, default: address(0)
+  ADAPTER_VAULT: "0xec7f6c86b223f280bedebac0f043e807ae2990c4"
+  ADAPTER_SUBRED_MANAGEMENT: "0xee8fd912a7635b76ecd3a8c76912b8f449035e9b"
+  ADAPTER_ST_TOKEN: "0x2633d46912428c8ad02a130ac7d47a31771d9858"
+  ADAPTER_ADMIN: "0x65Cf61678Cf120a8F40c2F3aEDCb50BBA0e85c78"
+  ADAPTER_CONTROLLER: "0x4b1091880de0ac5068a7a7eccfb786e7f2b58258"
+  ADAPTER_ACCOUNTANT: "0xb8bd4197426d6c2587f6149be7d4b8a7b1a90fd4"
+  ADAPTER_PRICE_ORACLE: "0xC0D6c66610783a72b4bf88E0d8474cCcD64856F8"  # optional, default: address(0)
+  F_USDC_ADDRESS: "0xcb89f5acc8f21a115192a0649fdf6b5d75880289"       
 
-  # ── DeployMockSubRedManagement params ─────────────────────
-  F_ST_TOKEN: "0x0000000000000000000000000000000000000000"
+
+  F_STRATEGY_CONTROLLER_FACTORY: "0xcc9d85bfc8757362caa513c7684489b2effc23f3"
 
   # ── Vault params ─────────────────────────────────────────────
   F_MAX_REDEMPTION_FEE_BPS: "500"      # 5% cap
