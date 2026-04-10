@@ -12,17 +12,11 @@ on:
       - "src/**"
       - "test/**"
       - "script/**"
+      - "deploy-config/**"
       - "foundry.toml"
       - "remappings.txt"
       - ".github/workflows/**"
   pull_request:
-    paths:
-      - "src/**"
-      - "test/**"
-      - "script/**"
-      - "foundry.toml"
-      - "remappings.txt"
-      - ".github/workflows/**"
   workflow_dispatch:
 
 env:
