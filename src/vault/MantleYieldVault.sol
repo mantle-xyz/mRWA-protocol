@@ -88,7 +88,7 @@ contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultA
         address safe = IMantleVaultGateway(gateway).sanctionSafe();
         if (safe == address(0)) revert Vault__ZeroAddress();
         super._update(owner, safe, shares);
-        emit SanctionSafeIn(owner, asset(), shares);
+        emit SanctionSafeIn(owner, address(this), shares);
     }
 
     /// @notice User interactions are exposed on MantleVaultGateway to keep this vault lean.
