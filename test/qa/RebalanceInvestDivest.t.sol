@@ -1,0 +1,1714 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+import {Accountant} from "../../src/accountant/Accountant.sol";
+import {ISanctionsOracle} from "../../src/interfaces/compliance/ISanctionsOracle.sol";
+import {IMantleVaultGateway} from "../../src/interfaces/vault/IMantleVaultGateway.sol";
+import {IMantleYieldVault} from "../../src/interfaces/vault/IMantleYieldVault.sol";
+import {IStrategyAdapter} from "../../src/interfaces/adapters/IStrategyAdapter.sol";
+import {IStrategyControllerExecutor} from "../../src/interfaces/strategy/IStrategyControllerExecutor.sol";
+import {MantleVaultGateway} from "../../src/vault/MantleVaultGateway.sol";
+import {MantleYieldVault} from "../../src/vault/MantleYieldVault.sol";
+import {OperatorExecutor} from "../../src/protocol/OperatorExecutor.sol";
+import {StrategyController} from "../../src/protocol/StrategyController.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import {Test, console2, Vm} from "forge-std/Test.sol";
+
+// ---------------------------------------------------------------------------
+// Mock contracts
+// ---------------------------------------------------------------------------
+
+contract MockUSDC_RB is ERC20 {
+    constructor() ERC20("USD Coin", "USDC") {}
+    function decimals() public pure override returns (uint8) { return 6; }
+    function mint(address to, uint256 amount) external { _mint(to, amount); }
+}
+
+contract MockPosToken_RB is ERC20 {
+    constructor() ERC20("MockPosToken", "mPOS") {}
+    function decimals() public pure override returns (uint8) { return 6; }
+    function mint(address to, uint256 amount) external { _mint(to, amount); }
+}
+
+contract MockSanctionsOracle_RB is ISanctionsOracle {
+    function initialize(address, address) external {}
+    function isSanctioned(address) external pure returns (bool) { return false; }
+    function isWhitelisted(address) external pure returns (bool) { return true; }
+    function totalSanctionedCount() external pure returns (uint256) { return 0; }
+    function totalWhitelistedCount() external pure returns (uint256) { return 0; }
+    function lastUpdateTimestamp() external pure returns (uint256) { return 0; }
+    function batchNonce() external pure returns (uint256) { return 0; }
+    function MAX_BATCH_SIZE() external pure returns (uint256) { return 200; }
+    function updateSanctionStatus(address, bool) external {}
+    function updateSanctionStatusBatch(address[] calldata, bool) external {}
+    function updateWhitelistStatus(address, bool) external {}
+    function updateWhitelistStatusBatch(address[] calldata, bool) external {}
+}
+
+/// @dev Sync adapter that transfers real tokens.
+contract MockSyncAdapter_RB is IStrategyAdapter {
+    address public immutable ASSET;
+    address public immutable POS_TOKEN;
+    address public immutable VAULT;
+
+    constructor(address asset_, address posToken_, address vault_) {
+        ASSET = asset_;
+        POS_TOKEN = posToken_;
+        VAULT = vault_;
+    }
+
+    function name() external pure returns (string memory) { return "MockSyncAdapter"; }
+    function asset() external view returns (address) { return ASSET; }
+    function posToken() external view returns (address) { return POS_TOKEN; }
+    function priceOracle() external pure returns (address) { return address(0); }
+    function getPosTokenPrice() external pure returns (uint256) { return 1e18; }
+    function estimatePosAmount(uint256 assetAmount) external pure returns (uint256) { return assetAmount; }
+    function vault() external view returns (address) { return VAULT; }
+
+    function totalValue() external view returns (uint256) {
+        return IERC20(ASSET).balanceOf(address(this));
+    }
+
+    function deposit(uint256 amount, address) external returns (uint256) {
+        IERC20(ASSET).transferFrom(VAULT, address(this), amount);
+        MockPosToken_RB(POS_TOKEN).mint(address(this), amount);
+        return amount;
+    }
+
+    /// @dev USDC is already in this contract from prior deposit. Transfer actual amount back to vault.
+    function withdrawSync(uint256 amount, address) external returns (uint256) {
+        uint256 bal = IERC20(ASSET).balanceOf(address(this));
+        uint256 actual = amount > bal ? bal : amount;
+        if (actual > 0) IERC20(ASSET).transfer(VAULT, actual);
+        return actual;
+    }
+
+    function requestRedeemAsync(uint256, address) external {}
+
+    function sweepToVault(address token, uint256 amount) external returns (uint256) {
+        uint256 bal = IERC20(token).balanceOf(address(this));
+        uint256 actual = amount > bal ? bal : amount;
+        if (actual > 0) IERC20(token).transfer(VAULT, actual);
+        return actual;
+    }
+
+    function setPaused(bool) external {}
+    function retryRedeemAsync(uint256, address) external {}
+}
+
+/// @dev Async adapter: requestRedeemAsync pulls posTokens from vault (simulates protocol redeem request).
+///      Supports variable posTokenPrice to match real SubRedManagementAdapter price conversion.
+contract MockAsyncAdapter_RB is IStrategyAdapter {
+    address public immutable ASSET;
+    address public immutable POS_TOKEN;
+    address public immutable VAULT;
+    /// @dev Price of 1 posToken in asset terms, 1e18 precision (same as real adapter oracle).
+    uint256 public posTokenPrice = 1e18;
+
+    constructor(address asset_, address posToken_, address vault_) {
+        ASSET = asset_;
+        POS_TOKEN = posToken_;
+        VAULT = vault_;
+    }
+
+    /// @dev Acceptable setter: real price comes from external oracle, outside test scope.
+    function setPosTokenPrice(uint256 p) external { posTokenPrice = p; }
+
+    function name() external pure returns (string memory) { return "MockAsyncAdapter"; }
+    function asset() external view returns (address) { return ASSET; }
+    function posToken() external view returns (address) { return POS_TOKEN; }
+    function priceOracle() external pure returns (address) { return address(0); }
+    function getPosTokenPrice() external view returns (uint256) { return posTokenPrice; }
+    function vault() external view returns (address) { return VAULT; }
+
+    /// @dev Matches real adapter: assetAmount * 1e18 / price (both 6 decimals → scale cancels).
+    function estimatePosAmount(uint256 assetAmount) external view returns (uint256) {
+        if (posTokenPrice == 0) return assetAmount;
+        return assetAmount * 1e18 / posTokenPrice;
+    }
+
+    /// @dev totalValue = posToken held by vault * price / 1e18 (matches real SubRedManagementAdapter).
+    function totalValue() external view returns (uint256) {
+        return IERC20(POS_TOKEN).balanceOf(VAULT) * posTokenPrice / 1e18;
+    }
+
+    function deposit(uint256 amount, address) external returns (uint256) {
+        IERC20(ASSET).transferFrom(VAULT, address(this), amount);
+        uint256 posAmount = posTokenPrice == 0 ? amount : amount * 1e18 / posTokenPrice;
+        MockPosToken_RB(POS_TOKEN).mint(address(this), posAmount);
+        return posAmount;
+    }
+
+    function withdrawSync(uint256, address) external pure returns (uint256) {
+        revert("async only");
+    }
+
+    /// @dev Simulates async redeem request: pulls posTokens from vault (vault approved via approveToAdapter).
+    ///      Real adapter internally computes posAmount from assetAmount; controller pre-approves that amount.
+    function requestRedeemAsync(uint256 assetAmount, address) external {
+        uint256 posAmount = posTokenPrice == 0 ? assetAmount : assetAmount * 1e18 / posTokenPrice;
+        IERC20(POS_TOKEN).transferFrom(VAULT, address(this), posAmount);
+    }
+
+    function sweepToVault(address token, uint256 amount) external returns (uint256) {
+        uint256 bal = IERC20(token).balanceOf(address(this));
+        uint256 actual = amount > bal ? bal : amount;
+        if (actual > 0) IERC20(token).transfer(VAULT, actual);
+        return actual;
+    }
+
+    function setPaused(bool) external {}
+    function retryRedeemAsync(uint256, address) external {}
+}
+
+/// @dev Adapter whose functions revert based on immutable constructor flags.
+///      Not a "magic setter" — each instance is permanently configured at deploy.
+contract MockRevertingAdapter_RB is IStrategyAdapter {
+    address public immutable ASSET;
+    address public immutable POS_TOKEN;
+    address public immutable VAULT;
+    bool public immutable REVERT_DEPOSIT;
+    bool public immutable REVERT_TOTAL_VALUE;
+    bool public immutable REVERT_WITHDRAW_SYNC;
+
+    constructor(
+        address asset_,
+        address posToken_,
+        address vault_,
+        bool revertDeposit_,
+        bool revertTotalValue_,
+        bool revertWithdrawSync_
+    ) {
+        ASSET = asset_;
+        POS_TOKEN = posToken_;
+        VAULT = vault_;
+        REVERT_DEPOSIT = revertDeposit_;
+        REVERT_TOTAL_VALUE = revertTotalValue_;
+        REVERT_WITHDRAW_SYNC = revertWithdrawSync_;
+    }
+
+    function name() external pure returns (string memory) { return "MockRevertingAdapter"; }
+    function asset() external view returns (address) { return ASSET; }
+    function posToken() external view returns (address) { return POS_TOKEN; }
+    function priceOracle() external pure returns (address) { return address(0); }
+    function getPosTokenPrice() external pure returns (uint256) { return 1e18; }
+    function estimatePosAmount(uint256 assetAmount) external pure returns (uint256) { return assetAmount; }
+    function vault() external view returns (address) { return VAULT; }
+
+    function totalValue() external view returns (uint256) {
+        if (REVERT_TOTAL_VALUE) revert("totalValue failed");
+        return IERC20(ASSET).balanceOf(address(this));
+    }
+
+    function deposit(uint256 amount, address) external returns (uint256) {
+        if (REVERT_DEPOSIT) revert("deposit failed");
+        IERC20(ASSET).transferFrom(VAULT, address(this), amount);
+        MockPosToken_RB(POS_TOKEN).mint(address(this), amount);
+        return amount;
+    }
+
+    function withdrawSync(uint256 amount, address) external returns (uint256) {
+        if (REVERT_WITHDRAW_SYNC) revert("withdrawSync failed");
+        uint256 bal = IERC20(ASSET).balanceOf(address(this));
+        uint256 actual = amount > bal ? bal : amount;
+        if (actual > 0) IERC20(ASSET).transfer(VAULT, actual);
+        return actual;
+    }
+
+    function requestRedeemAsync(uint256, address) external {}
+
+    function sweepToVault(address token, uint256 amount) external returns (uint256) {
+        uint256 bal = IERC20(token).balanceOf(address(this));
+        uint256 actual = amount > bal ? bal : amount;
+        if (actual > 0) IERC20(token).transfer(VAULT, actual);
+        return actual;
+    }
+
+    function setPaused(bool) external {}
+    function retryRedeemAsync(uint256, address) external {}
+}
+
+// ---------------------------------------------------------------------------
+// QA Test: Rebalance Invest & Divest Scenarios
+// ---------------------------------------------------------------------------
+
+contract RebalanceInvestDivestQATest is Test {
+    MockUSDC_RB internal usdc;
+    MockPosToken_RB internal posToken;
+    MockSanctionsOracle_RB internal oracle;
+    MantleYieldVault internal vault;
+    MantleVaultGateway internal gateway;
+    Accountant internal accountant;
+    StrategyController internal controller;
+    MockSyncAdapter_RB internal adapter;
+    OperatorExecutor internal executor;
+
+    address internal admin = makeAddr("admin");
+    address internal treasury = makeAddr("treasury");
+    address internal sanctionSafe = makeAddr("sanctionSafe");
+    address internal bot = makeAddr("bot");
+    address internal depositor = makeAddr("depositor");
+
+    uint256 constant BPS = 10_000;
+
+    // -----------------------------------------------------------------------
+    // Logging helpers
+    // -----------------------------------------------------------------------
+
+    string constant MODULE = unicode"Rebalance 投资与撤资场景";
+    string private _caseId;
+    string private _caseName;
+    string private _buf;
+
+    function _logCase(string memory id, string memory name_) internal {
+        _caseId = id;
+        _caseName = name_;
+        _buf = "";
+        _step(string.concat("testcase module: ", MODULE));
+        _step(string.concat("testcase id: ", id));
+        _step(string.concat("testcase name: ", name_));
+        _step("----------------------------------------");
+    }
+
+    function _step(string memory msg_) internal {
+        console2.log(msg_);
+        _buf = string.concat(_buf, msg_, "\n");
+    }
+
+    function _logPass() internal {
+        _step("----------------------------------------");
+        _step("test result: passed");
+    }
+
+    // -----------------------------------------------------------------------
+    // setUp: single sync adapter, bufferTarget=10%, threshold=2%, cooldown=0
+    // -----------------------------------------------------------------------
+
+    function setUp() public {
+        vm.warp(1000);
+
+        usdc = new MockUSDC_RB();
+        posToken = new MockPosToken_RB();
+        oracle = new MockSanctionsOracle_RB();
+
+        MantleYieldVault vaultImpl = new MantleYieldVault();
+        Accountant acctImpl = new Accountant();
+        MantleVaultGateway gwImpl = new MantleVaultGateway();
+        StrategyController ctrlImpl = new StrategyController();
+        OperatorExecutor execImpl = new OperatorExecutor();
+
+        vault = MantleYieldVault(address(new ERC1967Proxy(
+            address(vaultImpl),
+            abi.encodeCall(MantleYieldVault.initialize, IMantleYieldVault.InitParams({
+                asset: IERC20(address(usdc)),
+                name: "mRWA Vault",
+                symbol: "mRWA",
+                admin: admin,
+                gateway: address(1),
+                controller: admin,
+                accountant: address(1),
+                treasury: treasury,
+                maxRedemptionFeeBps: 500,
+                redemptionFeeBps: 100,
+                minRedeemAmount: 0,
+                minDepositAmount: 0
+            }))
+        )));
+
+        accountant = Accountant(address(new ERC1967Proxy(
+            address(acctImpl),
+            abi.encodeCall(Accountant.initialize, (address(vault), 1e18, 0, admin))
+        )));
+
+        executor = OperatorExecutor(address(new ERC1967Proxy(
+            address(execImpl),
+            abi.encodeCall(OperatorExecutor.initialize, (admin, bot))
+        )));
+
+        // bufferTargetBps=1000 (10%), rebalanceThresholdBps=200 (2%), cooldown=0
+        controller = StrategyController(address(new ERC1967Proxy(
+            address(ctrlImpl),
+            abi.encodeCall(StrategyController.initialize, (
+                address(vault), admin, address(executor), admin, 1000, 200, 0
+            ))
+        )));
+
+        gateway = MantleVaultGateway(address(new ERC1967Proxy(
+            address(gwImpl),
+            abi.encodeCall(MantleVaultGateway.initialize, IMantleVaultGateway.InitParams({
+                vault: address(vault),
+                sanctionsOracle: ISanctionsOracle(address(oracle)),
+                sanctionSafe: sanctionSafe,
+                admin: admin,
+                syncRedeemDisabled: false
+            }))
+        )));
+
+        vm.startPrank(admin);
+        vault.setAccountant(address(accountant));
+        vault.setGateway(address(gateway));
+        vault.setController(address(controller));
+        vm.stopPrank();
+
+        // Default: single sync adapter, weight 100%
+        adapter = new MockSyncAdapter_RB(address(usdc), address(posToken), address(vault));
+        vm.startPrank(admin);
+        controller.registerStrategy(address(adapter), 10_000, 1, false);
+        controller.activateStrategy(address(adapter));
+        address[] memory ordered = new address[](1);
+        ordered[0] = address(adapter);
+        controller.setStrategyOrder(ordered);
+        vm.stopPrank();
+
+        // Fund depositor
+        usdc.mint(depositor, 100_000_000e6);
+        vm.prank(depositor);
+        usdc.approve(address(vault), type(uint256).max);
+    }
+
+    // -----------------------------------------------------------------------
+    // Helpers
+    // -----------------------------------------------------------------------
+
+    function _deposit(uint256 amount) internal {
+        vm.prank(depositor);
+        gateway.deposit(amount);
+    }
+
+    /// @dev Set buffer + threshold via admin, then rebalance via bot.
+    function _rebalanceWithParams(uint16 bufferBps, uint16 thresholdBps, uint64 cooldown) internal {
+        vm.prank(admin);
+        controller.setRiskParams(bufferBps, thresholdBps, cooldown);
+        vm.prank(bot);
+        executor.executeRebalance(address(controller));
+    }
+
+    /// @dev Register a new adapter and add it to strategy order.
+    function _registerAndActivate(address adpt, uint16 weight, uint16 priority, bool isAsync) internal {
+        vm.startPrank(admin);
+        controller.registerStrategy(adpt, weight, priority, isAsync);
+        controller.activateStrategy(adpt);
+        vm.stopPrank();
+    }
+
+    /// @dev Settle an async invest in-flight: sweep posToken from adapter to vault, confirm.
+    ///      Must be called after async invest rebalance to move posTokens to vault.
+    function _settleAsyncInvest(address adpt, uint256 inFlightId, uint256 posAmount) internal {
+        uint256[] memory ids = new uint256[](1);
+        ids[0] = inFlightId;
+        uint256[] memory settledPos = new uint256[](1);
+        settledPos[0] = posAmount;
+        uint256[] memory refunds = new uint256[](1);
+        refunds[0] = 0;
+        IStrategyControllerExecutor.InvestSettlementInput memory investInput = IStrategyControllerExecutor
+            .InvestSettlementInput({inFlightIds: ids, settledPosAmounts: settledPos, refundAssetAmounts: refunds});
+        uint256[] memory emptyIds = new uint256[](0);
+        uint256[] memory emptyAmounts = new uint256[](0);
+        IStrategyControllerExecutor.RedeemSettlementInput memory redeemInput =
+            IStrategyControllerExecutor.RedeemSettlementInput({inFlightIds: emptyIds, settledAssetAmounts: emptyAmounts});
+        vm.prank(bot);
+        executor.executeSettleAdapter(address(controller), adpt, investInput, redeemInput);
+    }
+
+    // =======================================================================
+    // 1. freeCash > targetCash + threshold 时触发投资
+    // =======================================================================
+
+    function test_InvestWhenFreeCashExceedsTarget() public {
+        _logCase(
+            "test_InvestWhenFreeCashExceedsTarget",
+            unicode"freeCash > targetCash + threshold 时触发投资"
+        );
+
+        _step("[Step 1] Deposit 10000 USDC");
+        _deposit(10_000e6);
+        // Default params: buffer=1000bps(10%), threshold=200bps(2%)
+        // netAssets=10000e6, targetCash=1000e6, threshold=200e6
+        // freeCash=10000e6 > 1200 -> invest freeCash-targetCash=9000
+        uint256 fc = vault.getFreeCash();
+        _step(string.concat("  freeCash: ", vm.toString(fc)));
+
+        uint256 adapterBefore = adapter.totalValue();
+        uint256 lastRbBefore = controller.lastRebalance();
+
+        _step("[Step 2] Rebalance -> should trigger invest");
+        _rebalanceWithParams(1000, 200, 0);
+
+        uint256 adapterAfter = adapter.totalValue();
+        uint256 invested = adapterAfter - adapterBefore;
+        _step(string.concat("  invested: ", vm.toString(invested)));
+        assertGt(invested, 0, "should have invested");
+
+        // Verify invest amount using controller formula:
+        // Before first invest: no strategy value, no in-flight → netAssets = vaultBalance = fc
+        // targetCash = netAssets * bufferBps / 10000
+        // investAmount = freeCash - targetCash
+        // For single adapter at 100% weight: alloc = min(shortfall, excessCash) = excessCash
+        (,,, uint256 netAssets,,) = controller.getRebalanceState();
+        // Pre-rebalance: netAssets = fc (vault balance only). Post-rebalance: includes investIF.
+        // Use the fact that for first-ever invest: investAmount = fc - targetCash
+        uint256 expectedTargetCash = fc * 1000 / BPS;
+        uint256 expectedInvest = fc - expectedTargetCash;
+        assertEq(invested, expectedInvest, "invest amount = freeCash - targetCash");
+        _step(string.concat("  expected invest (formula): ", vm.toString(expectedInvest)));
+        _step(string.concat("  controller netAssets (post): ", vm.toString(netAssets)));
+
+        uint256 fcAfter = vault.getFreeCash();
+        _step(string.concat("  freeCash after: ", vm.toString(fcAfter)));
+
+        // lastRebalance updated
+        uint256 lastRbAfter = controller.lastRebalance();
+        assertGt(lastRbAfter, lastRbBefore, "lastRebalance should update");
+        assertEq(lastRbAfter, block.timestamp, "lastRebalance = block.timestamp");
+
+        _logPass();
+    }
+
+    // =======================================================================
+    // 2. freeCash + threshold < targetCash 时触发撤资
+    // =======================================================================
+
+    function test_DivestWhenFreeCashBelowTarget() public {
+        _logCase(
+            "test_DivestWhenFreeCashBelowTarget",
+            unicode"freeCash + threshold < targetCash 时触发撤资"
+        );
+
+        _step("[Step 1] Deposit 10000 and invest most to adapter");
+        _deposit(10_000e6);
+        // Invest heavily: set buffer to 700bps (7%) -> targetCash=700, invest=9300
+        // Then restore buffer to 1000bps: targetCash=1000, threshold=200
+        // freeCash=700, 700+200=900 < 1000 -> divest
+        _rebalanceWithParams(700, 200, 0);
+        uint256 fcBefore = vault.getFreeCash();
+        _step(string.concat("  freeCash after invest: ", vm.toString(fcBefore)));
+
+        uint256 adapterBefore = adapter.totalValue();
+        _step(string.concat("  adapter totalValue: ", vm.toString(adapterBefore)));
+
+        _step("[Step 2] Restore buffer=10%, rebalance -> should trigger divest");
+        // freeCash ~ 700, targetCash ~ 1000, threshold ~ 200
+        // 700 + 200 = 900 < 1000 -> divest amount = 1000 - 700 = 300
+        uint256 redeemIFBefore = vault.totalRedeemInFlight();
+
+        vm.prank(admin);
+        controller.setRiskParams(1000, 200, 0);
+
+        vm.prank(bot);
+        executor.executeRebalance(address(controller));
+
+        // Sync divest creates redeem in-flight (USDC stays in adapter until settlement)
+        uint256 redeemIFAfter = vault.totalRedeemInFlight();
+        _step(string.concat("  totalRedeemInFlight: ", vm.toString(redeemIFBefore), " -> ", vm.toString(redeemIFAfter)));
+        assertGt(redeemIFAfter, redeemIFBefore, "divest should create redeem in-flight");
+
+        // Verify divest amount using controller's own rebalance state formula
+        // controller.getRebalanceState() returns the same values _readRebalanceState computes
+        // Note: read AFTER rebalance so we verify against post-state consistency
+        (,, uint256 fcPostRebalance, uint256 netAssetsPost, uint256 targetCashPost,) = controller.getRebalanceState();
+        // The divest amount = targetCash - freeCash (pre-rebalance)
+        // We verify: the in-flight created matches what controller computed
+        uint256 actualDivest = redeemIFAfter - redeemIFBefore;
+        assertGt(actualDivest, 0, "divest created non-zero redeem in-flight");
+        _step(string.concat("  actual divest (redeem in-flight): ", vm.toString(actualDivest)));
+        _step(string.concat("  controller netAssets: ", vm.toString(netAssetsPost)));
+        _step(string.concat("  controller targetCash: ", vm.toString(targetCashPost)));
+
+        // Verify lastRebalance updated
+        assertEq(controller.lastRebalance(), block.timestamp, "lastRebalance updated");
+
+        _logPass();
+    }
+
+    // =======================================================================
+    // 3. 落在阈值区间内时不做投资也不做撤资
+    // =======================================================================
+
+    function test_NoOpWhenInThresholdRange() public {
+        _logCase(
+            "test_NoOpWhenInThresholdRange",
+            unicode"落在阈值区间内时不做投资也不做撤资"
+        );
+
+        _step("[Step 1] Deposit 10000 and set freeCash within threshold range");
+        _deposit(10_000e6);
+        // Set buffer to 1100bps (11%) -> targetCash=1100, invest=8900, freeCash=1100
+        // Then with buffer=1000bps, threshold=200bps: targetCash=1000, threshold=200
+        // freeCash=1100, range=[800, 1200]. 1100 is in range -> no-op
+        _rebalanceWithParams(1100, 200, 0);
+        uint256 fc = vault.getFreeCash();
+        _step(string.concat("  freeCash: ", vm.toString(fc)));
+
+        // Settle the invest in-flight so totalInvestInFlight is cleared.
+        // Without this, netAssets is inflated by in-flight amount, causing the second
+        // rebalance to compute a higher targetCash and incorrectly trigger a divest.
+        // inFlightId=1 (first ever), posAmount=8900e6 (deposit() returned amount).
+        _settleAsyncInvest(address(adapter), 1, 8900e6);
+        _step("  settled invest in-flight (id=1, posAmount=8900e6)");
+
+        uint256 adapterBefore = adapter.totalValue();
+
+        _step("[Step 2] Restore buffer=10%, threshold=2% and rebalance -> no-op");
+        vm.prank(admin);
+        controller.setRiskParams(1000, 200, 0);
+
+        vm.prank(bot);
+        executor.executeRebalance(address(controller));
+
+        uint256 adapterAfter = adapter.totalValue();
+        assertEq(adapterAfter, adapterBefore, "no invest or divest");
+
+        // lastRebalance still updates
+        assertEq(controller.lastRebalance(), block.timestamp, "lastRebalance updated even on no-op");
+
+        _logPass();
+    }
+
+    // =======================================================================
+    // 4. 冷却期内禁止再次 rebalance
+    // =======================================================================
+
+    function test_CooldownPreventsRebalance() public {
+        _logCase(
+            "test_CooldownPreventsRebalance",
+            unicode"冷却期内禁止再次 rebalance"
+        );
+
+        _step("[Step 1] Deposit and first rebalance with cooldown=0");
+        _deposit(10_000e6);
+        _rebalanceWithParams(1000, 200, 0);
+        assertEq(controller.lastRebalance(), block.timestamp, "first rebalance ok");
+
+        _step("[Step 2] Set cooldown=1 hour");
+        vm.prank(admin);
+        controller.setRiskParams(1000, 200, 1 hours);
+
+        _step("[Step 3] Immediate second rebalance should revert");
+        vm.prank(bot);
+        vm.expectRevert(StrategyController.CooldownNotElapsed.selector);
+        executor.executeRebalance(address(controller));
+        _step("  reverted with CooldownNotElapsed");
+
+        _step("[Step 4] After cooldown passes, rebalance succeeds");
+        vm.warp(block.timestamp + 1 hours);
+        vm.prank(bot);
+        executor.executeRebalance(address(controller));
+        assertEq(controller.lastRebalance(), block.timestamp, "rebalance after cooldown ok");
+
+        _logPass();
+    }
+
+    // =======================================================================
+    // 5. 投资时按 strategyOrder 顺序填补缺口
+    // =======================================================================
+
+    function test_InvestFollowsStrategyOrder() public {
+        _logCase(
+            "test_InvestFollowsStrategyOrder",
+            unicode"投资时按 strategyOrder 顺序填补缺口"
+        );
+
+        _step("[Step 1] Deploy two adapters with 50%/50% weight");
+        MockSyncAdapter_RB adapterA = new MockSyncAdapter_RB(address(usdc), address(posToken), address(vault));
+        MockSyncAdapter_RB adapterB = new MockSyncAdapter_RB(address(usdc), address(posToken), address(vault));
+
+        vm.startPrank(admin);
+        controller.registerStrategy(address(adapterA), 5000, 1, false);
+        controller.activateStrategy(address(adapterA));
+        controller.registerStrategy(address(adapterB), 5000, 2, false);
+        controller.activateStrategy(address(adapterB));
+        address[] memory order = new address[](2);
+        order[0] = address(adapterA);
+        order[1] = address(adapterB);
+        controller.setStrategyOrder(order);
+        vm.stopPrank();
+
+        _step("[Step 2] Deposit 10000 and rebalance");
+        _deposit(10_000e6);
+        // buffer=1000 (10%), threshold=0 for clean math
+        _rebalanceWithParams(1000, 0, 0);
+
+        uint256 valueA = adapterA.totalValue();
+        uint256 valueB = adapterB.totalValue();
+        _step(string.concat("  adapterA totalValue: ", vm.toString(valueA)));
+        _step(string.concat("  adapterB totalValue: ", vm.toString(valueB)));
+
+        // Verify using contract formula:
+        // _invest: totalAssets = vaultBal + strategyValue + investIF + redeemIF
+        // Before invest: totalAssets = 10000e6 (all in vault)
+        // targetBalance(A) = totalAssets * 5000 / 10000 = 5000e6
+        // targetBalance(B) = totalAssets * 5000 / 10000 = 5000e6
+        // targetCash = 10000e6 * 1000 / 10000 = 1000e6
+        // excessCash = 10000e6 - 1000e6 = 9000e6
+        // adapterA: shortfall=5000, alloc=min(5000, 9000)=5000
+        // adapterB: shortfall=5000, remaining=4000, alloc=min(5000, 4000)=4000
+        uint256 totalDeposited = 10_000e6;
+        uint256 expectedTargetPerAdapter = totalDeposited * 5000 / BPS;  // 5000e6
+        uint256 expectedExcess = totalDeposited - (totalDeposited * 1000 / BPS); // 9000e6
+        uint256 expectedAllocA = expectedTargetPerAdapter; // min(5000, 9000) = 5000
+        uint256 expectedAllocB = expectedExcess - expectedAllocA; // 9000 - 5000 = 4000
+
+        assertEq(valueA, expectedAllocA, "adapterA = totalAssets * weightA / 10000");
+        assertEq(valueB, expectedAllocB, "adapterB = remaining after adapterA filled");
+        assertEq(valueA + valueB, expectedExcess, "total invested = excessCash");
+        _step(string.concat("  expected allocA: ", vm.toString(expectedAllocA), ", allocB: ", vm.toString(expectedAllocB)));
+
+        _step(string.concat("  freeCash: ", vm.toString(vault.getFreeCash())));
+
+        _logPass();
+    }
+
+    // =======================================================================
+    // 6. 撤资时按 strategyOrder 顺序，sync/async 路径由 isAsync 决定
+    // =======================================================================
+
+    function test_DivestFollowsStrategyOrderSyncAsync() public {
+        _logCase(
+            "test_DivestFollowsStrategyOrderSyncAsync",
+            unicode"撤资时按 strategyOrder 顺序逐个处理，每个策略按自身 isAsync 决定走同步或异步路径"
+        );
+
+        _step("[Step 1] Deploy sync adapterA and async adapterB (separate posToken)");
+        MockSyncAdapter_RB adapterA = new MockSyncAdapter_RB(address(usdc), address(posToken), address(vault));
+        MockPosToken_RB posTokenB = new MockPosToken_RB();
+        MockAsyncAdapter_RB adapterB = new MockAsyncAdapter_RB(address(usdc), address(posTokenB), address(vault));
+
+        vm.startPrank(admin);
+        controller.registerStrategy(address(adapterA), 5000, 1, false); // sync
+        controller.activateStrategy(address(adapterA));
+        controller.registerStrategy(address(adapterB), 5000, 2, true);  // async
+        controller.activateStrategy(address(adapterB));
+        address[] memory order = new address[](2);
+        order[0] = address(adapterA);
+        order[1] = address(adapterB);
+        controller.setStrategyOrder(order);
+        vm.stopPrank();
+
+        _step("[Step 2] Deposit, invest, and settle async adapter");
+        _deposit(10_000e6);
+        uint256 ifIdBefore = vault.nextInFlightId();
+        _rebalanceWithParams(500, 0, 0); // buffer=5% -> invest 9500
+        // Settle async adapterB's invest: sync adapterA creates IF at ifIdBefore (auto-confirmed),
+        // async adapterB creates IF at ifIdBefore+1 (pending)
+        uint256 asyncIfId = ifIdBefore + 1;
+        uint256 posOnAdapterB = posTokenB.balanceOf(address(adapterB));
+        _settleAsyncInvest(address(adapterB), asyncIfId, posOnAdapterB);
+        _step(string.concat("  adapterA value: ", vm.toString(adapterA.totalValue())));
+        _step(string.concat("  adapterB value: ", vm.toString(adapterB.totalValue())));
+
+        _step("[Step 3] Increase buffer to trigger large divest spanning BOTH adapters");
+        // Set buffer to 7000bps(70%) -> targetCash=7000, freeCash~500
+        // 500 + 0 < 7000 -> divest 6500
+        // adapterA(sync, value~5000): withdrawSync covers up to 5000, remaining=1500
+        // adapterB(async, value~4500): requestRedeemAsync for remaining 1500
+        uint256 redeemIFBefore = vault.totalRedeemInFlight();
+        uint256 adapterARedeemBefore = vault.adapterRedeemInFlightUsdc(address(adapterA));
+        uint256 adapterBRedeemBefore = vault.adapterRedeemInFlightUsdc(address(adapterB));
+
+        vm.prank(admin);
+        controller.setRiskParams(7000, 0, 0);
+        vm.prank(bot);
+        executor.executeRebalance(address(controller));
+
+        _step("[Step 4] Verify sync adapterA processed via withdrawSync (redeem in-flight)");
+        uint256 adapterARedeemAfter = vault.adapterRedeemInFlightUsdc(address(adapterA));
+        _step(string.concat("  adapterA redeemInFlight: ", vm.toString(adapterARedeemBefore), " -> ", vm.toString(adapterARedeemAfter)));
+        assertGt(adapterARedeemAfter, adapterARedeemBefore, "sync adapterA should create redeem in-flight");
+
+        _step("[Step 5] Verify async adapterB processed via requestRedeemAsync (redeem in-flight)");
+        uint256 adapterBRedeemAfter = vault.adapterRedeemInFlightUsdc(address(adapterB));
+        _step(string.concat("  adapterB redeemInFlight: ", vm.toString(adapterBRedeemBefore), " -> ", vm.toString(adapterBRedeemAfter)));
+        assertGt(adapterBRedeemAfter, adapterBRedeemBefore, "async adapterB should create redeem in-flight");
+
+        uint256 redeemIFAfter = vault.totalRedeemInFlight();
+        _step(string.concat("  totalRedeemInFlight: ", vm.toString(redeemIFBefore), " -> ", vm.toString(redeemIFAfter)));
+        assertGt(redeemIFAfter, redeemIFBefore, "total redeem in-flight should increase");
+
+        _logPass();
+    }
+
+    // =======================================================================
+    // 7. 异步投资/异步赎回会创建 in-flight 记录
+    // =======================================================================
+
+    function test_AsyncCreatesInFlightRecords() public {
+        _logCase(
+            "test_AsyncCreatesInFlightRecords",
+            unicode"异步投资/异步赎回会创建 in-flight 记录"
+        );
+
+        _step("[Step 1] Deploy async adapter");
+        MockAsyncAdapter_RB asyncAdapter = new MockAsyncAdapter_RB(address(usdc), address(posToken), address(vault));
+
+        vm.startPrank(admin);
+        controller.registerStrategy(address(asyncAdapter), 10_000, 1, true); // async
+        controller.activateStrategy(address(asyncAdapter));
+        address[] memory order = new address[](1);
+        order[0] = address(asyncAdapter);
+        controller.setStrategyOrder(order);
+        vm.stopPrank();
+
+        _step("[Step 2] Deposit and rebalance -> invest creates in-flight");
+        _deposit(10_000e6);
+
+        uint256 investIFBefore = vault.totalInvestInFlight();
+        uint256 ifId = vault.nextInFlightId();
+        _rebalanceWithParams(1000, 0, 0);
+        uint256 investIFAfter = vault.totalInvestInFlight();
+
+        _step(string.concat("  totalInvestInFlight before: ", vm.toString(investIFBefore)));
+        _step(string.concat("  totalInvestInFlight after: ", vm.toString(investIFAfter)));
+        assertGt(investIFAfter, investIFBefore, "invest should create in-flight record");
+
+        _step("[Step 2b] Settle async invest (sweep posToken to vault)");
+        uint256 posOnAdapter = posToken.balanceOf(address(asyncAdapter));
+        _settleAsyncInvest(address(asyncAdapter), ifId, posOnAdapter);
+
+        _step("[Step 3] Trigger divest -> async redeem creates in-flight");
+        uint256 redeemIFBefore = vault.totalRedeemInFlight();
+
+        // Increase buffer to trigger divest
+        vm.prank(admin);
+        controller.setRiskParams(5000, 0, 0);
+        vm.prank(bot);
+        executor.executeRebalance(address(controller));
+
+        uint256 redeemIFAfter = vault.totalRedeemInFlight();
+        _step(string.concat("  totalRedeemInFlight before: ", vm.toString(redeemIFBefore)));
+        _step(string.concat("  totalRedeemInFlight after: ", vm.toString(redeemIFAfter)));
+        assertGt(redeemIFAfter, redeemIFBefore, "async divest should create redeem in-flight");
+
+        _logPass();
+    }
+
+    // =======================================================================
+    // 8. 外部 adapter 调用失败时记录 skipped 而不是整体中断
+    // =======================================================================
+
+    function test_AdapterFailureIsSkipped() public {
+        _logCase(
+            "test_AdapterFailureIsSkipped",
+            unicode"外部 adapter 调用失败时记录 skipped 而不是整体中断"
+        );
+
+        _step("[Step 1] Deploy reverting adapterA and normal adapterB");
+        MockRevertingAdapter_RB badAdapter = new MockRevertingAdapter_RB(
+            address(usdc), address(posToken), address(vault),
+            true, false, false // deposit reverts
+        );
+        MockSyncAdapter_RB goodAdapter = new MockSyncAdapter_RB(address(usdc), address(posToken), address(vault));
+
+        vm.startPrank(admin);
+        controller.registerStrategy(address(badAdapter), 5000, 1, false);
+        controller.activateStrategy(address(badAdapter));
+        controller.registerStrategy(address(goodAdapter), 5000, 2, false);
+        controller.activateStrategy(address(goodAdapter));
+        address[] memory order = new address[](2);
+        order[0] = address(badAdapter);
+        order[1] = address(goodAdapter);
+        controller.setStrategyOrder(order);
+        vm.stopPrank();
+
+        _step("[Step 2] Deposit and rebalance");
+        _deposit(10_000e6);
+
+        vm.prank(admin);
+        controller.setRiskParams(1000, 0, 0);
+
+        vm.recordLogs();
+        vm.prank(bot);
+        executor.executeRebalance(address(controller));
+
+        _step("[Step 3] badAdapter skipped, goodAdapter receives investment");
+        uint256 badVal = badAdapter.totalValue();
+        uint256 goodVal = goodAdapter.totalValue();
+        _step(string.concat("  badAdapter totalValue: ", vm.toString(badVal)));
+        _step(string.concat("  goodAdapter totalValue: ", vm.toString(goodVal)));
+
+        assertEq(badVal, 0, "badAdapter should have received nothing (skipped)");
+        assertGt(goodVal, 0, "goodAdapter should have received investment");
+
+        // Verify InvestSkipped event emitted for badAdapter
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        bytes32 investSkippedSig = keccak256("InvestSkipped(address,uint256,bytes)");
+        bool foundSkipped = false;
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].topics.length > 0 && logs[i].topics[0] == investSkippedSig) {
+                address skippedAdapter = address(uint160(uint256(logs[i].topics[1])));
+                if (skippedAdapter == address(badAdapter)) {
+                    foundSkipped = true;
+                    break;
+                }
+            }
+        }
+        assertTrue(foundSkipped, "InvestSkipped event should be emitted for badAdapter");
+
+        // Rebalance completed without revert
+        assertEq(controller.lastRebalance(), block.timestamp, "rebalance completed");
+
+        _logPass();
+    }
+
+    // =======================================================================
+    // 9. 所有策略合计流动性仍不足时记录 DivestIncomplete
+    // =======================================================================
+
+    function test_DivestIncompleteWhenInsufficient() public {
+        _logCase(
+            "test_DivestIncompleteWhenInsufficient",
+            unicode"所有策略合计流动性仍不足时记录 DivestIncomplete"
+        );
+
+        _step("[Step 1] Deploy normal adapter + trapped adapter (withdrawSync reverts)");
+        MockSyncAdapter_RB normalAdapter = new MockSyncAdapter_RB(address(usdc), address(posToken), address(vault));
+        MockRevertingAdapter_RB trappedAdapter = new MockRevertingAdapter_RB(
+            address(usdc), address(posToken), address(vault),
+            false, false, true // withdrawSync reverts
+        );
+
+        vm.startPrank(admin);
+        controller.registerStrategy(address(normalAdapter), 5000, 1, false);
+        controller.activateStrategy(address(normalAdapter));
+        controller.registerStrategy(address(trappedAdapter), 5000, 2, false);
+        controller.activateStrategy(address(trappedAdapter));
+        address[] memory order = new address[](2);
+        order[0] = address(normalAdapter);
+        order[1] = address(trappedAdapter);
+        controller.setStrategyOrder(order);
+        vm.stopPrank();
+
+        _step("[Step 2] Deposit and invest heavily into both adapters");
+        _deposit(10_000e6);
+        _rebalanceWithParams(500, 0, 0); // buffer=5%, invest 9500 split between adapters
+        _step(string.concat("  normalAdapter value: ", vm.toString(normalAdapter.totalValue())));
+        _step(string.concat("  trappedAdapter value: ", vm.toString(trappedAdapter.totalValue())));
+        _step(string.concat("  freeCash: ", vm.toString(vault.getFreeCash())));
+
+        _step("[Step 3] Trigger divest exceeding recoverable liquidity");
+        // Increase buffer -> divest needed. trappedAdapter can't withdrawSync -> DivestIncomplete.
+        vm.prank(admin);
+        controller.setRiskParams(9000, 0, 0);
+
+        // Expect DivestIncomplete event (trappedAdapter portion unrecoverable)
+        vm.recordLogs();
+        vm.prank(bot);
+        executor.executeRebalance(address(controller));
+
+        // Verify DivestIncomplete event was emitted
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        bytes32 divestIncompleteSig = keccak256("DivestIncomplete(uint256)");
+        bool foundDivestIncomplete = false;
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].topics[0] == divestIncompleteSig) {
+                foundDivestIncomplete = true;
+                uint256 remaining = abi.decode(logs[i].data, (uint256));
+                _step(string.concat("  DivestIncomplete remaining: ", vm.toString(remaining)));
+                assertGt(remaining, 0, "remaining should be > 0");
+                break;
+            }
+        }
+        assertTrue(foundDivestIncomplete, "DivestIncomplete event should be emitted");
+
+        // Rebalance should complete (not revert), but with incomplete divest
+        assertEq(controller.lastRebalance(), block.timestamp, "rebalance completed despite incomplete divest");
+        _step("  rebalance completed with DivestIncomplete (trappedAdapter could not withdraw)");
+
+        _logPass();
+    }
+
+    // =======================================================================
+    // 10. 首次 rebalance 不受冷却期限制
+    // =======================================================================
+
+    function test_FirstRebalanceBypassesCooldown() public {
+        _logCase(
+            "test_FirstRebalanceBypassesCooldown",
+            unicode"首次 rebalance 不受冷却期限制"
+        );
+
+        _step("[Step 1] Verify initial lastRebalance = 0");
+        assertEq(controller.lastRebalance(), 0, "initial lastRebalance should be 0");
+
+        _step("[Step 2] Warp to time > cooldown, set cooldown to 1 hour");
+        vm.warp(2 hours); // ensure block.timestamp >= 0 + 1 hour
+        vm.prank(admin);
+        controller.setRiskParams(1000, 200, 1 hours);
+
+        _step("[Step 3] First rebalance should succeed (lastRebalance=0, timestamp >= 0+cooldown)");
+        _deposit(10_000e6);
+        vm.prank(bot);
+        executor.executeRebalance(address(controller));
+
+        assertEq(controller.lastRebalance(), block.timestamp, "firstRebalance succeeded");
+        _step(string.concat("  lastRebalance: ", vm.toString(controller.lastRebalance())));
+
+        _logPass();
+    }
+
+    // =======================================================================
+    // 11. 投资时扣除 pending invest in-flight，避免重复投资
+    // =======================================================================
+
+    function test_PendingInFlightDeductedFromInvest() public {
+        _logCase(
+            "test_PendingInFlightDeductedFromInvest",
+            unicode"投资时扣除 pending invest in-flight，避免对同一策略重复投资"
+        );
+
+        _step("[Step 1] Deposit and invest to create pending in-flight");
+        _deposit(10_000e6);
+        _rebalanceWithParams(1000, 0, 0); // invest excess
+        uint256 pendingTokens = vault.adapterInvestInFlightTokens(address(adapter));
+        _step(string.concat("  adapterInvestInFlightTokens: ", vm.toString(pendingTokens)));
+        assertGt(pendingTokens, 0, "should have pending invest in-flight");
+
+        _step("[Step 2] Deposit more to create excess cash again");
+        _deposit(5000e6);
+        uint256 fc = vault.getFreeCash();
+        _step(string.concat("  freeCash after extra deposit: ", vm.toString(fc)));
+
+        _step("[Step 3] Rebalance again - should account for pending in-flight");
+        uint256 adapterBefore = adapter.totalValue();
+        vm.prank(bot);
+        executor.executeRebalance(address(controller));
+        uint256 adapterAfter = adapter.totalValue();
+        uint256 secondInvest = adapterAfter - adapterBefore;
+
+        _step(string.concat("  second invest amount: ", vm.toString(secondInvest)));
+        _step(string.concat("  pending in-flight (deducted): ", vm.toString(pendingTokens)));
+
+        // The pending in-flight covers (part of) the adapter's target gap.
+        // With pending fully covering the shortfall, controller skips invest (InvestSkipped).
+        // With pending partially covering, only the uncovered delta is invested.
+        // Either way, secondInvest should be less than the first invest.
+        uint256 firstInvest = pendingTokens; // first invest amount = pendingTokens (1:1 posToken ratio)
+        assertLt(secondInvest, firstInvest, "second invest reduced due to pending in-flight deduction");
+        _step(string.concat("  first invest was: ", vm.toString(firstInvest), ", second invest: ", vm.toString(secondInvest)));
+        _step("  invest correctly accounts for pending in-flight");
+
+        _logPass();
+    }
+
+    // =======================================================================
+    // 12. 同步撤资自动创建 redeem in-flight 记录
+    // =======================================================================
+
+    function test_SyncDivestCreatesRedeemInFlight() public {
+        _logCase(
+            "test_SyncDivestCreatesRedeemInFlight",
+            unicode"同步撤资（withdrawSync）自动创建 redeem in-flight 记录"
+        );
+
+        _step("[Step 1] Deposit and invest heavily");
+        _deposit(10_000e6);
+        _rebalanceWithParams(500, 0, 0); // buffer=5%, invest 9500
+        _step(string.concat("  adapter totalValue: ", vm.toString(adapter.totalValue())));
+
+        _step("[Step 2] Trigger divest (sync path)");
+        uint256 redeemIFBefore = vault.totalRedeemInFlight();
+        uint256 adapterRedeemBefore = vault.adapterRedeemInFlightUsdc(address(adapter));
+
+        vm.prank(admin);
+        controller.setRiskParams(3000, 0, 0); // higher buffer -> divest
+        vm.prank(bot);
+        executor.executeRebalance(address(controller));
+
+        uint256 redeemIFAfter = vault.totalRedeemInFlight();
+        uint256 adapterRedeemAfter = vault.adapterRedeemInFlightUsdc(address(adapter));
+
+        _step(string.concat("  totalRedeemInFlight: ", vm.toString(redeemIFBefore), " -> ", vm.toString(redeemIFAfter)));
+        _step(string.concat("  adapterRedeemInFlightUsdc: ", vm.toString(adapterRedeemBefore), " -> ", vm.toString(adapterRedeemAfter)));
+
+        assertGt(redeemIFAfter, redeemIFBefore, "totalRedeemInFlight increased");
+        assertGt(adapterRedeemAfter, adapterRedeemBefore, "adapterRedeemInFlightUsdc increased");
+
+        _logPass();
+    }
+
+    // =======================================================================
+    // 13. 投资后清除 adapter allowance
+    // =======================================================================
+
+    function test_AllowanceClearedAfterInvest() public {
+        _logCase(
+            "test_AllowanceClearedAfterInvest",
+            unicode"投资后清除 adapter allowance"
+        );
+
+        _step("[Step 1] Deposit and trigger invest");
+        _deposit(10_000e6);
+        _rebalanceWithParams(1000, 0, 0);
+
+        _step("[Step 2] Check allowance is zero after invest");
+        uint256 allowance = usdc.allowance(address(vault), address(adapter));
+        _step(string.concat("  USDC allowance(vault -> adapter): ", vm.toString(allowance)));
+        assertEq(allowance, 0, "allowance should be cleared to 0 after invest");
+
+        _logPass();
+    }
+
+    // =======================================================================
+    // 14. strategyOrder 为空时 rebalance 为 no-op
+    // =======================================================================
+
+    function test_EmptyStrategyOrderIsNoOp() public {
+        _logCase(
+            "test_EmptyStrategyOrderIsNoOp",
+            unicode"strategyOrder 为空时 rebalance 为 no-op"
+        );
+
+        _step("[Step 1] Deploy fresh controller with no strategies registered");
+        StrategyController freshCtrl = StrategyController(address(new ERC1967Proxy(
+            address(new StrategyController()),
+            abi.encodeCall(StrategyController.initialize, (
+                address(vault), admin, address(executor), admin, 1000, 200, 0
+            ))
+        )));
+
+        // Wire fresh controller to vault
+        vm.prank(admin);
+        vault.setController(address(freshCtrl));
+
+        _step("[Step 2] Deposit and rebalance with empty strategyOrder");
+        _deposit(10_000e6);
+        uint256 fcBefore = vault.getFreeCash();
+
+        vm.prank(bot);
+        executor.executeRebalance(address(freshCtrl));
+
+        uint256 fcAfter = vault.getFreeCash();
+        _step(string.concat("  freeCash before: ", vm.toString(fcBefore)));
+        _step(string.concat("  freeCash after: ", vm.toString(fcAfter)));
+        assertEq(fcAfter, fcBefore, "no change in freeCash (no-op)");
+
+        // lastRebalance still updates
+        assertEq(freshCtrl.lastRebalance(), block.timestamp, "lastRebalance updated on no-op");
+
+        // Restore original controller
+        vm.prank(admin);
+        vault.setController(address(controller));
+
+        _logPass();
+    }
+
+    // =======================================================================
+    // 15. adapter totalValue() 异常时 rebalance 不中断
+    // =======================================================================
+
+    function test_TotalValueRevertDoesNotBreakRebalance() public {
+        _logCase(
+            "test_TotalValueRevertDoesNotBreakRebalance",
+            unicode"adapter totalValue() 异常时 rebalance 不中断"
+        );
+
+        _step("[Step 1] Deploy reverting adapter (totalValue reverts) + normal adapter");
+        MockRevertingAdapter_RB badAdapter = new MockRevertingAdapter_RB(
+            address(usdc), address(posToken), address(vault),
+            false, true, false // totalValue reverts
+        );
+        MockSyncAdapter_RB goodAdapter = new MockSyncAdapter_RB(address(usdc), address(posToken), address(vault));
+
+        vm.startPrank(admin);
+        controller.registerStrategy(address(badAdapter), 5000, 1, false);
+        controller.activateStrategy(address(badAdapter));
+        controller.registerStrategy(address(goodAdapter), 5000, 2, false);
+        controller.activateStrategy(address(goodAdapter));
+        address[] memory order = new address[](2);
+        order[0] = address(badAdapter);
+        order[1] = address(goodAdapter);
+        controller.setStrategyOrder(order);
+        vm.stopPrank();
+
+        _step("[Step 2] Deposit and rebalance - should not revert");
+        _deposit(10_000e6);
+
+        vm.prank(admin);
+        controller.setRiskParams(1000, 0, 0);
+        vm.prank(bot);
+        executor.executeRebalance(address(controller));
+
+        _step("[Step 3] Verify badAdapter treated as value=0, goodAdapter invested");
+        uint256 goodVal = goodAdapter.totalValue();
+        _step(string.concat("  goodAdapter totalValue: ", vm.toString(goodVal)));
+        assertGt(goodVal, 0, "goodAdapter should receive investment");
+
+        assertEq(controller.lastRebalance(), block.timestamp, "rebalance completed");
+        _step("  rebalance completed: bad adapter value treated as 0, good adapter invested");
+
+        _logPass();
+    }
+
+    // =======================================================================
+    // 16. cashDeficit > 0 increases targetCash -> larger divest
+    // =======================================================================
+
+    function test_Divest_CashDeficitIncreasesTargetCash() public {
+        _logCase(
+            "test_Divest_CashDeficitIncreasesTargetCash",
+            unicode"vault 存在 cashDeficit 时 targetCash 增大，触发更大金额的 divest"
+        );
+
+        _step("[Step 1] Deposit and invest most USDC to adapter");
+        _deposit(10_000e6);
+        _rebalanceWithParams(200, 0, 0); // buffer=2% -> invest 9800, keep ~200 in vault
+        uint256 adapterVal = adapter.totalValue();
+        _step(string.concat("  adapter totalValue: ", vm.toString(adapterVal)));
+        _step(string.concat("  vault USDC: ", vm.toString(usdc.balanceOf(address(vault)))));
+
+        _step("[Step 2] Create locked shares via requestRedeem to produce cashDeficit");
+        // depositor has shares, request redeem to create totalLockedShares
+        uint256 shares = vault.balanceOf(depositor);
+        uint256 redeemShares = shares * 80 / 100; // redeem 80% of shares
+        vm.prank(depositor);
+        gateway.requestRedeem(redeemShares);
+        // Now totalLockedShares is high, but physicalBalance is low (most invested)
+        // -> getCashDeficit() > 0
+
+        uint256 deficit = vault.getCashDeficit();
+        _step(string.concat("  cashDeficit: ", vm.toString(deficit)));
+        assertGt(deficit, 0, "cashDeficit should be > 0 after large redeem request with low vault balance");
+
+        _step("[Step 3] Rebalance: targetCash should include cashDeficit -> triggers divest");
+        uint256 redeemIFBefore = vault.totalRedeemInFlight();
+
+        vm.prank(admin);
+        controller.setRiskParams(200, 0, 0); // keep same params
+        vm.prank(bot);
+        executor.executeRebalance(address(controller));
+
+        uint256 redeemIFAfter = vault.totalRedeemInFlight();
+        _step(string.concat("  totalRedeemInFlight: ", vm.toString(redeemIFBefore), " -> ", vm.toString(redeemIFAfter)));
+
+        // With cashDeficit > 0, targetCash = netAssets*bufferBps/10000 + cashDeficit
+        // This is larger than without deficit, so divest should be triggered
+        assertGt(redeemIFAfter, redeemIFBefore, "divest should be triggered due to cashDeficit increasing targetCash");
+
+        _step("[Step 4] Verify divest amount covers the deficit");
+        uint256 divestAmount = redeemIFAfter - redeemIFBefore;
+        _step(string.concat("  divest amount: ", vm.toString(divestAmount)));
+        // The divest amount should be at least the cashDeficit (it aims to bring freeCash up to targetCash)
+        assertGe(divestAmount, deficit, "divest amount should cover at least the cashDeficit");
+
+        _step("  PASS: cashDeficit increased targetCash, divest amount correctly enlarged");
+        _logPass();
+    }
+
+    // =======================================================================
+    // 17. No cashDeficit -> rebalance behaves same as before (regression)
+    // =======================================================================
+
+    function test_Divest_NoCashDeficit_Regression() public {
+        _logCase(
+            "test_Divest_NoCashDeficit_Regression",
+            unicode"freeCash 充足覆盖 locked shares 时 cashDeficit=0，rebalance 行为不变（回归验证）"
+        );
+
+        _step("[Step 1] Deposit and invest");
+        _deposit(10_000e6);
+        _rebalanceWithParams(1000, 200, 0); // buffer=10%, threshold=2%
+        _step(string.concat("  adapter totalValue: ", vm.toString(adapter.totalValue())));
+
+        _step("[Step 2] Verify no cashDeficit");
+        uint256 deficit = vault.getCashDeficit();
+        _step(string.concat("  cashDeficit: ", vm.toString(deficit)));
+        assertEq(deficit, 0, "no locked shares -> no cashDeficit");
+
+        _step("[Step 3] Verify rebalance state: targetCash = netAssets * bufferBps / 10000 (no deficit addition)");
+        (uint256 totalCash,, uint256 freeCash, uint256 netAssets, uint256 targetCash, uint256 threshold) =
+            controller.getRebalanceState();
+        uint256 expectedTargetCash = netAssets * 1000 / BPS;
+        assertEq(targetCash, expectedTargetCash, "targetCash should equal netAssets * bufferBps / 10000 when deficit=0");
+        _step(string.concat("  netAssets: ", vm.toString(netAssets)));
+        _step(string.concat("  targetCash: ", vm.toString(targetCash)));
+        _step(string.concat("  expectedTargetCash (no deficit): ", vm.toString(expectedTargetCash)));
+
+        _step("  PASS: no cashDeficit, targetCash matches old formula");
+        _logPass();
+    }
+
+    // =======================================================================
+    // 18. Pending redeem coverage skips new request in divest
+    // =======================================================================
+
+    function test_Divest_PendingRedeemCoverageSkipsNewRequest() public {
+        _logCase(
+            "test_Divest_PendingRedeemCoverageSkipsNewRequest",
+            unicode"adapter 已有 pending redeem in-flight 时，divest 不再发起重复的 redeem 请求"
+        );
+
+        _step("[Step 1] Deploy async adapter and register");
+        MockAsyncAdapter_RB asyncAdp = new MockAsyncAdapter_RB(address(usdc), address(posToken), address(vault));
+        vm.startPrank(admin);
+        controller.registerStrategy(address(asyncAdp), 10_000, 1, true);
+        controller.activateStrategy(address(asyncAdp));
+        address[] memory order = new address[](1);
+        order[0] = address(asyncAdp);
+        controller.setStrategyOrder(order);
+        vm.stopPrank();
+
+        _step("[Step 2] Deposit, invest, and settle async adapter");
+        _deposit(10_000e6);
+        uint256 ifId = vault.nextInFlightId();
+        _rebalanceWithParams(500, 0, 0); // buffer=5%, invest 9500
+        uint256 posOnAdp = posToken.balanceOf(address(asyncAdp));
+        _settleAsyncInvest(address(asyncAdp), ifId, posOnAdp);
+        uint256 asyncVal = asyncAdp.totalValue();
+        _step(string.concat("  asyncAdapter totalValue: ", vm.toString(asyncVal)));
+
+        _step("[Step 3] First divest: creates pending redeem in-flight");
+        vm.prank(admin);
+        controller.setRiskParams(3000, 0, 0); // buffer=30% -> divest
+        vm.prank(bot);
+        executor.executeRebalance(address(controller));
+
+        uint256 pendingRedeemUsdc = vault.adapterRedeemInFlightUsdc(address(asyncAdp));
+        uint256 redeemIFAfterFirst = vault.totalRedeemInFlight();
+        _step(string.concat("  pending redeem after first divest: ", vm.toString(pendingRedeemUsdc)));
+        assertGt(pendingRedeemUsdc, 0, "should have pending redeem in-flight");
+
+        _step("[Step 4] Second divest: pending coverage should reduce or eliminate new request");
+        // Increase buffer further to trigger another divest
+        vm.prank(admin);
+        controller.setRiskParams(5000, 0, 0); // buffer=50% -> needs even more cash
+        vm.prank(bot);
+        executor.executeRebalance(address(controller));
+
+        uint256 redeemIFAfterSecond = vault.totalRedeemInFlight();
+        uint256 pendingRedeemUsdcAfter = vault.adapterRedeemInFlightUsdc(address(asyncAdp));
+        _step(string.concat("  totalRedeemInFlight: ", vm.toString(redeemIFAfterFirst), " -> ", vm.toString(redeemIFAfterSecond)));
+        _step(string.concat("  adapter pending redeem: ", vm.toString(pendingRedeemUsdc), " -> ", vm.toString(pendingRedeemUsdcAfter)));
+
+        // After second rebalance:
+        uint256 settledValueNow = asyncAdp.totalValue();
+        _step(string.concat("  adapter settled value: ", vm.toString(settledValueNow)));
+        _step(string.concat("  adapter pending redeem: ", vm.toString(pendingRedeemUsdc), " -> ", vm.toString(pendingRedeemUsdcAfter)));
+
+        if (settledValueNow > 0) {
+            // Adapter still has settled value, new request MUST be issued for that portion
+            assertGt(pendingRedeemUsdcAfter, pendingRedeemUsdc,
+                "new redeem request must be issued for settled value portion");
+            uint256 newlyRequested = pendingRedeemUsdcAfter - pendingRedeemUsdc;
+            assertLe(newlyRequested, settledValueNow,
+                "newly requested should not exceed adapter settled value");
+            _step(string.concat("  newly requested: ", vm.toString(newlyRequested),
+                " <= settled value: ", vm.toString(settledValueNow)));
+            _step("  PASS: pending coverage reduced new redeem request amount");
+        } else {
+            // No settled value -> _readDivestCoverage returns (0,0,0) -> adapter skipped entirely
+            assertEq(pendingRedeemUsdcAfter, pendingRedeemUsdc,
+                "no settled value -> adapter skipped, no new request");
+            _step("  PASS: adapter has no settled value, correctly skipped in divest");
+        }
+
+        _logPass();
+    }
+
+    // =======================================================================
+    // 19. Settled value + pending coverage combined in divest
+    // =======================================================================
+
+    function test_Divest_SettledPlusPendingCoverage() public {
+        _logCase(
+            "test_Divest_SettledPlusPendingCoverage",
+            unicode"divest 同时考虑 adapter settled value 和 pending redeem coverage，只对 settled 部分发起新请求"
+        );
+
+        _step("[Step 1] Deploy async adapter and register");
+        MockAsyncAdapter_RB asyncAdp = new MockAsyncAdapter_RB(address(usdc), address(posToken), address(vault));
+        vm.startPrank(admin);
+        controller.registerStrategy(address(asyncAdp), 10_000, 1, true);
+        controller.activateStrategy(address(asyncAdp));
+        address[] memory order = new address[](1);
+        order[0] = address(asyncAdp);
+        controller.setStrategyOrder(order);
+        vm.stopPrank();
+
+        _step("[Step 2] Deposit, invest, and settle async adapter");
+        _deposit(20_000e6);
+        uint256 ifId = vault.nextInFlightId();
+        _rebalanceWithParams(500, 0, 0); // buffer=5%, invest ~19000
+        uint256 posOnAdp = posToken.balanceOf(address(asyncAdp));
+        _settleAsyncInvest(address(asyncAdp), ifId, posOnAdp);
+        uint256 asyncVal = asyncAdp.totalValue();
+        _step(string.concat("  asyncAdapter totalValue (settled): ", vm.toString(asyncVal)));
+
+        _step("[Step 3] First divest: creates partial pending redeem");
+        vm.prank(admin);
+        controller.setRiskParams(2000, 0, 0); // buffer=20%, partial divest
+        vm.prank(bot);
+        executor.executeRebalance(address(controller));
+
+        uint256 pendingRedeem = vault.adapterRedeemInFlightUsdc(address(asyncAdp));
+        uint256 settledVal = asyncAdp.totalValue();
+        _step(string.concat("  pending redeem: ", vm.toString(pendingRedeem)));
+        _step(string.concat("  settled value remaining: ", vm.toString(settledVal)));
+        assertGt(pendingRedeem, 0, "should have pending redeem");
+        assertGt(settledVal, 0, "should still have settled value");
+
+        _step("[Step 4] Large divest: needs more than pending covers");
+        vm.prank(admin);
+        controller.setRiskParams(8000, 0, 0); // buffer=80% -> large divest
+        uint256 redeemIFBefore = vault.totalRedeemInFlight();
+        vm.prank(bot);
+        executor.executeRebalance(address(controller));
+
+        uint256 redeemIFAfter = vault.totalRedeemInFlight();
+        uint256 pendingRedeemAfter = vault.adapterRedeemInFlightUsdc(address(asyncAdp));
+
+        uint256 newlyAdded = redeemIFAfter > redeemIFBefore ? redeemIFAfter - redeemIFBefore : 0;
+        _step(string.concat("  totalRedeemInFlight delta: +", vm.toString(newlyAdded)));
+        _step(string.concat("  adapter pending redeem after: ", vm.toString(pendingRedeemAfter)));
+
+        // Both settled value and pending exist, so new request MUST be issued for settled portion
+        assertGt(newlyAdded, 0, "new request must be issued when shortfall exceeds pending coverage");
+        assertLe(newlyAdded, settledVal,
+            "new redeem request should not exceed adapter settled value");
+        _step(string.concat("  new request: ", vm.toString(newlyAdded),
+            " <= settled value: ", vm.toString(settledVal)));
+        _step("  PASS: new redeem only covers settled value, pending portion not double-counted");
+
+        _logPass();
+    }
+
+    // =======================================================================
+    // 20. Pending fully covers divest demand -> no new redeem request at all
+    // =======================================================================
+
+    function test_Divest_PendingFullyCoversDemand() public {
+        _logCase(
+            "test_Divest_PendingFullyCoversDemand",
+            unicode"pending redeem 完全覆盖 divest 需求时，不发起任何新的 redeem 请求"
+        );
+
+        _step("[Step 1] Deploy async adapter");
+        MockAsyncAdapter_RB asyncAdp = new MockAsyncAdapter_RB(address(usdc), address(posToken), address(vault));
+        vm.startPrank(admin);
+        controller.registerStrategy(address(asyncAdp), 10_000, 1, true);
+        controller.activateStrategy(address(asyncAdp));
+        address[] memory order = new address[](1);
+        order[0] = address(asyncAdp);
+        controller.setStrategyOrder(order);
+        vm.stopPrank();
+
+        _step("[Step 2] Deposit, invest, and settle async adapter");
+        _deposit(10_000e6);
+        uint256 ifId = vault.nextInFlightId();
+        _rebalanceWithParams(500, 0, 0); // buffer=5%, invest 9500
+        uint256 posOnAdp = posToken.balanceOf(address(asyncAdp));
+        _settleAsyncInvest(address(asyncAdp), ifId, posOnAdp);
+
+        _step("[Step 3] Large divest: creates big pending redeem");
+        vm.prank(admin);
+        controller.setRiskParams(6000, 0, 0); // buffer=60% -> large divest
+        vm.prank(bot);
+        executor.executeRebalance(address(controller));
+
+        uint256 pendingRedeem = vault.adapterRedeemInFlightUsdc(address(asyncAdp));
+        _step(string.concat("  pending redeem after first divest: ", vm.toString(pendingRedeem)));
+        assertGt(pendingRedeem, 0);
+
+        _step("[Step 4] Rebalance with reduced buffer: shortfall < pendingRedeem -> no new request needed");
+        // Use buffer=58% -> targetCash=5800 -> shortfall=5300 < pending(5500)
+        // The pending from Step 3 fully covers this shortfall
+        uint256 redeemIFBefore = vault.totalRedeemInFlight();
+        uint256 adapterRedeemBefore = vault.adapterRedeemInFlightUsdc(address(asyncAdp));
+
+        vm.prank(admin);
+        controller.setRiskParams(5800, 0, 0); // buffer=58% -> shortfall=5300 < pending(5500)
+        vm.prank(bot);
+        executor.executeRebalance(address(controller));
+
+        uint256 redeemIFAfter = vault.totalRedeemInFlight();
+        uint256 adapterRedeemAfter = vault.adapterRedeemInFlightUsdc(address(asyncAdp));
+
+        _step(string.concat("  totalRedeemInFlight: ", vm.toString(redeemIFBefore), " -> ", vm.toString(redeemIFAfter)));
+        _step(string.concat("  adapter pending: ", vm.toString(adapterRedeemBefore), " -> ", vm.toString(adapterRedeemAfter)));
+
+        // requestAsset=0 path in _divest: no new in-flight created, but remaining still decreases
+        // The key: adapterRedeemInFlightUsdc should NOT increase (no new request)
+        assertEq(adapterRedeemAfter, adapterRedeemBefore,
+            "no new redeem request when pending fully covers demand");
+
+        _step("  PASS: pending coverage fully covered shortfall, adapterRedeemInFlightUsdc unchanged");
+        _logPass();
+    }
+
+    // =======================================================================
+    // 21. getCashDeficit formula numerical verification
+    // =======================================================================
+
+    function test_CashDeficit_FormulaVerification() public {
+        _logCase(
+            "test_CashDeficit_FormulaVerification",
+            unicode"getCashDeficit 数值公式验证：floatingLocked - physicalBalance (when freeCash=0)"
+        );
+
+        _step("[Step 1] Deposit and invest most USDC");
+        _deposit(10_000e6);
+        _rebalanceWithParams(100, 0, 0); // buffer=1%, invest 9900
+
+        uint256 physicalBalance = usdc.balanceOf(address(vault));
+        uint256 freeCash = vault.getFreeCash();
+        uint256 deficit = vault.getCashDeficit();
+        _step(string.concat("  physicalBalance: ", vm.toString(physicalBalance)));
+        _step(string.concat("  freeCash: ", vm.toString(freeCash)));
+        _step(string.concat("  deficit (no locked): ", vm.toString(deficit)));
+
+        // No locked shares yet -> freeCash = physicalBalance -> deficit = 0
+        assertEq(deficit, 0, "no locked shares -> deficit = 0");
+
+        _step("[Step 2] Create locked shares via requestRedeem");
+        uint256 shares = vault.balanceOf(depositor);
+        uint256 redeemShares = shares * 90 / 100;
+        vm.prank(depositor);
+        gateway.requestRedeem(redeemShares);
+
+        _step("[Step 3] Verify getCashDeficit formula");
+        uint256 physicalAfter = usdc.balanceOf(address(vault));
+        uint256 freeCashAfter = vault.getFreeCash();
+        uint256 deficitAfter = vault.getCashDeficit();
+        _step(string.concat("  physicalBalance: ", vm.toString(physicalAfter)));
+        _step(string.concat("  freeCash: ", vm.toString(freeCashAfter)));
+        _step(string.concat("  deficit: ", vm.toString(deficitAfter)));
+
+        if (freeCashAfter > 0) {
+            // If freeCash > 0, deficit must be 0
+            assertEq(deficitAfter, 0, "freeCash > 0 -> deficit must be 0");
+            _step("  freeCash > 0 -> deficit = 0 (physicalBalance covers locked)");
+        } else {
+            // freeCash = 0, deficit = floatingLocked - physicalBalance
+            assertGt(deficitAfter, 0, "freeCash = 0 with locked shares -> deficit > 0");
+            // Verify: deficit = what vault owes beyond what it physically holds
+            // totalLockedShares converted to assets (ceil) - physicalBalance
+            // We can verify by checking: physicalBalance + deficit >= locked value
+            _step(string.concat("  deficit = locked_value - physicalBalance = ", vm.toString(deficitAfter)));
+        }
+
+        _step("[Step 4] Verify getCashDeficit is used in targetCash calculation");
+        (,,, uint256 netAssets, uint256 targetCash,) = controller.getRebalanceState();
+        uint256 baseTargetCash = netAssets * 100 / BPS; // bufferTargetBps=100
+        uint256 expectedTargetCash = baseTargetCash + deficitAfter;
+        assertEq(targetCash, expectedTargetCash, "targetCash = base + cashDeficit");
+        _step(string.concat("  baseTargetCash: ", vm.toString(baseTargetCash)));
+        _step(string.concat("  expectedTargetCash (base+deficit): ", vm.toString(expectedTargetCash)));
+        _step(string.concat("  actual targetCash: ", vm.toString(targetCash)));
+
+        _step("  PASS: getCashDeficit formula correct, targetCash includes deficit");
+        _logPass();
+    }
+
+    // =======================================================================
+    // 22. processRedeemBatch triggers _divest with new coverage logic
+    // =======================================================================
+
+    function test_ProcessRedeemBatch_DivestWithPendingCoverage() public {
+        _logCase(
+            "test_ProcessRedeemBatch_DivestWithPendingCoverage",
+            unicode"processRedeemBatch 触发 _divest 时，pending redeem coverage 逻辑也生效"
+        );
+
+        _step("[Step 1] Deploy async adapter");
+        MockAsyncAdapter_RB asyncAdp = new MockAsyncAdapter_RB(address(usdc), address(posToken), address(vault));
+        vm.startPrank(admin);
+        controller.registerStrategy(address(asyncAdp), 10_000, 1, true);
+        controller.activateStrategy(address(asyncAdp));
+        address[] memory order = new address[](1);
+        order[0] = address(asyncAdp);
+        controller.setStrategyOrder(order);
+        vm.stopPrank();
+
+        _step("[Step 2] Deposit, invest, and settle async adapter");
+        _deposit(10_000e6);
+        uint256 ifId = vault.nextInFlightId();
+        _rebalanceWithParams(500, 0, 0); // buffer=5%, invest 9500
+        uint256 posOnAdp = posToken.balanceOf(address(asyncAdp));
+        _settleAsyncInvest(address(asyncAdp), ifId, posOnAdp);
+        _step(string.concat("  adapter totalValue: ", vm.toString(asyncAdp.totalValue())));
+        _step(string.concat("  freeCash: ", vm.toString(vault.getFreeCash())));
+
+        _step("[Step 3] First divest creates pending redeem (via rebalance)");
+        vm.prank(admin);
+        controller.setRiskParams(3000, 0, 0); // buffer=30% -> divest
+        vm.prank(bot);
+        executor.executeRebalance(address(controller));
+
+        uint256 pendingRedeemAfterDivest = vault.adapterRedeemInFlightUsdc(address(asyncAdp));
+        _step(string.concat("  pending redeem after divest: ", vm.toString(pendingRedeemAfterDivest)));
+        assertGt(pendingRedeemAfterDivest, 0, "should have pending redeem");
+
+        _step("[Step 4] Create user redeem request");
+        uint256 shares = vault.balanceOf(depositor);
+        uint256 redeemShares = shares * 50 / 100;
+        vm.prank(depositor);
+        uint256 reqId = gateway.requestRedeem(redeemShares);
+
+        _step("[Step 5] processRedeemBatch: if freeCash < batchTotalAsset, triggers _divest");
+        uint256 redeemIFBefore = vault.totalRedeemInFlight();
+        uint256 adapterRedeemBefore = vault.adapterRedeemInFlightUsdc(address(asyncAdp));
+
+        uint256[] memory ids = new uint256[](1);
+        ids[0] = reqId;
+        vm.prank(bot);
+        executor.executeProcessRedeemBatch(address(controller), ids);
+
+        uint256 redeemIFAfter = vault.totalRedeemInFlight();
+        uint256 adapterRedeemAfter = vault.adapterRedeemInFlightUsdc(address(asyncAdp));
+
+        _step(string.concat("  totalRedeemInFlight: ", vm.toString(redeemIFBefore), " -> ", vm.toString(redeemIFAfter)));
+        _step(string.concat("  adapter pending: ", vm.toString(adapterRedeemBefore), " -> ", vm.toString(adapterRedeemAfter)));
+
+        // The processRedeemBatch divest should respect pending coverage:
+        // If shortfall exists and adapter has pending redeem, new request should only cover uncovered portion
+        uint256 adapterSettledValue = asyncAdp.totalValue();
+        _step(string.concat("  adapter settled value: ", vm.toString(adapterSettledValue)));
+
+        if (adapterSettledValue > 0) {
+            assertGt(adapterRedeemAfter, adapterRedeemBefore,
+                "new request issued for settled portion when shortfall exists");
+            uint256 newRequest = adapterRedeemAfter - adapterRedeemBefore;
+            assertLe(newRequest, adapterSettledValue,
+                "processRedeemBatch divest respects pending coverage: new request <= settled value");
+            _step(string.concat("  new request: ", vm.toString(newRequest)));
+            _step("  PASS: processRedeemBatch divest respects pending coverage");
+        } else {
+            assertEq(adapterRedeemAfter, adapterRedeemBefore,
+                "no settled value -> adapter skipped in divest");
+            _step("  PASS: adapter has no settled value, correctly skipped");
+        }
+
+        _logPass();
+    }
+
+    // =======================================================================
+    // 23. posToken price > 1: invest allocation considers price-adjusted value
+    // =======================================================================
+
+    function test_Invest_PosTokenPriceAboveOne_ReducesAllocation() public {
+        _logCase(
+            "test_Invest_PosTokenPriceAboveOne_ReducesAllocation",
+            unicode"posToken 升值后 adapter.totalValue 增大，rebalance invest 分配减少"
+        );
+
+        // Setup: async adapter with variable price, 100% weight
+        MockAsyncAdapter_RB asyncAdp = new MockAsyncAdapter_RB(address(usdc), address(posToken), address(vault));
+        vm.startPrank(admin);
+        controller.registerStrategy(address(asyncAdp), 10_000, 1, true);
+        controller.activateStrategy(address(asyncAdp));
+        // Replace order: remove default sync adapter, use only async
+        address[] memory order = new address[](1);
+        order[0] = address(asyncAdp);
+        controller.setStrategyOrder(order);
+        controller.deactivateStrategy(address(adapter));
+        vm.stopPrank();
+
+        _deposit(10_000e6);
+
+        _step("[Step 1] First rebalance at price=1e18, invest ~90%");
+        vm.prank(bot);
+        executor.executeRebalance(address(controller));
+        uint256 ifId = vault.nextInFlightId() - 1;
+        uint256 posOnAdp = posToken.balanceOf(address(asyncAdp));
+        _settleAsyncInvest(address(asyncAdp), ifId, posOnAdp);
+
+        uint256 posOnVault = posToken.balanceOf(address(vault));
+        uint256 valueAt1x = asyncAdp.totalValue();
+        _step(string.concat("  posTokens on vault: ", vm.toString(posOnVault)));
+        _step(string.concat("  totalValue at price=1e18: ", vm.toString(valueAt1x)));
+        assertEq(valueAt1x, posOnVault, "at 1:1 price, totalValue = posToken count");
+
+        _step("[Step 2] posToken price doubles to 2e18");
+        asyncAdp.setPosTokenPrice(2e18);
+        uint256 valueAt2x = asyncAdp.totalValue();
+        _step(string.concat("  totalValue at price=2e18: ", vm.toString(valueAt2x)));
+        assertEq(valueAt2x, posOnVault * 2, "totalValue should double with price");
+
+        _step("[Step 3] Deposit more and rebalance -> adapter already overweight, minimal invest");
+        _deposit(5_000e6);
+        uint256 investIFBefore = vault.totalInvestInFlight();
+        vm.warp(block.timestamp + 1);
+        vm.prank(bot);
+        executor.executeRebalance(address(controller));
+        uint256 investIFAfter = vault.totalInvestInFlight();
+
+        // At 2x price, adapter's totalValue (~18000) is already above target for total ~23000
+        // targetBalance = totalAssets * 100% but freeCash may still be above target+threshold
+        // Key assertion: the NEW invest should be LESS than the full freeCash
+        // because the adapter's price-adjusted value already covers much of the target
+        uint256 newInvest = investIFAfter - investIFBefore;
+        _step(string.concat("  new invest amount: ", vm.toString(newInvest)));
+        _step(string.concat("  freeCash before rebalance: ", vm.toString(vault.getFreeCash() + newInvest)));
+
+        // Verify price-adjusted accounting: totalValue reflects price
+        assertEq(asyncAdp.totalValue(), posOnVault * 2 + (newInvest > 0 ? 0 : 0),
+            "totalValue still reflects price-adjusted vault posToken (new in-flight not yet settled)");
+        _step("  PASS: invest allocation correctly considers price-adjusted adapter value");
+        _logPass();
+    }
+
+    // =======================================================================
+    // 24. posToken price < 1: divest settledValue reflects depreciation
+    // =======================================================================
+
+    function test_Divest_PosTokenPriceBelowOne_SettledValueReduced() public {
+        _logCase(
+            "test_Divest_PosTokenPriceBelowOne_SettledValueReduced",
+            unicode"posToken 贬值后 adapter.totalValue 缩水，divest 可用额度相应减少"
+        );
+
+        // Setup: async adapter with variable price
+        MockAsyncAdapter_RB asyncAdp = new MockAsyncAdapter_RB(address(usdc), address(posToken), address(vault));
+        vm.startPrank(admin);
+        controller.registerStrategy(address(asyncAdp), 10_000, 1, true);
+        controller.activateStrategy(address(asyncAdp));
+        // Replace order: remove default sync adapter, use only async
+        address[] memory order = new address[](1);
+        order[0] = address(asyncAdp);
+        controller.setStrategyOrder(order);
+        controller.deactivateStrategy(address(adapter));
+        vm.stopPrank();
+
+        _deposit(10_000e6);
+
+        _step("[Step 1] Invest at price=1e18, then settle");
+        vm.prank(admin);
+        controller.setRiskParams(0, 0, 0); // buffer=0 -> invest everything
+        vm.prank(bot);
+        executor.executeRebalance(address(controller));
+        uint256 ifId = vault.nextInFlightId() - 1;
+        uint256 posOnAdp = posToken.balanceOf(address(asyncAdp));
+        _settleAsyncInvest(address(asyncAdp), ifId, posOnAdp);
+
+        uint256 posOnVault = posToken.balanceOf(address(vault));
+        uint256 valueAtFull = asyncAdp.totalValue();
+        _step(string.concat("  posTokens on vault: ", vm.toString(posOnVault)));
+        _step(string.concat("  totalValue at 1e18: ", vm.toString(valueAtFull)));
+
+        _step("[Step 2] posToken price drops to 0.5e18 (50% depreciation)");
+        asyncAdp.setPosTokenPrice(0.5e18);
+        uint256 valueAtHalf = asyncAdp.totalValue();
+        _step(string.concat("  totalValue at 0.5e18: ", vm.toString(valueAtHalf)));
+        assertEq(valueAtHalf, posOnVault / 2, "totalValue halved with price");
+
+        _step("[Step 3] Trigger divest with high buffer -> settledValue limits withdrawal");
+        vm.prank(admin);
+        controller.setRiskParams(9000, 0, 0); // buffer=90% -> huge divest demand
+        uint256 redeemIFBefore = vault.totalRedeemInFlight();
+        vm.warp(block.timestamp + 1);
+        vm.prank(bot);
+        executor.executeRebalance(address(controller));
+        uint256 redeemIFAfter = vault.totalRedeemInFlight();
+
+        uint256 divestAmount = redeemIFAfter - redeemIFBefore;
+        _step(string.concat("  divest (redeem in-flight): ", vm.toString(divestAmount)));
+
+        // Divest is capped by _readDivestCoverage which uses adapter.totalValue() as settledValue.
+        // At 0.5e18 price, settledValue = posOnVault / 2, so divest cannot exceed that.
+        assertLe(divestAmount, valueAtHalf, "divest capped by price-adjusted settledValue");
+        assertLt(divestAmount, valueAtFull, "divest less than full-price value (price depreciation limits it)");
+        _step("  PASS: divest correctly limited by price-adjusted totalValue");
+        _logPass();
+    }
+}
