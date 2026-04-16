@@ -362,7 +362,7 @@ contract S9_MultiAdapterMix is StressBase {
             newPrice = currentPrice > delta ? currentPrice - delta : currentPrice;
         }
         s9Sync2.setPosTokenPrice(newPrice);
-        logDebug("S9:sync2 price", newPrice);
+        logInfo(string.concat("[PRICE_UPDATE] token=sync2 old=", _toStr(currentPrice), " new=", _toStr(newPrice)));
     }
 
     function _rotateWeights(uint256 round) internal {
@@ -389,7 +389,7 @@ contract S9_MultiAdapterMix is StressBase {
         vm.prank(admin);
         controller.updateStrategies(adps, ws, ps, asyncs);
 
-        logDebug("S9:weights rotated", string.concat(_toStr(w1), "/", _toStr(w2), "/", _toStr(w3)));
+        logInfo(string.concat("[WEIGHT_ROTATE] ", _toStr(w1), "/", _toStr(w2), "/", _toStr(w3)));
     }
 
     // =========================================================================
