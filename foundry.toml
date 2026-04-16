@@ -6,6 +6,7 @@ solc = "0.8.24"
 optimizer = true
 optimizer_runs = 200
 via_ir = true
+fs_permissions = [{ access = "read-write", path = "." }]
 
 [fmt]
 line_length = 120
@@ -17,6 +18,10 @@ sort_imports = true
 [etherscan]
 mantle_sepolia = { key = "${ETHERSCAN_API_KEY}", url = "https://explorer.sepolia.mantle.xyz/api?" }
 mantle = { key = "${ETHERSCAN_API_KEY}", url = "https://explorer.mantle.xyz/api?" }
+
+# Stress test profile — higher memory limit for long-running scenarios
+[profile.stress]
+memory_limit = 2_147_483_648     # 2GB
 
 [rpc_endpoints]
 mantle_sepolia = "https://rpc.sepolia.mantle.xyz"
