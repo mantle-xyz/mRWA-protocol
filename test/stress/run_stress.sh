@@ -84,10 +84,10 @@ export STRESS_DAYS="$DAYS_PER_SEED"
 export STRESS_DURATION="0"              # per-seed: no time limit (use ROUNDS)
 
 # --- Scenario definitions ---
-KEYS=(       S1                        S2                          S3                        S4                            S5                              S6                        S7                          S8                              S9                      )
-CONTRACTS=(  S1_DepositRedeemMix       S2_AsyncRedeemFullCycle     S3_RebalanceSettlement    S4_ExchangeRateFeeAccrual     S5_SanctionedUserInterlace      S6_InFlightEdgeCases      S7_FullProtocolEndurance     S8_InvestSettlementEdge          S9_MultiAdapterMix      )
-FUNCS=(      test_depositRedeemMix     test_asyncRedeemFullCycle   test_rebalanceSettlementCycle test_exchangeRateFeeAccrual test_sanctionedUserInterlace  test_inFlightEdgeCases    test_fullProtocolEndurance   test_investSettlementEdge        test_multiAdapterMix    )
-NAMES=(      "Deposit/Redeem Mix"      "Async Redeem Cycle"        "Rebalance Settlement"    "Exchange Rate & Fee"         "Sanctioned User"               "InFlight Edge Cases"     "Full Protocol Endurance"    "Invest Settlement Edge"         "Multi-Adapter Mix"     )
+KEYS=(       S1                        S2                          S3                        S4                            S5                              S6                        S7                          S8                              S9                       S10                             )
+CONTRACTS=(  S1_DepositRedeemMix       S2_AsyncRedeemFullCycle     S3_RebalanceSettlement    S4_ExchangeRateFeeAccrual     S5_SanctionedUserInterlace      S6_InFlightEdgeCases      S7_FullProtocolEndurance     S8_InvestSettlementEdge          S9_MultiAdapterMix       S10_InterleavedOperations        )
+FUNCS=(      test_depositRedeemMix     test_asyncRedeemFullCycle   test_rebalanceSettlementCycle test_exchangeRateFeeAccrual test_sanctionedUserInterlace  test_inFlightEdgeCases    test_fullProtocolEndurance   test_investSettlementEdge        test_multiAdapterMix     test_interleavedOperations       )
+NAMES=(      "Deposit/Redeem Mix"      "Async Redeem Cycle"        "Rebalance Settlement"    "Exchange Rate & Fee"         "Sanctioned User"               "InFlight Edge Cases"     "Full Protocol Endurance"    "Invest Settlement Edge"         "Multi-Adapter Mix"      "Interleaved Operations"         )
 
 # Scenario descriptions (from STRESS_TEST_PLAN.md §八)
 DESCS=(
@@ -100,6 +100,7 @@ DESCS=(
     "串联所有核心流程，模拟多日真实运行，验证系统长期稳定性"
     "验证Invest部分结算(5-95%退款)和全额退款(底层资产无法申购)场景下vault资产守恒和in-flight记录正确性"
     "验证3个adapter非对称权重(40/35/25)下rebalance分配、混合结算、权重动态调整的正确性"
+    "验证操作交错场景：双IF共存、rate变化在process↔finalize间、重叠PROCESSING批次+乱序finalize、PROCESSING期间deposit/syncRedeem、PENDING时rebalance"
 )
 
 # Test method per round (from STRESS_TEST_PLAN.md §八)
@@ -113,6 +114,7 @@ METHODS=(
     "模拟N天: 早=deposit, 午=NAV更新+fee, 下午=requestRedeem+syncRedeem, 晚=processBatch+rebalance+settle+finalize+全量不变量检查"
     "5种case轮转: A=正常全额结算, B=小比例退款(5-15%), C=大比例退款(40-70%), D=全额退款(0+100%), E=混合多笔不同比例"
     "每轮: 比例化存款→rebalance验证3-adapter分配→settle(sync1正常/sync2部分退款/async1随机)→divest+finalize; 每10轮jitter价格, 每20轮调权重"
+    "7种case轮转: A=双IF共存, B=rate变化+finalize, C=重叠批次+乱序finalize, D=PROCESSING期间deposit, E=PROCESSING期间syncRedeem, F=PENDING时rebalance, G=全组合kitchen-sink; 每step间检查不变量"
 )
 
 should_run() {
@@ -274,12 +276,13 @@ while ! $stop; do
         contract="${CONTRACTS[$i]}"
         func="${FUNCS[$i]}"
 
+        tmplog=$(mktemp)
         STRESS_SEED=$current_seed FOUNDRY_PROFILE=stress forge test \
             --match-path "test/stress/${contract}.t.sol" \
             --match-test "$func" \
-            -vv 2>&1 | tail -3
-
-        exit_code=${PIPESTATUS[0]}
+            -vv 2>&1 > "$tmplog"
+        exit_code=$?
+        tail -3 "$tmplog"
 
         CASE_SEEDS_RUN[$i]=$(( ${CASE_SEEDS_RUN[$i]} + 1 ))
 
@@ -290,7 +293,14 @@ while ! $stop; do
             CASE_FAIL[$i]=$(( ${CASE_FAIL[$i]} + 1 ))
             CASE_FAIL_SEEDS[$i]="${CASE_FAIL_SEEDS[$i]} $current_seed"
             printf "  %-25s FAIL  (seed=%s)\n" "[$key]" "$current_seed"
+            # Save full forge output for failed seeds
+            {
+                echo "==== FAIL: ${key} seed=${current_seed} $(date '+%Y-%m-%d %H:%M:%S') ===="
+                cat "$tmplog"
+                echo ""
+            } >> "$REPORT_DIR/failed_seeds.log"
         fi
+        rm -f "$tmplog"
     done
 
     seed_iter=$((seed_iter + 1))
@@ -377,6 +387,12 @@ done
 
         if [[ ${CASE_FAIL[$i]} -gt 0 ]]; then
             printf "  Failed seeds:    %s\n" "${CASE_FAIL_SEEDS[$i]}"
+            # Extract error summary from failed_seeds.log
+            if [[ -f "$REPORT_DIR/failed_seeds.log" ]]; then
+                echo "  Error summary:"
+                grep -A1 "FAIL: ${key} seed=" "$REPORT_DIR/failed_seeds.log" \
+                    | grep "\[FAIL:" | sed 's/^/    /' | head -10
+            fi
         fi
 
         printf "  Total Rounds:     %s\n" "$(tsv_sum "$contract" "actualRounds")"
@@ -421,6 +437,7 @@ done
 
     if [[ $FAILED -gt 0 ]]; then
         echo "  FAILED CASES:$FAILED_KEYS"
+        echo "  Full error logs: $REPORT_DIR/failed_seeds.log"
     fi
     echo "============================================================"
 

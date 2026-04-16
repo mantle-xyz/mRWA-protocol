@@ -804,7 +804,12 @@ abstract contract StressBase is LogUtil {
         assertEq(snapAfter.vaultTotalLockedShares, before.vaultTotalLockedShares, "deposit: locked unchanged");
         assertEq(snapAfter.vaultTotalInvestInFlight, before.vaultTotalInvestInFlight, "deposit: investIF unchanged");
 
-        _logOp("DEPOSIT", user, assets, shares);
+        logInfo(string.concat(
+            "[DEPOSIT] user=", vm.toString(user),
+            " amt=", _toStr(assets),
+            " shares=", _toStr(shares),
+            " cash=", _toStr(usdc.balanceOf(address(vault)))
+        ));
         _statDeposits++;
         _statTotalTx++;
     }
@@ -844,7 +849,12 @@ abstract contract StressBase is LogUtil {
 
         assertEq(assets, expectedAssets, "redeem: assets == preview");
 
-        _logOp("SYNC_REDEEM", user, shares, assets);
+        logInfo(string.concat(
+            "[SYNC_REDEEM] user=", vm.toString(user),
+            " shares=", _toStr(shares),
+            " assets=", _toStr(assets),
+            " cash=", _toStr(usdc.balanceOf(address(vault)))
+        ));
         _statSyncRedeems++;
         _statTotalTx++;
     }
@@ -891,7 +901,12 @@ abstract contract StressBase is LogUtil {
         assertEq(reqShares, netShares, "request: req.shares");
         assertEq(uint8(status), uint8(IMantleYieldVault.RequestStatus.PENDING), "request: status PENDING");
 
-        _logOp("REQUEST_REDEEM", user, shares, requestId);
+        logInfo(string.concat(
+            "[REQUEST_REDEEM] user=", vm.toString(user),
+            " shares=", _toStr(shares),
+            " reqId=", _toStr(requestId),
+            " locked=", _toStr(vault.totalLockedShares())
+        ));
         _statAsyncRedeems++;
         _statTotalTx++;
     }
@@ -900,7 +915,17 @@ abstract contract StressBase is LogUtil {
     function _processRedeemBatch(uint256[] memory ids) internal {
         vm.prank(bot);
         opExecutor.executeProcessRedeemBatch(address(controller), ids);
-        logDebug("processRedeemBatch count", ids.length);
+        // Sum shares for logging
+        uint256 totalShares;
+        for (uint256 i = 0; i < ids.length; i++) {
+            (,, uint256 sh,,,,, ) = vault.requests(ids[i]);
+            totalShares += sh;
+        }
+        logInfo(string.concat(
+            "[PROCESS_BATCH] count=", _toStr(ids.length),
+            " totalShares=", _toStr(totalShares),
+            " redeemIF=", _toStr(vault.totalRedeemInFlight())
+        ));
         _statProcessBatches++;
         _statTotalTx++;
     }
@@ -909,16 +934,28 @@ abstract contract StressBase is LogUtil {
     function _finalizeRedeemBatch(uint256[] memory ids, uint256[] memory settledAssets) internal {
         vm.prank(bot);
         opExecutor.executeFinalizeRedeemBatch(address(controller), ids, settledAssets);
-        logDebug("finalizeRedeemBatch count", ids.length);
+        uint256 totalSettled;
+        for (uint256 i = 0; i < settledAssets.length; i++) totalSettled += settledAssets[i];
+        logInfo(string.concat(
+            "[FINALIZE_BATCH] count=", _toStr(ids.length),
+            " totalSettled=", _toStr(totalSettled),
+            " cash=", _toStr(usdc.balanceOf(address(vault)))
+        ));
         _statFinalizeBatches++;
         _statTotalTx++;
     }
 
     /// @notice Trigger rebalance via OperatorExecutor
     function _rebalance() internal {
+        uint256 cashBefore = usdc.balanceOf(address(vault));
         vm.prank(bot);
         opExecutor.executeRebalance(address(controller));
-        logDebug("rebalance triggered");
+        logInfo(string.concat(
+            "[REBALANCE] cashBefore=", _toStr(cashBefore),
+            " cashAfter=", _toStr(usdc.balanceOf(address(vault))),
+            " investIF=", _toStr(vault.totalInvestInFlight()),
+            " redeemIF=", _toStr(vault.totalRedeemInFlight())
+        ));
         _statRebalances++;
         _statTotalTx++;
     }
@@ -931,16 +968,26 @@ abstract contract StressBase is LogUtil {
     ) internal {
         vm.prank(bot);
         opExecutor.executeSettleAdapter(address(controller), adapter, invest, redeem);
-        logDebug("settleAdapter", adapter);
+        logInfo(string.concat(
+            "[SETTLE] adapter=", vm.toString(adapter),
+            " investIds=", _toStr(invest.inFlightIds.length),
+            " redeemIds=", _toStr(redeem.inFlightIds.length),
+            " investIF=", _toStr(vault.totalInvestInFlight()),
+            " redeemIF=", _toStr(vault.totalRedeemInFlight())
+        ));
         _statSettlements++;
         _statTotalTx++;
     }
 
     /// @notice Update exchange rate via AccountantExecutor
     function _updateExchangeRate(uint64 newRate) internal {
+        uint256 oldRate = accountant.getRate();
         vm.prank(bot);
         acctExecutor.executeUpdateRate(address(accountant), newRate, uint64(block.timestamp));
-        logDebug("updateExchangeRate", uint256(newRate));
+        logInfo(string.concat(
+            "[RATE_UPDATE] old=", _toStr(oldRate),
+            " new=", _toStr(uint256(newRate))
+        ));
         _statRateUpdates++;
         _statTotalTx++;
     }
@@ -1030,11 +1077,15 @@ abstract contract StressBase is LogUtil {
         ok = _safeCheckI7(ctx) && ok;
         ok = _safeCheckI8(ctx) && ok;
         if (ok) {
-            logInfo("ALL INVARIANTS PASSED", ctx);
+            logDebug("ALL INVARIANTS PASSED", ctx);
         } else {
             _statInvariantFails++;
             logError("INVARIANT FAILURE detected at", ctx);
             _dumpScene(ctx);
+            // Write FAILED row to TSV before reverting so aggregate data is preserved
+            uint256 totalGas = _stCaseStartGas - gasleft();
+            uint256 elapsedMs = vm.unixTime() - _wallStartTime;
+            _appendAggregateRow(totalGas, elapsedMs, false);
             revert(string.concat("Invariant failure: ", ctx));
         }
         // Advance base IDs past settled records to keep future scans efficient
@@ -1044,20 +1095,35 @@ abstract contract StressBase is LogUtil {
     /// @dev Dump full scene context on invariant failure
     function _dumpScene(string memory ctx) internal {
         logSep(string.concat("FAILURE SCENE DUMP: ", ctx));
+        // --- Test run context ---
+        logError("seed", SEED);
+        logError("round", _statActualRounds);
+        logError("totalTx", _statTotalTx);
+        // --- Protocol state ---
+        logError("rate", accountant.getRate());
+        logError("redemptionFeeBps", vault.redemptionFeeBps());
         _logLedger("FAILURE");
         logError("block.timestamp", block.timestamp);
         logError("nextRequestId", vault.nextRequestId());
         logError("nextInFlightId", vault.nextInFlightId());
-        // Per-user balances
-        for (uint256 i = 0; i < users.length; i++) {
+        // --- Adapter state ---
+        logError("syncAdapter USDC", usdc.balanceOf(address(syncAdapter)));
+        logError("asyncAdapter USDC", usdc.balanceOf(address(asyncAdapter)));
+        logError("totalUsdcInjected", _totalUsdcInjected);
+        // Per-user balances (cap to first 50 to avoid OOG in large user pools)
+        uint256 userCap = users.length < 50 ? users.length : 50;
+        for (uint256 i = 0; i < userCap; i++) {
             logError(
-                string.concat("user[", _toStr(i), "] shares"),
+                string.concat("user[", _toStr(i), "]"),
                 string.concat(
                     vm.toString(users[i]),
                     " shares=", _toStr(vault.balanceOf(users[i])),
                     " usdc=", _toStr(usdc.balanceOf(users[i]))
                 )
             );
+        }
+        if (users.length > 50) {
+            logError("... truncated", string.concat(_toStr(users.length - 50), " more users"));
         }
         logError("treasury shares", vault.balanceOf(treasury));
         logError("sanctionSafe shares", vault.balanceOf(sanctionSafe));
@@ -1074,10 +1140,10 @@ abstract contract StressBase is LogUtil {
         // Pending in-flight
         uint256 nextIf = vault.nextInFlightId();
         for (uint256 id = _baseInFlightId; id < nextIf; id++) {
-            (,,,, uint256 uAmt,, bool isInv,, IMantleYieldVault.InFlightStatus ifs) = vault.inFlightRecords(id);
+            (, address ifAdapter,,, uint256 uAmt,, bool isInv,, IMantleYieldVault.InFlightStatus ifs) = vault.inFlightRecords(id);
             if (ifs == IMantleYieldVault.InFlightStatus.PENDING) {
                 logError(string.concat("inflight[", _toStr(id), "]"),
-                    string.concat("usdc=", _toStr(uAmt), " isInvest=", isInv ? "true" : "false"));
+                    string.concat("adapter=", vm.toString(ifAdapter), " usdc=", _toStr(uAmt), " isInvest=", isInv ? "true" : "false"));
             }
         }
         logSep("END SCENE DUMP");
@@ -1299,12 +1365,9 @@ abstract contract StressBase is LogUtil {
         logSep();
     }
 
-    /// @notice 开始新一轮（日志由 LogUtil 按小时自动轮转，不再创建每轮文件）
-    function _logRoundStart(uint256 round) internal {
+    /// @notice 开始新一轮（只记录 gas 起点，不打印日志）
+    function _logRoundStart(uint256 /* round */) internal {
         _stRoundStartGas = gasleft();
-        logSep(string.concat("Round ", _toStr(round), " START"));
-        logDebug("block.timestamp", block.timestamp);
-        _logLedger("ROUND_START");
     }
 
     /// @notice 记录步骤
@@ -1330,12 +1393,21 @@ abstract contract StressBase is LogUtil {
         logDebug(string.concat("[LEDGER:", ctx, "] vaultCash"), usdc.balanceOf(address(vault)));
     }
 
-    /// @notice 结束本轮，写入 ROUND_END 账本
+    /// @notice 结束本轮，单行 INFO 汇总 vault 核心指标 + gas
     function _logRoundEnd(uint256 round) internal {
-        _logLedger("ROUND_END");
         uint256 gasUsed = _stRoundStartGas - gasleft();
-        logDebug("gasUsed", gasUsed);
-        logSep(string.concat("Round ", _toStr(round), " END"));
+        logInfo(string.concat(
+            "[R", _toStr(round), "]",
+            " assets=", _toStr(vault.totalAssets()),
+            " supply=", _toStr(vault.totalSupply()),
+            " rate=", _toStr(accountant.getRate()),
+            " cash=", _toStr(vault.getFreeCash()),
+            " investIF=", _toStr(vault.totalInvestInFlight()),
+            " redeemIF=", _toStr(vault.totalRedeemInFlight()),
+            " locked=", _toStr(vault.totalLockedShares()),
+            " gas=", _toStr(gasUsed)
+        ));
+        _logLedger("ROUND_END"); // full detail at DEBUG level
         _statActualRounds++;
     }
 
@@ -1505,7 +1577,10 @@ abstract contract StressBase is LogUtil {
             newPrice = currentPrice > delta ? currentPrice - delta : currentPrice / 2 + 1;
         }
         asyncAdapter.setPosTokenPrice(newPrice);
-        logDebug("posTokenPrice updated", newPrice);
+        logInfo(string.concat(
+            "[PRICE_UPDATE] old=", _toStr(currentPrice),
+            " new=", _toStr(newPrice)
+        ));
         _statPriceUpdates++;
         _statTotalTx++;
     }
