@@ -1,0 +1,26 @@
+2026-04-17 09:58:52,041 INFO -------------------- STRESS TEST REPORT: 汇率波动与管理费累计压力测试 --------------------
+2026-04-17 09:58:52,041 INFO caseId: S4_ExchangeRateFeeAccrual
+2026-04-17 09:58:52,041 INFO result: PASSED
+2026-04-17 09:58:52,041 INFO configRounds: 50
+2026-04-17 09:58:52,041 INFO actualRounds: 50
+2026-04-17 09:58:52,041 INFO users: 200
+2026-04-17 09:58:52,042 INFO seed: 7842345
+2026-04-17 09:58:52,042 INFO wallTimeMs: 278
+2026-04-17 09:58:52,042 INFO -------------------- Transaction Statistics --------------------
+2026-04-17 09:58:52,042 INFO deposits: 98
+2026-04-17 09:58:52,042 INFO syncRedeems: 20
+2026-04-17 09:58:52,042 INFO asyncRedeems (requestRedeem): 0
+2026-04-17 09:58:52,042 INFO processRedeemBatches: 0
+2026-04-17 09:58:52,043 INFO finalizeRedeemBatches: 0
+2026-04-17 09:58:52,043 INFO rebalances: 0
+2026-04-17 09:58:52,043 INFO settlements: 0
+2026-04-17 09:58:52,043 INFO rateUpdates: 50
+2026-04-17 09:58:52,043 INFO priceUpdates: 9
+2026-04-17 09:58:52,043 INFO totalTransactions: 177
+2026-04-17 09:58:52,043 INFO -------------------- Invariant Checks --------------------
+2026-04-17 09:58:52,044 INFO invariantChecks: 50
+2026-04-17 09:58:52,044 INFO invariantFails: 0
+2026-04-17 09:58:52,044 INFO -------------------- Final Ledger --------------------
+2026-04-17 09:58:52,044 INFO -------------------- Performance --------------------
+2026-04-17 09:58:52,044 INFO totalGasUsed: 58798261
+2026-04-17 09:58:52,045 INFO -------------------- END REPORT --------------------

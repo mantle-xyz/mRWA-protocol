@@ -1,0 +1,26 @@
+2026-04-17 09:58:32,116 INFO -------------------- STRESS TEST REPORT: 操作交错压力测试 --------------------
+2026-04-17 09:58:32,116 INFO caseId: S10_InterleavedOperations
+2026-04-17 09:58:32,116 INFO result: PASSED
+2026-04-17 09:58:32,116 INFO configRounds: 50
+2026-04-17 09:58:32,116 INFO actualRounds: 50
+2026-04-17 09:58:32,117 INFO users: 200
+2026-04-17 09:58:32,117 INFO seed: 7832345
+2026-04-17 09:58:32,117 INFO wallTimeMs: 1144
+2026-04-17 09:58:32,117 INFO -------------------- Transaction Statistics --------------------
+2026-04-17 09:58:32,117 INFO deposits: 211
+2026-04-17 09:58:32,117 INFO syncRedeems: 52
+2026-04-17 09:58:32,117 INFO asyncRedeems (requestRedeem): 203
+2026-04-17 09:58:32,118 INFO processRedeemBatches: 60
+2026-04-17 09:58:32,118 INFO finalizeRedeemBatches: 60
+2026-04-17 09:58:32,118 INFO rebalances: 50
+2026-04-17 09:58:32,118 INFO settlements: 33
+2026-04-17 09:58:32,118 INFO rateUpdates: 21
+2026-04-17 09:58:32,118 INFO priceUpdates: 23
+2026-04-17 09:58:32,118 INFO totalTransactions: 713
+2026-04-17 09:58:32,118 INFO -------------------- Invariant Checks --------------------
+2026-04-17 09:58:32,119 INFO invariantChecks: 149
+2026-04-17 09:58:32,119 INFO invariantFails: 0
+2026-04-17 09:58:32,119 INFO -------------------- Final Ledger --------------------
+2026-04-17 09:58:32,119 INFO -------------------- Performance --------------------
+2026-04-17 09:58:32,119 INFO totalGasUsed: 296289819
+2026-04-17 09:58:32,120 INFO -------------------- END REPORT --------------------
