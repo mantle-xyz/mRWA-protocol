@@ -1,0 +1,26 @@
+2026-04-17 09:59:16,420 INFO -------------------- STRESS TEST REPORT: 多Adapter非对称权重混合压力测试 --------------------
+2026-04-17 09:59:16,420 INFO caseId: S9_MultiAdapterMix
+2026-04-17 09:59:16,420 INFO result: PASSED
+2026-04-17 09:59:16,421 INFO configRounds: 50
+2026-04-17 09:59:16,421 INFO actualRounds: 50
+2026-04-17 09:59:16,421 INFO users: 200
+2026-04-17 09:59:16,421 INFO seed: 7842345
+2026-04-17 09:59:16,421 INFO wallTimeMs: 1584
+2026-04-17 09:59:16,421 INFO -------------------- Transaction Statistics --------------------
+2026-04-17 09:59:16,421 INFO deposits: 898
+2026-04-17 09:59:16,422 INFO syncRedeems: 0
+2026-04-17 09:59:16,422 INFO asyncRedeems (requestRedeem): 500
+2026-04-17 09:59:16,422 INFO processRedeemBatches: 50
+2026-04-17 09:59:16,422 INFO finalizeRedeemBatches: 50
+2026-04-17 09:59:16,422 INFO rebalances: 50
+2026-04-17 09:59:16,422 INFO settlements: 58
+2026-04-17 09:59:16,422 INFO rateUpdates: 9
+2026-04-17 09:59:16,423 INFO priceUpdates: 13
+2026-04-17 09:59:16,423 INFO totalTransactions: 1628
+2026-04-17 09:59:16,423 INFO -------------------- Invariant Checks --------------------
+2026-04-17 09:59:16,423 INFO invariantChecks: 102
+2026-04-17 09:59:16,423 INFO invariantFails: 0
+2026-04-17 09:59:16,423 INFO -------------------- Final Ledger --------------------
+2026-04-17 09:59:16,424 INFO -------------------- Performance --------------------
+2026-04-17 09:59:16,424 INFO totalGasUsed: 563925435
+2026-04-17 09:59:16,424 INFO -------------------- END REPORT --------------------

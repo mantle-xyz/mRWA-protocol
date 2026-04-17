@@ -1,0 +1,254 @@
+============================================================
+  STRESS TEST SUMMARY REPORT
+  2026-04-17 01:59:16
+============================================================
+
+Configuration:
+  Duration:        660 minutes
+  Seed rounds:     784 (base=12345)
+  Rounds/seed:     50
+  Days/seed (S7):  60
+  Users:           200
+
+  Note: Each 'seed' is an independent test run with a unique random seed.
+        'Rounds' = sum of inner loop iterations across all seed runs.
+        Each seed-run deploys a fresh protocol stack (not cumulative).
+
+============================================================
+  Overall:  9 passed / 1 failed / 10 total
+  Time:     660m01s
+============================================================
+
+------------------------------------------------------------
+  [S1] Deposit/Redeem Mix
+------------------------------------------------------------
+  Scenario: 验证大量 sync deposit + sync redeem 交替执行下份额/资产计算的精度和 freeCash 正确性
+  Method:   随机选用户 -> 60%概率deposit / 40%概率syncRedeem -> 每笔delta校验 -> 每轮检查I1,I2,I3,I6不变量
+
+  Seeds:            784 passed / 0 failed  (784 runs)
+  Total Rounds:     42650
+  Transactions:     1052791 total
+    deposits:       695738
+    syncRedeems:    351935
+    asyncRedeems:   0
+    processBatch:   0
+    finalizeBatch:  0
+    rebalances:     0
+    settlements:    0
+    rateUpdates:    3412
+    priceUpdates:   1706
+  Invariants:       43503 checks, 0 fails
+  Gas Used:         243267579865
+
+------------------------------------------------------------
+  [S2] Async Redeem Cycle
+------------------------------------------------------------
+  Scenario: 验证 requestRedeem -> processRedeemBatch -> finalizeRedeemBatch 全链路在大量请求下的状态机正确性和资金守恒
+  Method:   积累requestRedeem -> processBatch(触发divest) -> inject shortfall -> finalizeBatch -> 验证请求状态PENDING->PROCESSING->DONE
+
+  Seeds:            784 passed / 0 failed  (784 runs)
+  Total Rounds:     42650
+  Transactions:     420121 total
+    deposits:       47566
+    syncRedeems:    0
+    asyncRedeems:   275462
+    processBatch:   42149
+    finalizeBatch:  42149
+    rebalances:     0
+    settlements:    0
+    rateUpdates:    7677
+    priceUpdates:   5118
+  Invariants:       128803 checks, 0 fails
+  Gas Used:         241837623199
+
+------------------------------------------------------------
+  [S3] Rebalance Settlement
+------------------------------------------------------------
+  Scenario: 验证反复 invest/divest 及 settlement 后资金守恒和策略权重正确
+  Method:   deposit积累 -> rebalance(invest到adapter) -> settle invest -> requestRedeem(触发divest) -> settle redeem -> finalize -> 验证in-flight清零
+
+  Seeds:            784 passed / 0 failed  (784 runs)
+  Total Rounds:     42600
+  Transactions:     1463052 total
+    deposits:       723470
+    syncRedeems:    0
+    asyncRedeems:   543418
+    processBatch:   42149
+    finalizeBatch:  42149
+    rebalances:     42600
+    settlements:    53930
+    rateUpdates:    7668
+    priceUpdates:   7668
+  Invariants:       171252 checks, 0 fails
+  Gas Used:         585513340694
+
+------------------------------------------------------------
+  [S4] Exchange Rate & Fee
+------------------------------------------------------------
+  Scenario: 验证频繁 NAV 更新下 circuit breaker 正确性，以及 management fee 长期累积精度
+  Method:   每轮jitter exchangeRate ±2%(clamp到maxDeviation) -> 穿插deposit/redeem -> 验证rate单调性和treasury fee增长
+
+  Seeds:            784 passed / 0 failed  (784 runs)
+  Total Rounds:     42600
+  Transactions:     170732 total
+    deposits:       101473
+    syncRedeems:    18991
+    asyncRedeems:   0
+    processBatch:   0
+    finalizeBatch:  0
+    rebalances:     0
+    settlements:    0
+    rateUpdates:    42600
+    priceUpdates:   7668
+  Invariants:       42600 checks, 0 fails
+  Gas Used:         52877586105
+
+------------------------------------------------------------
+  [S5] Sanctioned User
+------------------------------------------------------------
+  Scenario: 验证制裁/解除制裁在各交易流程中的正确性，尤其穿插在正常用户交易之间
+  Method:   随机制裁/解除用户 -> 被制裁用户尝试操作(验证revert/路由sanctionSafe) -> 正常用户交易不受影响
+
+  Seeds:            784 passed / 0 failed  (784 runs)
+  Total Rounds:     42600
+  Transactions:     1833261 total
+    deposits:       1471575
+    syncRedeems:    309903
+    asyncRedeems:   14421
+    processBatch:   14421
+    finalizeBatch:  14421
+    rebalances:     0
+    settlements:    0
+    rateUpdates:    5112
+    priceUpdates:   3408
+  Invariants:       43452 checks, 0 fails
+  Gas Used:         446030160171
+
+------------------------------------------------------------
+  [S6] InFlight Edge Cases
+------------------------------------------------------------
+  Scenario: 验证 in-flight 记录在各种异常结算场景下的账本正确性（退款/部分结算/零结算/重试）
+  Method:   6种case轮转: A=正常invest结算, B=invest退款, C=部分redeem结算(30-80%), D=零结算(全损), E=混合并发, F=retryRedeemInFlight
+
+  Seeds:            784 passed / 0 failed  (784 runs)
+  Total Rounds:     42600
+  Transactions:     341575 total
+    deposits:       118692
+    syncRedeems:    13043
+    asyncRedeems:   63605
+    processBatch:   22498
+    finalizeBatch:  22498
+    rebalances:     49416
+    settlements:    27967
+    rateUpdates:    13632
+    priceUpdates:   10224
+  Invariants:       43452 checks, 0 fails
+  Gas Used:         120674173575
+
+------------------------------------------------------------
+  [S7] Full Protocol Endurance
+------------------------------------------------------------
+  Scenario: 串联所有核心流程，模拟多日真实运行，验证系统长期稳定性
+  Method:   模拟N天: 早=deposit, 午=NAV更新+fee, 下午=requestRedeem+syncRedeem, 晚=processBatch+rebalance+settle+finalize+全量不变量检查
+
+  Seeds:            784 passed / 0 failed  (784 runs)
+  Total Rounds:     12780
+  Transactions:     755948 total
+    deposits:       422551
+    syncRedeems:    105684
+    asyncRedeems:   161769
+    processBatch:   12747
+    finalizeBatch:  12747
+    rebalances:     12780
+    settlements:    11482
+    rateUpdates:    12780
+    priceUpdates:   3408
+  Invariants:       14484 checks, 0 fails
+  Gas Used:         188788122071
+
+------------------------------------------------------------
+  [S8] Invest Settlement Edge
+------------------------------------------------------------
+  Scenario: 验证Invest部分结算(5-95%退款)和全额退款(底层资产无法申购)场景下vault资产守恒和in-flight记录正确性
+  Method:   5种case轮转: A=正常全额结算, B=小比例退款(5-15%), C=大比例退款(40-70%), D=全额退款(0+100%), E=混合多笔不同比例
+
+  Seeds:            784 passed / 0 failed  (784 runs)
+  Total Rounds:     42600
+  Transactions:     206084 total
+    deposits:       85200
+    syncRedeems:    0
+    asyncRedeems:   0
+    processBatch:   0
+    finalizeBatch:  0
+    rebalances:     42600
+    settlements:    54428
+    rateUpdates:    13632
+    priceUpdates:   10224
+  Invariants:       43452 checks, 0 fails
+  Gas Used:         85038498194
+
+------------------------------------------------------------
+  [S9] Multi-Adapter Mix
+------------------------------------------------------------
+  Scenario: 验证3个adapter非对称权重(40/35/25)下rebalance分配、混合结算、权重动态调整的正确性
+  Method:   每轮: 比例化存款→rebalance验证3-adapter分配→settle(sync1正常/sync2部分退款/async1随机)→divest+finalize; 每10轮jitter价格, 每20轮调权重
+
+  Seeds:            784 passed / 0 failed  (784 runs)
+  Total Rounds:     42600
+  Transactions:     1278997 total
+    deposits:       724829
+    syncRedeems:    0
+    asyncRedeems:   367270
+    processBatch:   41948
+    finalizeBatch:  41948
+    rebalances:     42600
+    settlements:    41658
+    rateUpdates:    7668
+    priceUpdates:   11076
+  Invariants:       86904 checks, 0 fails
+  Gas Used:         426400526961
+
+------------------------------------------------------------
+  [S10] Interleaved Operations
+------------------------------------------------------------
+  Scenario: 验证操作交错场景：双IF共存、rate变化在process↔finalize间、重叠PROCESSING批次+乱序finalize、PROCESSING期间deposit/syncRedeem、PENDING时rebalance
+  Method:   7种case轮转: A=双IF共存, B=rate变化+finalize, C=重叠批次+乱序finalize, D=PROCESSING期间deposit, E=PROCESSING期间syncRedeem, F=PENDING时rebalance, G=全组合kitchen-sink; 每step间检查不变量
+
+  Seeds:            781 passed / 2 failed  (783 runs)
+  Failed seeds:     1902345 5242345
+  Error summary:
+  Total Rounds:     39050
+  Transactions:     532007 total
+    deposits:       158951
+    syncRedeems:    32472
+    asyncRedeems:   154181
+    processBatch:   44732
+    finalizeBatch:  44732
+    rebalances:     39050
+    settlements:    24231
+    rateUpdates:    16048
+    priceUpdates:   17610
+  Invariants:       114676 checks, 0 fails
+  Gas Used:         224137439033
+
+============================================================
+  Grand Totals
+============================================================
+  Rounds:              392730
+  Transactions:        8054568
+    deposits:          4550045
+    syncRedeems:       832028
+    asyncRedeems:      1580126
+    processBatch:      220644
+    finalizeBatch:     220644
+    rebalances:        229046
+    settlements:       213696
+    rateUpdates:       130229
+    priceUpdates:      78110
+  Invariant Checks:    732578 (fails: 0)
+  Gas Used:            2614565049868
+  Wall Time:           660m01s
+
+  FAILED CASES: S10
+  Full error logs: /root/bruce/mantle-xyz/mRWA-protocol/stress_logs/failed_seeds.log
+============================================================

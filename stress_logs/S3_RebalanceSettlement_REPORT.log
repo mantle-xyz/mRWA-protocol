@@ -1,0 +1,26 @@
+2026-04-17 09:58:47,842 INFO -------------------- STRESS TEST REPORT: 再平衡与结算周期压力测试 --------------------
+2026-04-17 09:58:47,843 INFO caseId: S3_RebalanceSettlement
+2026-04-17 09:58:47,843 INFO result: PASSED
+2026-04-17 09:58:47,843 INFO configRounds: 50
+2026-04-17 09:58:47,843 INFO actualRounds: 50
+2026-04-17 09:58:47,843 INFO users: 200
+2026-04-17 09:58:47,843 INFO seed: 7842345
+2026-04-17 09:58:47,843 INFO wallTimeMs: 1888
+2026-04-17 09:58:47,844 INFO -------------------- Transaction Statistics --------------------
+2026-04-17 09:58:47,844 INFO deposits: 796
+2026-04-17 09:58:47,844 INFO syncRedeems: 0
+2026-04-17 09:58:47,844 INFO asyncRedeems (requestRedeem): 577
+2026-04-17 09:58:47,844 INFO processRedeemBatches: 50
+2026-04-17 09:58:47,844 INFO finalizeRedeemBatches: 50
+2026-04-17 09:58:47,844 INFO rebalances: 50
+2026-04-17 09:58:47,845 INFO settlements: 63
+2026-04-17 09:58:47,845 INFO rateUpdates: 9
+2026-04-17 09:58:47,845 INFO priceUpdates: 9
+2026-04-17 09:58:47,845 INFO totalTransactions: 1604
+2026-04-17 09:58:47,845 INFO -------------------- Invariant Checks --------------------
+2026-04-17 09:58:47,845 INFO invariantChecks: 201
+2026-04-17 09:58:47,845 INFO invariantFails: 0
+2026-04-17 09:58:47,846 INFO -------------------- Final Ledger --------------------
+2026-04-17 09:58:47,846 INFO -------------------- Performance --------------------
+2026-04-17 09:58:47,846 INFO totalGasUsed: 642207427
+2026-04-17 09:58:47,846 INFO -------------------- END REPORT --------------------
