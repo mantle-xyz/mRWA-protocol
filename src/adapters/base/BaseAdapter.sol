@@ -102,9 +102,33 @@ abstract contract BaseAdapter is IStrategyAdapter, AccessControl, ReentrancyGuar
         positionAmount = assetAmount;
     }
 
+    function previewDeposit(uint256 assetAmount)
+        external
+        view
+        virtual
+        override
+        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
+    {
+        ok = assetAmount > 0;
+        executableAssetAmount = assetAmount;
+        expectedPosAmount = 0;
+    }
+
+    function previewRedeem(uint256 assetAmount)
+        external
+        view
+        virtual
+        override
+        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
+    {
+        ok = assetAmount > 0;
+        executableAssetAmount = assetAmount;
+        expectedPosAmount = 0;
+    }
+
     /// @notice Position-token quote in 1e18 precision (asset per 1 pos token).
     /// @dev Priority: oracle valid price > manual written price.
-    ///      Fallback: no valid source -> 1e18.
+    ///      Fallback: no valid source -> 0 (callers decide how to degrade).
     function getPosTokenPrice() public view virtual override returns (uint256) {
         if (priceOracle != address(0)) {
             uint256 rawPrice = IDFeedPriceOracle(priceOracle).getPrice();
@@ -118,7 +142,7 @@ abstract contract BaseAdapter is IStrategyAdapter, AccessControl, ReentrancyGuar
             return manualPosTokenPrice;
         }
 
-        return 1e18;
+        return 0;
     }
 
     function vault() external view virtual override returns (address) {

@@ -22,17 +22,19 @@ abstract contract BaseAsync7540Adapter is BaseAdapter {
 
     /**
      * @notice Emit the standardized async redeem request event.
-     * @param amount Requested asset amount (vault asset units, e.g. USDC/USDT).
+     * @param posAmount Requested protocol redeem quantity.
+     * @dev For quantity-driven adapters, the emitted amount is position-token quantity,
+     *      not an asset-denominated accounting value.
      * @param receiver Receiver recorded in the standardized async redeem request event.
      */
-    function _registerAsyncRedeem(uint256 amount, address receiver) internal {
-        if (amount == 0) {
+    function _registerAsyncRedeem(uint256 posAmount, address receiver) internal {
+        if (posAmount == 0) {
             revert InvalidAmount();
         }
         if (receiver == address(0)) {
             revert InvalidAddress();
         }
 
-        _emitAdapterRedeemRequested(amount, receiver);
+        _emitAdapterRedeemRequested(posAmount, receiver);
     }
 }

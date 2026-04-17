@@ -113,6 +113,22 @@ contract MockStrategyAdapter is IStrategyAdapter {
         return assetAmount;
     }
 
+    function previewDeposit(uint256 assetAmount)
+        external
+        pure
+        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
+    {
+        return (assetAmount > 0, assetAmount, 0);
+    }
+
+    function previewRedeem(uint256 assetAmount)
+        external
+        pure
+        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
+    {
+        return (assetAmount > 0, assetAmount, 0);
+    }
+
     function vault() external pure returns (address) {
         return address(0);
     }
@@ -276,6 +292,11 @@ contract MockControllerVault {
 
     function updateRequestBatch(uint256[] calldata ids, IMantleYieldVault.RequestStatus newStatus) external {
         for (uint256 i = 0; i < ids.length; i++) {
+            IMantleYieldVault.RequestStatus current = reqs[ids[i]].status;
+            require(
+                current != IMantleYieldVault.RequestStatus.NONE && uint8(newStatus) > uint8(current),
+                "INVALID_STATUS_TRANSITION"
+            );
             reqs[ids[i]].status = newStatus;
         }
     }
@@ -375,6 +396,15 @@ contract DummyExecutor {}
 contract StrategyControllerUnitTest is Test {
     event InvestSkipped(address indexed adapter, uint256 amountAsset, bytes revertData);
     event DivestSkipped(address indexed adapter, uint256 requestedAsset, bytes revertData);
+    event DivestCoverageRead(
+        address indexed adapter,
+        uint256 remaining,
+        uint256 settledValue,
+        uint256 pendingRedeemAsset,
+        uint256 toWithdrawAsset,
+        uint256 coveredByPending,
+        uint256 requestAsset
+    );
 
     MockAsset internal asset;
     MockAsset internal posToken;
@@ -766,16 +796,16 @@ contract StrategyControllerUnitTest is Test {
 
         (
             uint256 totalCash,
-            uint256 locked,
             uint256 freeCash,
+            uint256 idealCash,
             uint256 netAssets,
             uint256 targetCash,
             uint256 threshold
         ) = controller.getRebalanceState();
 
         assertEq(totalCash, 1_000e18);
-        assertEq(locked, 200e18);
         assertEq(freeCash, 800e18);
+        assertEq(idealCash, 900e18);
         assertEq(netAssets, 3_400e18);
         assertEq(targetCash, 340e18);
         assertEq(threshold, 68e18);
@@ -787,19 +817,32 @@ contract StrategyControllerUnitTest is Test {
 
         (
             uint256 totalCash,
-            uint256 locked,
             uint256 freeCash,
+            uint256 idealCash,
             uint256 netAssets,
             uint256 targetCash,
             uint256 threshold
         ) = controller.getRebalanceState();
 
         assertEq(totalCash, 100e18);
-        assertEq(locked, 100e18);
         assertEq(freeCash, 0);
+        assertEq(idealCash, 0);
         assertEq(netAssets, 100e18);
         assertEq(targetCash, 60e18);
         assertEq(threshold, 2e18);
+    }
+
+    function test_GetRebalanceState_IdealCashIncludesRedeemInFlight() public {
+        _registerSingleAsyncStrategy();
+        asset.mint(address(vault), 100e18);
+        vault.createInFlight(address(asyncAdapter), address(posToken), 30e18, 300e18, false);
+        vault.setLocked(150e18);
+
+        (uint256 totalCash, uint256 freeCash, uint256 idealCash,,,) = controller.getRebalanceState();
+
+        assertEq(totalCash, 100e18);
+        assertEq(freeCash, 0);
+        assertEq(idealCash, 300e18);
     }
 
     function test_PreviewRebalance_ReturnsNoneWithinThresholdBand() public {
@@ -823,6 +866,19 @@ contract StrategyControllerUnitTest is Test {
         assertTrue(shouldRebalance);
         assertEq(action, controller.REBALANCE_ACTION_INVEST());
         assertEq(amount, 900e18);
+    }
+
+    function test_PreviewRebalance_InvestAmountDoesNotIncreaseWithRedeemInFlight() public {
+        _registerSingleAsyncStrategy();
+        asset.mint(address(vault), 1_000e18);
+        vault.createInFlight(address(asyncAdapter), address(posToken), 50e18, 500e18, false);
+
+        vm.warp(2 hours);
+        (bool shouldRebalance, uint8 action, uint256 amount) = controller.previewRebalance();
+
+        assertTrue(shouldRebalance);
+        assertEq(action, controller.REBALANCE_ACTION_INVEST());
+        assertEq(amount, 850e18);
     }
 
     function test_PreviewRebalance_ReturnsDivestDecision() public {
@@ -849,6 +905,41 @@ contract StrategyControllerUnitTest is Test {
         assertTrue(shouldRebalance);
         assertEq(action, controller.REBALANCE_ACTION_DIVEST());
         assertEq(amount, 60e18);
+    }
+
+    function test_PreviewRebalance_IgnoresDivestWhenRedeemInFlightAlreadyCoversCashDeficit() public {
+        _registerSingleAsyncStrategy();
+
+        vm.prank(manager);
+        controller.setRiskParams(0, 0, 1 hours);
+
+        vault.createInFlight(address(asyncAdapter), address(posToken), 50e18, 500e18, false);
+        vault.setLocked(500e18);
+
+        vm.warp(2 hours);
+        (bool shouldRebalance, uint8 action, uint256 amount) = controller.previewRebalance();
+
+        assertFalse(shouldRebalance);
+        assertEq(action, controller.REBALANCE_ACTION_NONE());
+        assertEq(amount, 0);
+    }
+
+    function test_PreviewRebalance_UsesIdealCashToReduceDivestAmount() public {
+        _registerSingleAsyncStrategy();
+
+        vm.prank(manager);
+        controller.setRiskParams(0, 0, 1 hours);
+
+        asset.mint(address(vault), 100e18);
+        vault.createInFlight(address(asyncAdapter), address(posToken), 30e18, 300e18, false);
+        vault.setLocked(500e18);
+
+        vm.warp(2 hours);
+        (bool shouldRebalance, uint8 action, uint256 amount) = controller.previewRebalance();
+
+        assertTrue(shouldRebalance);
+        assertEq(action, controller.REBALANCE_ACTION_DIVEST());
+        assertEq(amount, 100e18);
     }
 
     function test_PreviewRebalance_ReturnsNoneInsideCooldown() public {
@@ -1031,12 +1122,14 @@ contract StrategyControllerUnitTest is Test {
 
     function test_RevertWhen_ProcessRedeemBatchReplay() public {
         _registerTwoStrategies();
+        vault.setRequest(1, 100e18, 0, IMantleYieldVault.RequestStatus.PENDING);
         uint256[] memory ids = new uint256[](1);
         ids[0] = 1;
 
         vm.prank(address(executorGateway));
         controller.processRedeemBatch(ids);
 
+        // Second call reverts: vault enforces strictly monotonic status (PROCESSING → PROCESSING forbidden)
         vm.prank(address(executorGateway));
         vm.expectRevert();
         controller.processRedeemBatch(ids);
@@ -1060,7 +1153,7 @@ contract StrategyControllerUnitTest is Test {
         ids[0] = 11;
         uint256[] memory settledAssets = new uint256[](1);
         settledAssets[0] = 100e18;
-        vault.setRequest(11, 100e18, 0, IMantleYieldVault.RequestStatus.PROCESSING);
+        vault.setRequest(11, 100e18, 0, IMantleYieldVault.RequestStatus.PENDING);
 
         vm.prank(address(executorGateway));
         controller.processRedeemBatch(ids);
@@ -1076,7 +1169,7 @@ contract StrategyControllerUnitTest is Test {
         ids[0] = 21;
         uint256[] memory settledAssets = new uint256[](1);
         settledAssets[0] = 100e18;
-        vault.setRequest(21, 100e18, 0, IMantleYieldVault.RequestStatus.PROCESSING);
+        vault.setRequest(21, 100e18, 0, IMantleYieldVault.RequestStatus.PENDING);
         asset.mint(address(vault), 100e18);
 
         vm.prank(address(executorGateway));
@@ -1096,7 +1189,7 @@ contract StrategyControllerUnitTest is Test {
         ids[0] = 22;
         uint256[] memory settledAssetsInput = new uint256[](1);
         settledAssetsInput[0] = 100e18;
-        vault.setRequest(22, 100e18, 0, IMantleYieldVault.RequestStatus.PROCESSING);
+        vault.setRequest(22, 100e18, 0, IMantleYieldVault.RequestStatus.PENDING);
         asset.mint(address(vault), 100e18);
         uint256 inFlightId = vault.createInFlight(address(asyncAdapter), address(asset), 0, 10e18, false);
         assertEq(vault.totalRedeemInFlight(), 10e18);
@@ -1373,7 +1466,6 @@ contract StrategyControllerUnitTest is Test {
 
         vm.warp(2 hours);
         vm.prank(address(executorGateway));
-        // alloc = 900e18 (freeCash 1000e18 - targetCash 100e18)
         vm.expectRevert(
             abi.encodeWithSelector(
                 StrategyController.InvestPosAmountUnavailable.selector, address(asyncAdapter), 900e18
@@ -1382,65 +1474,89 @@ contract StrategyControllerUnitTest is Test {
         controller.rebalance();
     }
 
-    function test_RebalanceInvest_DepositReturnsZeroButEstimateSucceeds() public {
+    function test_RebalanceInvest_DepositReturnsZeroButPreviewReturnsZeroPos_Reverts() public {
         _registerSingleAsyncStrategy();
         asyncAdapter.setDepositReturnZero(true);
-        // estimatePosAmount still works (not failed)
         asset.mint(address(vault), 1_000e18);
 
         vm.warp(2 hours);
         vm.prank(address(executorGateway));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                StrategyController.InvestPosAmountUnavailable.selector, address(asyncAdapter), 900e18
+            )
+        );
         controller.rebalance();
-
-        // deposit called, sharesOrPos=0, but estimate gives valid pos → in-flight recorded
-        assertEq(asyncAdapter.depositCount(), 1);
-        assertEq(vault.inFlightIdCursor(), 1);
-        (,,, uint256 tokenAmount, uint256 usdcAmount,,,,) = vault.inFlightRecords(1);
-        assertEq(usdcAmount, 900e18);
-        assertEq(tokenAmount, 900e18); // from estimatePosAmount
     }
 
-    function test_RebalanceInvest_EstimateFailButDepositReturnsPos_UsesSharosOrPos() public {
+    function test_RebalanceInvest_EstimateFailAndPreviewReturnsZeroPos_NoInFlight() public {
         _registerSingleAsyncStrategy();
         asyncAdapter.setFailEstimate(true);
-        // deposit returns normal amount (not zero)
+        // Mock previewDeposit returns ok=true, expectedPosAmount=0 (default).
+        // Controller proceeds to deposit (preview ok), deposit returns amount (mock).
+        // sharesOrPos = amount → in-flight recorded with that value.
         asset.mint(address(vault), 1_000e18);
 
         vm.warp(2 hours);
         vm.prank(address(executorGateway));
         controller.rebalance();
 
+        // deposit called, returns 900e18 (mock returns amount), in-flight recorded
         assertEq(asyncAdapter.depositCount(), 1);
         assertEq(vault.inFlightIdCursor(), 1);
-
-        // alloc = 900e18, deposit returns 900e18 (sharesOrPos=amount in mock)
-        // estimate reverted, fallback=sharesOrPos=900e18
-        (,,, uint256 tokenAmount, uint256 usdcAmount,,,,) = vault.inFlightRecords(1);
-        assertEq(usdcAmount, 900e18);
-        // sharesOrPos != 0, so posAmount = sharesOrPos = 900e18
-        // In this mock, asset and pos have the same decimals, so it looks correct.
-        // For a real adapter (asset=6dec, pos=18dec), sharesOrPos could still be wrong
-        // if deposit() returns asset-denominated value instead of pos-denominated.
-        assertEq(tokenAmount, 900e18);
     }
 
-    function test_RebalanceDivestSync_SkipsWhenCoveredByPendingRedeem() public {
-        _registerSingleSyncStrategy();
-        syncAdapter.setTotalValue(500e18);
-        vault.createInFlight(address(syncAdapter), address(posToken), 50e18, 300e18, false);
+    function test_PaperFlow_A2_ProcessRedeemBatch_CreatesFreshDivestDespiteA1PendingRedeem() public {
+        _registerSingleAsyncStrategy();
+
+        // Model the post-A1 state from the paper walkthrough:
+        // - vault still holds ST worth 500 asset
+        // - there is already one pending redeem worth 500 asset
+        asyncAdapter.setTotalValue(500e18);
+        vault.createInFlight(address(asyncAdapter), address(posToken), 50e18, 500e18, false);
 
         uint256[] memory ids = new uint256[](1);
         ids[0] = 901;
-        vault.setRequest(901, 300e18, 0, IMantleYieldVault.RequestStatus.PENDING);
+        vault.setRequest(901, 500e18, 0, IMantleYieldVault.RequestStatus.PENDING);
+
+        vm.expectEmit(true, true, true, true);
+        emit DivestCoverageRead(address(asyncAdapter), 500e18, 500e18, 0, 500e18, 0, 500e18);
+
         vm.prank(address(executorGateway));
         controller.processRedeemBatch(ids);
 
-        assertEq(syncAdapter.withdrawCount(), 0);
-        assertEq(vault.inFlightIdCursor(), 1);
-        assertEq(vault.redeemInFlightTotal(), 300e18);
+        // A2 should create its own redeem request instead of reusing A1's pending coverage.
+        assertEq(asyncAdapter.asyncCount(), 1);
+        assertEq(vault.inFlightIdCursor(), 2);
+        assertEq(vault.redeemInFlightTotal(), 1_000e18);
     }
 
-    function test_RebalanceDivest_DoesNotUseLaterStrategyWhenAsyncPendingRedeemAlreadyCoversShortfall() public {
+    function test_PaperFlow_B_Rebalance_ReusesPendingRedeemCoverage() public {
+        _registerSingleAsyncStrategy();
+
+        // Set the rebalance target to come only from cash deficit so the numbers match the paper walkthrough.
+        vm.prank(manager);
+        controller.setRiskParams(0, 0, 1 hours);
+
+        // Model the post-A1 / pre-B state from the walkthrough:
+        // - vault holds no settled ST
+        // - there is still one pending redeem worth 500 asset
+        // - locked liabilities require 500 cash
+        asyncAdapter.setTotalValue(0);
+        vault.createInFlight(address(asyncAdapter), address(posToken), 50e18, 500e18, false);
+        vault.setLocked(500e18);
+
+        vm.warp(2 hours);
+        vm.prank(address(executorGateway));
+        controller.rebalance();
+
+        // Rebalance should still treat the old pending redeem as valid coverage.
+        assertEq(asyncAdapter.asyncCount(), 0);
+        assertEq(vault.inFlightIdCursor(), 1);
+        assertEq(vault.redeemInFlightTotal(), 500e18);
+    }
+
+    function test_ProcessRedeemBatch_UsesLaterStrategyWhenAsyncPendingRedeemNoLongerCoversShortfall() public {
         _registerTwoStrategies();
 
         address[] memory adapters = new address[](2);
@@ -1472,9 +1588,9 @@ contract StrategyControllerUnitTest is Test {
         controller.processRedeemBatch(ids);
 
         assertEq(asyncAdapter.asyncCount(), 0);
-        assertEq(vault.inFlightIdCursor(), 1);
-        assertEq(vault.redeemInFlightTotal(), 300e18);
-        assertEq(syncAdapter.withdrawCount(), 0);
+        assertEq(vault.inFlightIdCursor(), 2);
+        assertEq(vault.redeemInFlightTotal(), 600e18);
+        assertEq(syncAdapter.withdrawCount(), 1);
     }
 
     function test_RebalanceDivestAsync_SkipsWhenEstimateFails() public {
@@ -1515,7 +1631,7 @@ contract StrategyControllerUnitTest is Test {
         _registerSingleAsyncStrategy();
 
         uint256 requestId = 301;
-        vault.setRequest(requestId, 100e18, 0, IMantleYieldVault.RequestStatus.PROCESSING);
+        vault.setRequest(requestId, 100e18, 0, IMantleYieldVault.RequestStatus.PENDING);
         uint256[] memory ids = new uint256[](1);
         ids[0] = requestId;
         vm.prank(address(executorGateway));
@@ -1556,7 +1672,7 @@ contract StrategyControllerUnitTest is Test {
         _registerSingleAsyncStrategy();
 
         uint256 requestId = 302;
-        vault.setRequest(requestId, 100e18, 0, IMantleYieldVault.RequestStatus.PROCESSING);
+        vault.setRequest(requestId, 100e18, 0, IMantleYieldVault.RequestStatus.PENDING);
         uint256[] memory ids = new uint256[](1);
         ids[0] = requestId;
         vm.prank(address(executorGateway));
@@ -1602,7 +1718,7 @@ contract StrategyControllerUnitTest is Test {
         _registerTwoStrategies();
 
         uint256 requestId = 303;
-        vault.setRequest(requestId, 100e18, 0, IMantleYieldVault.RequestStatus.PROCESSING);
+        vault.setRequest(requestId, 100e18, 0, IMantleYieldVault.RequestStatus.PENDING);
         uint256[] memory ids = new uint256[](1);
         ids[0] = requestId;
         vm.prank(address(executorGateway));

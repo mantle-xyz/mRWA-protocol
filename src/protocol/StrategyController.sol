@@ -37,8 +37,6 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
 
     mapping(address => StrategyInfo) public strategyInfo;
     address[] public strategyOrder;
-    mapping(bytes32 => bool) public processingBatchDone;
-    mapping(bytes32 => bool) public readyBatchDone;
 
     modifier onlyAdmin() {
         _checkRole(DEFAULT_ADMIN_ROLE, msg.sender);
@@ -67,12 +65,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     event StrategyOrderUpdated(address[] orderedStrategies);
     event AdapterPauseUpdated(address indexed adapter, bool paused);
     event RebalanceEvaluated(
-        uint256 totalCash,
-        uint256 lockedLiabilities,
-        uint256 freeCash,
-        uint256 netAssets,
-        uint256 targetCash,
-        uint256 threshold
+        uint256 totalCash, uint256 freeCash, uint256 netAssets, uint256 targetCash, uint256 threshold
     );
     event InvestExecuted(address indexed adapter, uint256 amountAsset, uint256 sharesOrPos);
     event InvestSkipped(address indexed adapter, uint256 amountAsset, bytes revertData);
@@ -90,6 +83,15 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         bool isAsync
     );
     event DivestIncomplete(uint256 remainingAsset);
+    event DivestCoverageRead(
+        address indexed adapter,
+        uint256 remaining,
+        uint256 settledValue,
+        uint256 pendingRedeemAsset,
+        uint256 toWithdrawAsset,
+        uint256 coveredByPending,
+        uint256 requestAsset
+    );
     event RedeemBatchProcessing(uint256 indexed batchSize, uint256 batchTotalAsset, uint256 shortfallAsset);
     event RedeemBatchReady(uint256 indexed batchSize, uint256 requiredAsset);
     event AdapterAssetsSwept(
@@ -110,9 +112,6 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     error WeightsMustBe10000(uint256 actualTotalWeight);
     error InsufficientCashForReady(uint256 required, uint256 available);
     error DuplicateStrategyInOrder(address adapter);
-    error BatchAlreadyProcessed(bytes32 batchKey);
-    error BatchNotProcessed(bytes32 batchKey);
-    error BatchAlreadyReady(bytes32 batchKey);
     error IdsNotSorted();
     error InvalidRequestState(uint256 id, IMantleYieldVault.RequestStatus status);
     error InvalidRedeemInFlight(uint256 inFlightId);
@@ -191,8 +190,8 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         view
         returns (
             uint256 totalCash,
-            uint256 locked,
             uint256 freeCash,
+            uint256 idealCash,
             uint256 netAssets,
             uint256 targetCash,
             uint256 threshold
@@ -208,8 +207,8 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
             return (false, REBALANCE_ACTION_NONE, 0);
         }
 
-        (,, uint256 freeCash,, uint256 targetCash, uint256 threshold) = _readRebalanceState();
-        (action, amount) = _computeRebalanceDecision(freeCash, targetCash, threshold);
+        (, uint256 freeCash, uint256 idealCash,, uint256 targetCash, uint256 threshold) = _readRebalanceState();
+        (action, amount) = _computeRebalanceDecision(freeCash, idealCash, targetCash, threshold);
         shouldRebalance = action != REBALANCE_ACTION_NONE;
     }
 
@@ -499,19 +498,19 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
 
         (
             uint256 totalCash,
-            uint256 locked,
             uint256 freeCash,
+            uint256 idealCash,
             uint256 netAssets,
             uint256 targetCash,
             uint256 threshold
         ) = _readRebalanceState();
-        emit RebalanceEvaluated(totalCash, locked, freeCash, netAssets, targetCash, threshold);
+        emit RebalanceEvaluated(totalCash, freeCash, netAssets, targetCash, threshold);
 
-        (uint8 action, uint256 amount) = _computeRebalanceDecision(freeCash, targetCash, threshold);
+        (uint8 action, uint256 amount) = _computeRebalanceDecision(freeCash, idealCash, targetCash, threshold);
         if (action == REBALANCE_ACTION_INVEST) {
-            _invest(amount);
+            _invest(amount, netAssets);
         } else if (action == REBALANCE_ACTION_DIVEST) {
-            _divest(amount);
+            _divest(amount, false);
         }
 
         lastRebalance = uint64(block.timestamp);
@@ -523,20 +522,14 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     function processRedeemBatch(uint256[] calldata ids) external onlyOperatorExecutor nonReentrant {
         _validateSortedIds(ids);
 
-        bytes32 batchKey = _batchKey(ids);
-        if (processingBatchDone[batchKey]) {
-            revert BatchAlreadyProcessed(batchKey);
-        }
-
         vault.updateRequestBatch(ids, IMantleYieldVault.RequestStatus.PROCESSING);
-        processingBatchDone[batchKey] = true;
 
         uint256 batchTotalAsset = _batchTotalBySharesAndRate(ids);
         uint256 freeCash = _freeCash();
         uint256 shortfall;
         if (freeCash < batchTotalAsset) {
             shortfall = batchTotalAsset - freeCash;
-            _divest(shortfall);
+            _divest(shortfall, false);
         }
 
         emit RedeemBatchProcessing(ids.length, batchTotalAsset, shortfall);
@@ -560,9 +553,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         nonReentrant
     {
         _validateSortedIds(ids);
-        bytes32 batchKey = _batchKey(ids);
-        _ensureBatchReadyAllowed(batchKey);
-        _markBatchReady(ids, settledAssets, batchKey);
+        _markBatchReady(ids, settledAssets);
     }
 
     /// @notice Manual retry path for async redeem in-flight requests after off-chain alerting.
@@ -632,8 +623,8 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         view
         returns (
             uint256 totalCash,
-            uint256 locked,
             uint256 freeCash,
+            uint256 idealCash,
             uint256 netAssets,
             uint256 targetCash,
             uint256 threshold
@@ -643,15 +634,21 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         totalCash = asset.balanceOf(address(vault));
         // freeCash = max(totalCash - floatingLockedAssets, 0)
         freeCash = _freeCash();
-        locked = totalCash > freeCash ? totalCash - freeCash : 0;
+        // Redeem proceeds already in-flight to the vault. Useful for liquidity planning,
+        // but not treated as immediately investable cash.
+        uint256 redeemInFlight = vault.totalRedeemInFlight();
+        // idealCash = current free cash plus redeem proceeds already on the way back.
+        // This is only used to reduce extra divest demand, not to increase invest amount.
+        idealCash = freeCash + redeemInFlight;
         // Net assets uses a unified accounting base:
         // vault cash + deployed strategy value + both sides of pending in-flight.
         // This avoids underestimating AUM during settlement latency.
-        netAssets = totalCash + _totalStrategyValue() + vault.totalInvestInFlight() + vault.totalRedeemInFlight();
+        netAssets = totalCash + _totalStrategyValue() + vault.totalInvestInFlight() + redeemInFlight;
         // targetCash = desired free-cash buffer + any cash deficit required to cover locked liabilities.
         // Rebalance only triggers outside [targetCash - threshold, targetCash + threshold].
         targetCash = (netAssets * bufferTargetBps) / BPS_DENOMINATOR;
         targetCash += vault.getCashDeficit();
+        // threshold defines the no-op band around targetCash to avoid rebalance churn.
         threshold = (netAssets * rebalanceThresholdBps) / BPS_DENOMINATOR;
     }
 
@@ -659,7 +656,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         return vault.getFreeCash();
     }
 
-    function _computeRebalanceDecision(uint256 freeCash, uint256 targetCash, uint256 threshold)
+    function _computeRebalanceDecision(uint256 freeCash, uint256 idealCash, uint256 targetCash, uint256 threshold)
         internal
         pure
         returns (uint8 action, uint256 amount)
@@ -667,8 +664,8 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         if (freeCash > targetCash + threshold) {
             return (REBALANCE_ACTION_INVEST, freeCash - targetCash);
         }
-        if (freeCash + threshold < targetCash) {
-            return (REBALANCE_ACTION_DIVEST, targetCash - freeCash);
+        if (idealCash + threshold < targetCash) {
+            return (REBALANCE_ACTION_DIVEST, targetCash - idealCash);
         }
         return (REBALANCE_ACTION_NONE, 0);
     }
@@ -686,10 +683,8 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     // Business - Rebalance Core
     // =============================================================
 
-    function _invest(uint256 excessCash) internal {
-        uint256 totalAssets =
-            asset.balanceOf(address(vault)) + _totalStrategyValue() + vault.totalInvestInFlight()
-            + vault.totalRedeemInFlight();
+    function _invest(uint256 excessCash, uint256 netAssets) internal {
+        uint256 totalAssets = netAssets;
         uint256 requested = excessCash;
         uint256 remaining = excessCash;
         uint256 len = strategyOrder.length;
@@ -735,6 +730,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
                         continue;
                     }
 
+                    // uncoveredShortfall = shortfall * (estimatedPos - pendingPos) / estimatedPos
                     uint256 uncoveredShortfall =
                         Math.mulDiv(shortfall, estimatedPosForShortfall - pendingInvestPos, estimatedPosForShortfall);
                     alloc = uncoveredShortfall < remaining ? uncoveredShortfall : remaining;
@@ -745,22 +741,22 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
                 }
             }
 
-            vault.approveToAdapter(adapter, address(asset), alloc);
-            try IStrategyAdapter(adapter).deposit(alloc, adapter) returns (uint256 sharesOrPos) {
+            (bool ok, uint256 executableAsset, uint256 expectedPos) = IStrategyAdapter(adapter).previewDeposit(alloc);
+            if (!ok || executableAsset == 0) {
+                emit InvestSkipped(adapter, alloc, "");
+                continue;
+            }
+
+            vault.approveToAdapter(adapter, address(asset), executableAsset);
+            try IStrategyAdapter(adapter).deposit(executableAsset, adapter) returns (uint256 sharesOrPos) {
                 uint256 posAmount = sharesOrPos;
-                if (posAmount == 0) {
-                    posAmount = _estimatePosAmount(adapter, alloc, 0);
-                }
-                if (posAmount == 0) {
-                    revert InvestPosAmountUnavailable(adapter, alloc);
-                }
-
-                _recordInvestInFlight(adapter, alloc, posAmount);
-
-                emit InvestExecuted(adapter, alloc, sharesOrPos);
-                remaining -= alloc;
+                if (posAmount == 0) posAmount = expectedPos;
+                if (posAmount == 0) revert InvestPosAmountUnavailable(adapter, executableAsset);
+                _recordInvestInFlight(adapter, executableAsset, posAmount);
+                emit InvestExecuted(adapter, executableAsset, posAmount);
+                remaining -= executableAsset;
             } catch (bytes memory revertData) {
-                emit InvestSkipped(adapter, alloc, revertData);
+                emit InvestSkipped(adapter, executableAsset, revertData);
             }
             vault.approveToAdapter(adapter, address(asset), 0);
         }
@@ -768,7 +764,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         emit RebalanceInvest(requested, requested - remaining, remaining);
     }
 
-    function _divest(uint256 shortfall) internal {
+    function _divest(uint256 shortfall, bool allowPendingRedeemCoverage) internal {
         uint256 remaining = shortfall;
         uint256 len = strategyOrder.length;
 
@@ -784,7 +780,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
             }
 
             (uint256 toWithdrawAsset, uint256 coveredByPending, uint256 requestAsset) =
-                _readDivestCoverage(adapter, remaining);
+                _readDivestCoverage(adapter, remaining, allowPendingRedeemCoverage);
             if (toWithdrawAsset == 0) {
                 continue;
             }
@@ -794,18 +790,33 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
                 continue;
             }
 
+            // Preview validates step constraints and returns adjusted amounts.
+            (bool redeemOk, uint256 executableRedeem, uint256 redeemPosAmount) =
+                IStrategyAdapter(adapter).previewRedeem(requestAsset);
+            if (!redeemOk || executableRedeem == 0) {
+                emit DivestSkipped(adapter, requestAsset, "");
+                remaining = _remainingAfterClear(remaining, coveredByPending);
+                continue;
+            }
+            // Use preview-adjusted asset amount for remaining accounting.
+            requestAsset = executableRedeem;
+            uint256 posAmount = redeemPosAmount > 0 ? redeemPosAmount : _estimatePosAmount(adapter, requestAsset, 0);
+            if (posAmount == 0) {
+                emit DivestSkipped(adapter, requestAsset, "");
+                remaining = _remainingAfterClear(remaining, coveredByPending);
+                continue;
+            }
+
             if (info.isAsync) {
                 address token = _posToken(adapter);
-                // Convert asset amount into position-token amount for protocol redeem.
-                uint256 posAmount = token != address(0) ? _estimatePosAmount(adapter, requestAsset, 0) : 0;
-                if (posAmount == 0) {
+                if (token == address(0)) {
                     emit DivestSkipped(adapter, requestAsset, "");
                     remaining = _remainingAfterClear(remaining, coveredByPending);
                     continue;
                 }
 
                 vault.approveToAdapter(adapter, token, posAmount);
-                try IStrategyAdapter(adapter).requestRedeemAsync(requestAsset, adapter) {}
+                try IStrategyAdapter(adapter).requestRedeemAsync(posAmount, adapter) {}
                 catch (bytes memory revertData) {
                     vault.approveToAdapter(adapter, token, 0);
                     emit DivestSkipped(adapter, requestAsset, revertData);
@@ -826,17 +837,10 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
                 remaining = _remainingAfterClear(remaining, coveredByPending);
                 continue;
             }
+            vault.approveToAdapter(adapter, syncPosToken, posAmount);
 
-            uint256 syncPosAmount = _estimatePosAmount(adapter, requestAsset, 0);
-            if (syncPosAmount == 0) {
-                emit DivestSkipped(adapter, requestAsset, "");
-                remaining = _remainingAfterClear(remaining, coveredByPending);
-                continue;
-            }
-            vault.approveToAdapter(adapter, syncPosToken, syncPosAmount);
-
-            try IStrategyAdapter(adapter).withdrawSync(requestAsset, adapter) returns (uint256 received) {
-                _recordSyncRedeemInFlight(adapter, syncPosToken, syncPosAmount, requestAsset, received);
+            try IStrategyAdapter(adapter).withdrawSync(posAmount, adapter) returns (uint256 received) {
+                _recordSyncRedeemInFlight(adapter, syncPosToken, posAmount, requestAsset, received);
                 vault.approveToAdapter(adapter, syncPosToken, 0);
                 uint256 cleared = coveredByPending + received;
                 remaining = _remainingAfterClear(remaining, cleared);
@@ -885,16 +889,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         }
     }
 
-    function _ensureBatchReadyAllowed(bytes32 batchKey) internal view {
-        if (!processingBatchDone[batchKey]) {
-            revert BatchNotProcessed(batchKey);
-        }
-        if (readyBatchDone[batchKey]) {
-            revert BatchAlreadyReady(batchKey);
-        }
-    }
-
-    function _markBatchReady(uint256[] calldata ids, uint256[] calldata settledAssets, bytes32 batchKey) internal {
+    function _markBatchReady(uint256[] calldata ids, uint256[] calldata settledAssets) internal {
         uint256 required = _batchRequiredAssets(ids, settledAssets);
         uint256 available = asset.balanceOf(address(vault));
         if (available < required) {
@@ -902,7 +897,6 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         }
 
         vault.markRequestsDone(ids, settledAssets);
-        readyBatchDone[batchKey] = true;
         emit RedeemBatchReady(ids.length, required);
     }
 
@@ -1059,9 +1053,8 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         return cleared >= remaining ? 0 : remaining - cleared;
     }
 
-    function _readDivestCoverage(address adapter, uint256 remaining)
+    function _readDivestCoverage(address adapter, uint256 remaining, bool allowPendingRedeemCoverage)
         internal
-        view
         returns (uint256 toWithdrawAsset, uint256 coveredByPending, uint256 requestAsset)
     {
         uint256 settledValue;
@@ -1071,7 +1064,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
             return (0, 0, 0);
         }
 
-        uint256 pendingRedeemAsset = vault.adapterRedeemInFlightUsdc(adapter);
+        uint256 pendingRedeemAsset = allowPendingRedeemCoverage ? vault.adapterRedeemInFlightUsdc(adapter) : 0;
         uint256 totalCover = settledValue + pendingRedeemAsset;
         if (totalCover == 0) {
             return (0, 0, 0);
@@ -1081,6 +1074,10 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         toWithdrawAsset = remaining < totalCover ? remaining : totalCover;
         coveredByPending = pendingRedeemAsset >= toWithdrawAsset ? toWithdrawAsset : pendingRedeemAsset;
         requestAsset = toWithdrawAsset - coveredByPending;
+
+        emit DivestCoverageRead(
+            adapter, remaining, settledValue, pendingRedeemAsset, toWithdrawAsset, coveredByPending, requestAsset
+        );
     }
 
     function _estimatePosAmount(address adapter, uint256 assetAmount, uint256 fallbackAmount)
@@ -1139,9 +1136,5 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
                 revert IdsNotSorted();
             }
         }
-    }
-
-    function _batchKey(uint256[] calldata ids) internal pure returns (bytes32) {
-        return keccak256(abi.encode(ids));
     }
 }
