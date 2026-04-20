@@ -273,6 +273,21 @@ contract MockControllerVault {
         return locked > totalCash ? locked - totalCash : 0;
     }
 
+    function totalAssets() external view returns (uint256) {
+        uint256 total = token.balanceOf(address(this)) + investInFlightTotal + redeemInFlightTotal;
+        // Mock: adapter totalValue is tracked via investInFlightByAdapter as proxy for posToken value.
+        // For simplicity, we don't sum adapter.totalValue() here — tests that need posToken value
+        // should use mockedTotalAssets override instead.
+        if (mockedTotalAssets > 0) return mockedTotalAssets;
+        return total > locked ? total - locked : 0;
+    }
+
+    uint256 public mockedTotalAssets;
+
+    function setMockedTotalAssets(uint256 v) external {
+        mockedTotalAssets = v;
+    }
+
     function approveToAdapter(address adapter, address approveToken, uint256 amount) external {
         ERC20(approveToken).approve(adapter, amount);
     }
@@ -396,15 +411,7 @@ contract DummyExecutor {}
 contract StrategyControllerUnitTest is Test {
     event InvestSkipped(address indexed adapter, uint256 amountAsset, bytes revertData);
     event DivestSkipped(address indexed adapter, uint256 requestedAsset, bytes revertData);
-    event DivestCoverageRead(
-        address indexed adapter,
-        uint256 remaining,
-        uint256 settledValue,
-        uint256 pendingRedeemAsset,
-        uint256 toWithdrawAsset,
-        uint256 coveredByPending,
-        uint256 requestAsset
-    );
+    event DivestCoverageRead(address indexed adapter, uint256 remaining, uint256 settledValue, uint256 requestAsset);
 
     MockAsset internal asset;
     MockAsset internal posToken;
@@ -794,6 +801,11 @@ contract StrategyControllerUnitTest is Test {
         vault.createInFlight(address(syncAdapter), address(posToken), 10e18, 300e18, true);
         vault.createInFlight(address(syncAdapter), address(posToken), 10e18, 100e18, false);
 
+        // netAssets = vault.totalAssets() = (cash + investIF + redeemIF + posTokenValue) - floatingLocked
+        // Mock doesn't sum adapter totalValue, so we set it manually:
+        // (1000 + 300 + 100 + 2000) - 200 = 3200
+        vault.setMockedTotalAssets(3_200e18);
+
         (
             uint256 totalCash,
             uint256 freeCash,
@@ -806,9 +818,9 @@ contract StrategyControllerUnitTest is Test {
         assertEq(totalCash, 1_000e18);
         assertEq(freeCash, 800e18);
         assertEq(idealCash, 900e18);
-        assertEq(netAssets, 3_400e18);
-        assertEq(targetCash, 340e18);
-        assertEq(threshold, 68e18);
+        assertEq(netAssets, 3_200e18);
+        assertEq(targetCash, 320e18);
+        assertEq(threshold, 64e18);
     }
 
     function test_GetRebalanceState_AddsCashDeficitToTargetCash() public {
@@ -827,9 +839,11 @@ contract StrategyControllerUnitTest is Test {
         assertEq(totalCash, 100e18);
         assertEq(freeCash, 0);
         assertEq(idealCash, 0);
-        assertEq(netAssets, 100e18);
-        assertEq(targetCash, 60e18);
-        assertEq(threshold, 2e18);
+        // netAssets = vault.totalAssets() = max((100-150), 0) = 0
+        assertEq(netAssets, 0);
+        // targetCash = 0*10% + cashDeficit(50) = 50
+        assertEq(targetCash, 50e18);
+        assertEq(threshold, 0);
     }
 
     function test_GetRebalanceState_IdealCashIncludesRedeemInFlight() public {
@@ -846,8 +860,10 @@ contract StrategyControllerUnitTest is Test {
     }
 
     function test_PreviewRebalance_ReturnsNoneWithinThresholdBand() public {
-        asset.mint(address(vault), 1_000e18);
-        vault.setLocked(900e18);
+        // freeCash=100 needs to be within [targetCash-threshold, targetCash+threshold]
+        // Set netAssets=1000 so targetCash=100, threshold=20 → band [80,120], freeCash=100 → NONE
+        asset.mint(address(vault), 100e18);
+        vault.setMockedTotalAssets(1_000e18);
 
         vm.warp(2 hours);
         (bool shouldRebalance, uint8 action, uint256 amount) = controller.previewRebalance();
@@ -886,13 +902,16 @@ contract StrategyControllerUnitTest is Test {
         syncAdapter.setTotalValue(3_000e18);
         asset.mint(address(vault), 1_000e18);
         vault.setLocked(900e18);
+        // netAssets = (1000+0+0+3000)-900 = 3100
+        vault.setMockedTotalAssets(3_100e18);
 
         vm.warp(2 hours);
         (bool shouldRebalance, uint8 action, uint256 amount) = controller.previewRebalance();
 
         assertTrue(shouldRebalance);
         assertEq(action, controller.REBALANCE_ACTION_DIVEST());
-        assertEq(amount, 300e18);
+        // targetCash = 3100*10%+0 = 310, idealCash = 100, divest = 310-100 = 210
+        assertEq(amount, 210e18);
     }
 
     function test_PreviewRebalance_ReturnsDivestDecision_WhenCashDeficitExists() public {
@@ -904,7 +923,8 @@ contract StrategyControllerUnitTest is Test {
 
         assertTrue(shouldRebalance);
         assertEq(action, controller.REBALANCE_ACTION_DIVEST());
-        assertEq(amount, 60e18);
+        // netAssets=0, targetCash=0+deficit(50)=50, idealCash=0, divest=50
+        assertEq(amount, 50e18);
     }
 
     function test_PreviewRebalance_IgnoresDivestWhenRedeemInFlightAlreadyCoversCashDeficit() public {
@@ -1520,7 +1540,7 @@ contract StrategyControllerUnitTest is Test {
         vault.setRequest(901, 500e18, 0, IMantleYieldVault.RequestStatus.PENDING);
 
         vm.expectEmit(true, true, true, true);
-        emit DivestCoverageRead(address(asyncAdapter), 500e18, 500e18, 0, 500e18, 0, 500e18);
+        emit DivestCoverageRead(address(asyncAdapter), 500e18, 500e18, 500e18);
 
         vm.prank(address(executorGateway));
         controller.processRedeemBatch(ids);
