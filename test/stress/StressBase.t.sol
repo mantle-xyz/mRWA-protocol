@@ -1602,14 +1602,20 @@ abstract contract StressBase is LogUtil {
     }
 
     /// @notice Compute minimum shares needed for redeem/requestRedeem to pass minRedeemAmount check
-    ///         The vault checks: estimatedAssets = shares * rate / 1e18 * (10000 - feeBps) / 10000 >= minRedeemAmount
+    ///         The vault checks:
+    ///           feeShares    = ceilDiv(shares * feeBps, 10000)   ← rounds UP (costs 1 extra share)
+    ///           netShares    = shares - feeShares
+    ///           estimatedAssets = floor(netShares * rate / 1e18) ← rounds DOWN (costs 1 asset)
+    ///           require(estimatedAssets >= minRedeemAmount)
+    ///         Two rounding layers can combine for up to 2 wei shortfall, so we add +2 margin.
     function _effectiveMinRedeemShares() internal view returns (uint256) {
         uint256 minAssets = vault.minRedeemAmount();
         uint256 rate = accountant.getRate();
         uint256 feeBps = vault.redemptionFeeBps();
         if (rate == 0) return minAssets;
         // Solve: shares >= minAssets * 1e18 * 10000 / (rate * (10000 - feeBps))
-        uint256 computed = minAssets * 1e18 * 10000 / (rate * (10000 - feeBps)) + 1;
+        // +2 covers both ceilDiv fee rounding and floor asset rounding
+        uint256 computed = minAssets * 1e18 * 10000 / (rate * (10000 - feeBps)) + 2;
         return computed > minAssets ? computed : minAssets;
     }
 }
