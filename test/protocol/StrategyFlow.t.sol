@@ -233,6 +233,10 @@ contract MockVaultFlow {
         );
     }
 
+    function nextRequestId() external pure returns (uint256) {
+        return 1;
+    }
+
     function inFlightRecords(uint256 inFlightId)
         external
         view

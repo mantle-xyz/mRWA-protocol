@@ -375,6 +375,10 @@ contract MockControllerVault {
         return (requestId, address(0), r.shares, 0, r.estimatedAssets, r.settledAssets, 0, r.status);
     }
 
+    function nextRequestId() external pure returns (uint256) {
+        return 1; // no requests
+    }
+
     function inFlightRecords(uint256 inFlightId)
         external
         view
@@ -812,7 +816,7 @@ contract StrategyControllerUnitTest is Test {
             uint256 idealCash,
             uint256 netAssets,
             uint256 targetCash,
-            uint256 threshold
+            uint256 threshold,
         ) = controller.getRebalanceState();
 
         assertEq(totalCash, 1_000e18);
@@ -833,7 +837,7 @@ contract StrategyControllerUnitTest is Test {
             uint256 idealCash,
             uint256 netAssets,
             uint256 targetCash,
-            uint256 threshold
+            uint256 threshold,
         ) = controller.getRebalanceState();
 
         assertEq(totalCash, 100e18);
@@ -852,7 +856,7 @@ contract StrategyControllerUnitTest is Test {
         vault.createInFlight(address(asyncAdapter), address(posToken), 30e18, 300e18, false);
         vault.setLocked(150e18);
 
-        (uint256 totalCash, uint256 freeCash, uint256 idealCash,,,) = controller.getRebalanceState();
+        (uint256 totalCash, uint256 freeCash, uint256 idealCash,,,,) = controller.getRebalanceState();
 
         assertEq(totalCash, 100e18);
         assertEq(freeCash, 0);
@@ -1061,6 +1065,7 @@ contract StrategyControllerUnitTest is Test {
         uint256[] memory ids = new uint256[](1);
         ids[0] = 1;
         vault.setRequest(1, 700e18, 0, IMantleYieldVault.RequestStatus.PENDING);
+        vault.setLocked(700e18); // cashDeficit = 700 (no physical balance)
         vm.prank(address(executorGateway));
         controller.processRedeemBatch(ids);
 
@@ -1084,6 +1089,7 @@ contract StrategyControllerUnitTest is Test {
         uint256[] memory ids = new uint256[](1);
         ids[0] = 1;
         vault.setRequest(1, 700e18, 0, IMantleYieldVault.RequestStatus.PENDING);
+        vault.setLocked(700e18);
         vm.prank(address(executorGateway));
         controller.processRedeemBatch(ids);
 
@@ -1098,6 +1104,7 @@ contract StrategyControllerUnitTest is Test {
         uint256[] memory ids = new uint256[](1);
         ids[0] = 1;
         vault.setRequest(1, 700e18, 0, IMantleYieldVault.RequestStatus.PENDING);
+        vault.setLocked(700e18);
 
         vm.recordLogs();
         vm.prank(address(executorGateway));
@@ -1114,6 +1121,7 @@ contract StrategyControllerUnitTest is Test {
         uint256[] memory ids = new uint256[](1);
         ids[0] = 1;
         vault.setRequest(1, 700e18, 0, IMantleYieldVault.RequestStatus.PENDING);
+        vault.setLocked(700e18);
 
         vm.recordLogs();
         vm.prank(address(executorGateway));
@@ -1534,6 +1542,7 @@ contract StrategyControllerUnitTest is Test {
         // - there is already one pending redeem worth 500 asset
         asyncAdapter.setTotalValue(500e18);
         vault.createInFlight(address(asyncAdapter), address(posToken), 50e18, 500e18, false);
+        vault.setLocked(500e18); // cashDeficit = 500
 
         uint256[] memory ids = new uint256[](1);
         ids[0] = 901;
@@ -1600,6 +1609,7 @@ contract StrategyControllerUnitTest is Test {
         asyncAdapter.setTotalValue(0);
         syncAdapter.setTotalValue(500e18);
         vault.createInFlight(address(asyncAdapter), address(posToken), 50e18, 300e18, false);
+        vault.setLocked(300e18); // cashDeficit = 300
 
         uint256[] memory ids = new uint256[](1);
         ids[0] = 902;

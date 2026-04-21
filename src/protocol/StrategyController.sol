@@ -186,7 +186,8 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
             uint256 idealCash,
             uint256 netAssets,
             uint256 targetCash,
-            uint256 threshold
+            uint256 threshold,
+            bool hasPendingRequest
         )
     {
         return _readRebalanceState();
@@ -199,8 +200,9 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
             return (false, REBALANCE_ACTION_NONE, 0);
         }
 
-        (, uint256 freeCash, uint256 idealCash,, uint256 targetCash, uint256 threshold) = _readRebalanceState();
-        (action, amount) = _computeRebalanceDecision(freeCash, idealCash, targetCash, threshold);
+        (, uint256 freeCash, uint256 idealCash,, uint256 targetCash, uint256 threshold, bool hasPendingRequest) =
+            _readRebalanceState();
+        (action, amount) = _computeRebalanceDecision(freeCash, idealCash, targetCash, threshold, hasPendingRequest);
         shouldRebalance = action != REBALANCE_ACTION_NONE;
     }
 
@@ -494,11 +496,13 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
             uint256 idealCash,
             uint256 netAssets,
             uint256 targetCash,
-            uint256 threshold
+            uint256 threshold,
+            bool hasPendingRequest
         ) = _readRebalanceState();
         emit RebalanceEvaluated(totalCash, freeCash, idealCash, netAssets, targetCash, threshold);
 
-        (uint8 action, uint256 amount) = _computeRebalanceDecision(freeCash, idealCash, targetCash, threshold);
+        (uint8 action, uint256 amount) =
+            _computeRebalanceDecision(freeCash, idealCash, targetCash, threshold, hasPendingRequest);
         if (action == REBALANCE_ACTION_INVEST) {
             _invest(amount, netAssets);
         } else if (action == REBALANCE_ACTION_DIVEST) {
@@ -514,15 +518,15 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     function processRedeemBatch(uint256[] calldata ids) external onlyOperatorExecutor nonReentrant {
         _validateSortedIds(ids);
 
-        vault.updateRequestBatch(ids, IMantleYieldVault.RequestStatus.PROCESSING);
-
         uint256 batchTotalAsset = _batchTotalBySharesAndRate(ids);
-        uint256 freeCash = _freeCash();
-        uint256 shortfall;
-        if (freeCash < batchTotalAsset) {
-            shortfall = batchTotalAsset - freeCash;
+        uint256 cashDeficit = vault.getCashDeficit();
+        // Per-batch semantic: only divest what's needed for this batch, capped by global deficit.
+        uint256 shortfall = cashDeficit < batchTotalAsset ? cashDeficit : batchTotalAsset;
+        if (shortfall > 0) {
             _divest(shortfall);
         }
+
+        vault.updateRequestBatch(ids, IMantleYieldVault.RequestStatus.PROCESSING);
 
         emit RedeemBatchProcessing(ids.length, batchTotalAsset, shortfall);
     }
@@ -619,7 +623,8 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
             uint256 idealCash,
             uint256 netAssets,
             uint256 targetCash,
-            uint256 threshold
+            uint256 threshold,
+            bool hasPendingRequest
         )
     {
         // USDC balance of the vault
@@ -637,21 +642,37 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         targetCash += vault.getCashDeficit();
         // threshold defines the no-op band around targetCash to avoid rebalance churn.
         threshold = (netAssets * rebalanceThresholdBps) / BPS_DENOMINATOR;
+        // hasPendingRequest: whether latest redeem request is still PENDING.
+        // Used to block rebalance divest until operator processes it.
+        hasPendingRequest = _hasPendingLatestRequest();
     }
 
     function _freeCash() internal view returns (uint256) {
         return vault.getFreeCash();
     }
 
-    function _computeRebalanceDecision(uint256 freeCash, uint256 idealCash, uint256 targetCash, uint256 threshold)
-        internal
-        pure
-        returns (uint8 action, uint256 amount)
-    {
+    /// @dev Check if the most recent redemption request is still PENDING.
+    /// @dev Used to prevent rebalance divest from pre-empting user redemption handling.
+    function _hasPendingLatestRequest() internal view returns (bool) {
+        uint256 nextId = vault.nextRequestId();
+        if (nextId <= 1) return false; // no requests ever
+        (,,,,,,, IMantleYieldVault.RequestStatus status) = vault.requests(nextId - 1);
+        return status == IMantleYieldVault.RequestStatus.PENDING;
+    }
+
+    function _computeRebalanceDecision(
+        uint256 freeCash,
+        uint256 idealCash,
+        uint256 targetCash,
+        uint256 threshold,
+        bool hasPendingRequest
+    ) internal pure returns (uint8 action, uint256 amount) {
         if (freeCash > targetCash + threshold) {
             return (REBALANCE_ACTION_INVEST, freeCash - targetCash);
         }
-        if (idealCash + threshold < targetCash) {
+        // Block rebalance divest if there's a pending user redemption request.
+        // Operator must call processRedeemBatch first to handle user liability.
+        if (idealCash + threshold < targetCash && !hasPendingRequest) {
             return (REBALANCE_ACTION_DIVEST, targetCash - idealCash);
         }
         return (REBALANCE_ACTION_NONE, 0);
