@@ -524,10 +524,17 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         // Per-batch semantic: only divest what's needed for this batch, capped by global deficit.
         uint256 shortfall = cashDeficit < batchTotalAsset ? cashDeficit : batchTotalAsset;
         if (shortfall > 0) {
+            // Snapshot adapter pool value (step-aligned) BEFORE divest
+            // to distinguish step residual vs true insufficiency.
+            uint256 adapterPoolBefore = _adapterPoolValue();
             uint256 divestRemaining = _divest(shortfall);
-            if (divestRemaining > 0) {
+            if (divestRemaining > 0 && adapterPoolBefore < shortfall) {
+                // True insufficient: adapter pool is not enough, the whole TX will revert, the request will remain PENDING and can be retried.
                 revert DivestInsufficient(shortfall, divestRemaining);
             }
+            // Otherwise (pool is enough, but divest has step residual or no progress because shortfall < step):
+            // Allow through. The request will enter PROCESSING, and subsequent divest will be filled by rebalance to align with the step,
+            // or the operator will use adjusted settledAssets to absorb dust in finalize.
         }
 
         vault.updateRequestBatch(ids, IMantleYieldVault.RequestStatus.PROCESSING);
@@ -653,6 +660,34 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
 
     function _freeCash() internal view returns (uint256) {
         return vault.getFreeCash();
+    }
+
+    /// @dev Sum of step-aligned executable redeem value across all strategies.
+    /// @dev Uses adapter.previewRedeem(totalValue) to get the step-aligned effective amount,
+    ///      so a dust residual below the smallest step is correctly excluded from the pool.
+    /// @dev Used to distinguish "true insufficient" (pool is not enough) vs "step residual" in processRedeemBatch.
+    function _adapterPoolValue() internal view returns (uint256 total) {
+        uint256 len = strategyOrder.length;
+        for (uint256 i = 0; i < len; i++) {
+            address adapter = strategyOrder[i];
+            if (!strategyInfo[adapter].isActive) continue;
+
+            uint256 adapterValue;
+            try IStrategyAdapter(adapter).totalValue() returns (uint256 v) {
+                adapterValue = v;
+            } catch {
+                continue;
+            }
+            if (adapterValue == 0) continue;
+
+            // Ask the adapter for the step-aligned executable amount.
+            try IStrategyAdapter(adapter)
+                .previewRedeem(adapterValue) returns (bool ok, uint256 executableAssetAmount, uint256) {
+                if (ok) total += executableAssetAmount;
+            } catch {
+                // If preview call fails, conservative handling, continue to exclude from total.
+            }
+        }
     }
 
     /// @dev Check if the most recent redemption request is still PENDING.

@@ -888,7 +888,9 @@ contract StrategyControllerUnitTest is Test {
         assertEq(amount, 900e18);
     }
 
-    function test_PreviewRebalance_InvestAmountDoesNotIncreaseWithRedeemInFlight() public {
+    function test_PreviewRebalance_InvestAmountCapsToFreeCash() public {
+        // Invest uses idealCash = freeCash + totalRedeemInFlight for surplus detection,
+        // but caps the actual invest amount to freeCash (in-flight hasn't arrived yet).
         _registerSingleAsyncStrategy();
         asset.mint(address(vault), 1_000e18);
         vault.createInFlight(address(asyncAdapter), address(posToken), 50e18, 500e18, false);
@@ -896,9 +898,13 @@ contract StrategyControllerUnitTest is Test {
         vm.warp(2 hours);
         (bool shouldRebalance, uint8 action, uint256 amount) = controller.previewRebalance();
 
+        // netAssets = 1000 + 500 (redeemInFlight) + 0 (adapter) - 0 (locked) = 1500
+        // targetCash = 1500 * 10% + 0 = 150, threshold = 30
+        // freeCash = 1000, idealCash = 1500
+        // surplus = idealCash - target = 1350, amount = min(1350, freeCash=1000) = 1000
         assertTrue(shouldRebalance);
         assertEq(action, controller.REBALANCE_ACTION_INVEST());
-        assertEq(amount, 850e18);
+        assertEq(amount, 1_000e18);
     }
 
     function test_PreviewRebalance_ReturnsDivestDecision() public {
@@ -1082,6 +1088,9 @@ contract StrategyControllerUnitTest is Test {
     }
 
     function test_Rebalance_DivestSkipsFailingStrategy() public {
+        // Sync adapter fails, async succeeds. adapter pool total = 1000 >= shortfall 700,
+        // so remaining 200 is treated as "best-effort residual" (not true insufficiency) → no revert.
+        // Operator must pass adjusted settledAssets at finalize to absorb the shortfall.
         _registerTwoStrategies();
         syncAdapter.setTotalValue(500e18);
         asyncAdapter.setTotalValue(500e18);
@@ -1097,7 +1106,9 @@ contract StrategyControllerUnitTest is Test {
         assertEq(asyncAdapter.asyncCount(), 1);
     }
 
-    function test_ProcessRedeemBatch_EmitsDivestSkippedWithRevertData_OnAsyncRedeemRevert() public {
+    function test_ProcessRedeemBatch_EmitsDivestSkipped_OnAsyncRedeemRevert() public {
+        // adapter pool (step-aligned) = 700 >= shortfall 700 → allow proceed even though async call fails.
+        // req becomes PROCESSING, rebalance will补 through buffer-aligned divest in subsequent calls.
         _registerSingleAsyncStrategy();
         asyncAdapter.setTotalValue(700e18);
         asyncAdapter.setFailFlags(false, false, true);
@@ -1114,7 +1125,7 @@ contract StrategyControllerUnitTest is Test {
         _assertSkippedLog(logs, DIVEST_SKIPPED_EVENT_SIG, address(asyncAdapter), 700e18, _errorData("ASYNC_FAIL"));
     }
 
-    function test_ProcessRedeemBatch_EmitsDivestSkippedWithRevertData_OnAsyncRedeemCustomError() public {
+    function test_ProcessRedeemBatch_EmitsDivestSkipped_OnAsyncRedeemCustomError() public {
         _registerSingleAsyncStrategy();
         asyncAdapter.setTotalValue(700e18);
         asyncAdapter.setFailAsyncCustomError(true);
@@ -1135,6 +1146,20 @@ contract StrategyControllerUnitTest is Test {
             700e18,
             _customErrorData(MockAsyncCustomError.selector, 700e18)
         );
+    }
+
+    function test_ProcessRedeemBatch_RevertsWhenAdapterPoolInsufficient() public {
+        // adapter pool = 50 < shortfall 100 → true insufficiency → revert DivestInsufficient.
+        _registerSingleAsyncStrategy();
+        asyncAdapter.setTotalValue(50e18);
+        uint256[] memory ids = new uint256[](1);
+        ids[0] = 1;
+        vault.setRequest(1, 100e18, 0, IMantleYieldVault.RequestStatus.PENDING);
+        vault.setLocked(100e18);
+
+        vm.prank(address(executorGateway));
+        vm.expectRevert(abi.encodeWithSelector(StrategyController.DivestInsufficient.selector, 100e18, 50e18));
+        controller.processRedeemBatch(ids);
     }
 
     function test_RevertWhen_ProcessRedeemBatchIdsNotSorted() public {
