@@ -106,6 +106,10 @@ contract SubRedManagementAdapterTest is Test {
     address internal receiver = makeAddr("receiver");
     address internal other = makeAddr("other");
 
+    uint256 internal constant SUBSCRIBE_STEP_ASSET = 1e16; // 0.01 with 18-dec asset
+    uint256 internal constant REDEEM_STEP_POS_18 = 1e18; // 1 whole token
+    uint256 internal constant REDEEM_STEP_POS_6 = 1e6; // 1 whole token
+
     function setUp() public {
         usdc = new MockUSDC();
         dustToken = new MockUSDC();
@@ -181,6 +185,15 @@ contract SubRedManagementAdapterTest is Test {
         emit AdapterRedeemRequested(address(adapter), address(this), 120e18, receiver);
 
         adapter.retryRedeemAsync(120e18, receiver);
+    }
+
+    function test_RetryRedeemAsync_OracleAdapterEmitsPosAmountNotAssetAmount() public {
+        stToken6.mint(address(adapterWithOracle), 300e6);
+
+        vm.expectEmit(true, true, true, true, address(adapterWithOracle));
+        emit AdapterRedeemRequested(address(adapterWithOracle), address(this), 120e6, receiver);
+
+        adapterWithOracle.retryRedeemAsync(120e6, receiver);
     }
 
     function test_RetryRedeemAsync_DoesNotEmitCustomRetryEvent() public {
@@ -303,5 +316,58 @@ contract SubRedManagementAdapterTest is Test {
     function test_GetPosTokenPrice_UsesManualWhenNoOracleConfigured() public {
         adapter.setManualPosTokenPrice(4e18);
         assertEq(adapter.getPosTokenPrice(), 4e18);
+    }
+
+    function test_PreviewDeposit_FloorsToIncrement() public {
+        adapter.setExecutionSteps(SUBSCRIBE_STEP_ASSET, REDEEM_STEP_POS_18);
+
+        uint256 rawAmount = 20_001e18 + 9e15; // 20,001.009
+        (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount) = adapter.previewDeposit(rawAmount);
+
+        assertTrue(ok);
+        assertEq(executableAssetAmount, 20_001e18);
+        assertEq(expectedPosAmount, 20_001e18);
+    }
+
+    function test_PreviewDeposit_ReturnsFlooredAmountWithoutMinimumConstraint() public {
+        adapter.setExecutionSteps(SUBSCRIBE_STEP_ASSET, REDEEM_STEP_POS_18);
+
+        uint256 rawAmount = 19_999e18 + 999e15; // 19,999.999
+        (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount) = adapter.previewDeposit(rawAmount);
+
+        assertTrue(ok);
+        assertEq(executableAssetAmount, 19_999e18 + 99e16);
+        assertEq(expectedPosAmount, 19_999e18 + 99e16);
+    }
+
+    function test_PreviewRedeem_FloorsQuantityAndReturnsExecutableAsset() public {
+        adapterWithOracle.setExecutionSteps(SUBSCRIBE_STEP_ASSET, REDEEM_STEP_POS_6);
+
+        uint256 rawAmount = 3_003e18 + 8e17; // 3003.8 => 1501.9 pos at price 2
+        (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount) = adapterWithOracle.previewRedeem(rawAmount);
+
+        assertTrue(ok);
+        assertEq(executableAssetAmount, 3_002e18);
+        assertEq(expectedPosAmount, 1_501e6);
+    }
+
+    function test_PreviewRedeem_ReturnsFlooredQuantityWithoutMinimumConstraint() public {
+        adapterWithOracle.setExecutionSteps(SUBSCRIBE_STEP_ASSET, REDEEM_STEP_POS_6);
+
+        uint256 rawAmount = 2_999e18 + 8e17; // 2999.8 => 1499.9 pos at price 2
+        (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount) = adapterWithOracle.previewRedeem(rawAmount);
+
+        assertTrue(ok);
+        assertEq(executableAssetAmount, 2_998e18);
+        assertEq(expectedPosAmount, 1_499e6);
+    }
+
+    function test_RevertWhen_RequestRedeemAmountIsNotNormalizedToPreviewResult() public {
+        adapterWithOracle.setExecutionSteps(SUBSCRIBE_STEP_ASSET, REDEEM_STEP_POS_6);
+        stToken6.mint(address(vault), 5_000e6);
+        vault.approveTokenToAdapter(address(stToken6), address(adapterWithOracle), 5_000e6);
+
+        vm.expectRevert();
+        adapterWithOracle.requestRedeemAsync(3_003e18 + 8e17, receiver);
     }
 }

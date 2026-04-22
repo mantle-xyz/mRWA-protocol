@@ -104,6 +104,24 @@ contract MockStrategyAdapter is IStrategyAdapter {
         return assetAmount;
     }
 
+    function previewDeposit(uint256 assetAmount)
+        external
+        pure
+        override
+        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
+    {
+        return (assetAmount > 0, assetAmount, 0);
+    }
+
+    function previewRedeem(uint256 assetAmount)
+        external
+        pure
+        override
+        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
+    {
+        return (assetAmount > 0, assetAmount, 0);
+    }
+
     function vault() external pure override returns (address) {
         return address(0);
     }

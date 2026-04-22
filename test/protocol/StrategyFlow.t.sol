@@ -128,6 +128,18 @@ contract MockVaultFlow {
         return lockedTotal > totalCash ? lockedTotal - totalCash : 0;
     }
 
+    uint256 public mockedTotalAssets;
+
+    function setMockedTotalAssets(uint256 v) external {
+        mockedTotalAssets = v;
+    }
+
+    function totalAssets() external view returns (uint256) {
+        if (mockedTotalAssets > 0) return mockedTotalAssets;
+        uint256 total = usdc.balanceOf(address(this)) + investInFlightTotal + redeemInFlightTotal;
+        return total > lockedTotal ? total - lockedTotal : 0;
+    }
+
     function approveToAdapter(address adapter, address token, uint256 amount) external {
         ERC20(token).approve(adapter, amount);
     }
@@ -219,6 +231,10 @@ contract MockVaultFlow {
             0,
             status
         );
+    }
+
+    function nextRequestId() external pure returns (uint256) {
+        return 1;
     }
 
     function inFlightRecords(uint256 inFlightId)

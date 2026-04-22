@@ -35,12 +35,8 @@ abstract contract BaseSync4626Adapter is BaseAdapter {
         _emitAdapterDeposit(amount, receiver, sharesOrPos);
     }
 
-    function _erc4626Withdraw(uint256 amount, address receiver, address owner)
-        internal
-        returns (uint256 actualAmount, uint256 burnedShares)
-    {
-        actualAmount = amount;
-        burnedShares = TARGET_4626.withdraw(amount, receiver, owner);
-        _emitAdapterWithdrawSync(amount, receiver, actualAmount);
+    function _erc4626Redeem(uint256 shares, address receiver, address owner) internal returns (uint256 actualAssets) {
+        actualAssets = TARGET_4626.redeem(shares, receiver, owner);
+        _emitAdapterWithdrawSync(shares, receiver, actualAssets);
     }
 }

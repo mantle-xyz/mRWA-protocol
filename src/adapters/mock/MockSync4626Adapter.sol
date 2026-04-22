@@ -24,7 +24,7 @@ contract MockSync4626Adapter is BaseSync4626Adapter {
     }
 
     function estimatePosAmount(uint256 assetAmount) external view override returns (uint256 positionAmount) {
-        positionAmount = TARGET_4626.previewDeposit(assetAmount);
+        positionAmount = TARGET_4626.previewWithdraw(assetAmount);
     }
 
     /// @dev Only settled position (4626 shares on adapter + vault). Unsettled ASSET
@@ -48,14 +48,14 @@ contract MockSync4626Adapter is BaseSync4626Adapter {
         sharesOrPos = _erc4626Deposit(amount, address(this));
     }
 
-    function withdrawSync(uint256 amount, address receiver)
+    function withdrawSync(uint256 shares, address receiver)
         external
         override
         onlyController
         whenNotPaused
         returns (uint256 actualUSDC)
     {
-        if (amount == 0) revert InvalidAmount();
-        (actualUSDC,) = _erc4626Withdraw(amount, receiver, VAULT);
+        if (shares == 0) revert InvalidAmount();
+        actualUSDC = _erc4626Redeem(shares, receiver, VAULT);
     }
 }
