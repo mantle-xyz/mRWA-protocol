@@ -118,6 +118,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     error UpdateStrategiesLengthMismatch();
     error DuplicateStrategyUpdate(address adapter);
     error InvestPosAmountUnavailable(address adapter, uint256 assetAmount);
+    error DivestInsufficient(uint256 required, uint256 remaining);
     error StrategyAlreadyActive(address adapter);
     error StrategyAlreadyInactive(address adapter);
     error StrategyInOrder(address adapter);
@@ -523,7 +524,10 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         // Per-batch semantic: only divest what's needed for this batch, capped by global deficit.
         uint256 shortfall = cashDeficit < batchTotalAsset ? cashDeficit : batchTotalAsset;
         if (shortfall > 0) {
-            _divest(shortfall);
+            uint256 divestRemaining = _divest(shortfall);
+            if (divestRemaining > 0) {
+                revert DivestInsufficient(shortfall, divestRemaining);
+            }
         }
 
         vault.updateRequestBatch(ids, IMantleYieldVault.RequestStatus.PROCESSING);
@@ -667,8 +671,12 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         uint256 threshold,
         bool hasPendingRequest
     ) internal pure returns (uint8 action, uint256 amount) {
-        if (freeCash > targetCash + threshold) {
-            return (REBALANCE_ACTION_INVEST, freeCash - targetCash);
+        // Invest: use idealCash to detect surplus (counts pending redeem in-flight as future cash),
+        // but cap the actual invest amount to current freeCash since in-flight hasn't arrived yet.
+        if (idealCash > targetCash + threshold) {
+            uint256 surplus = idealCash - targetCash;
+            amount = surplus > freeCash ? freeCash : surplus;
+            return (amount > 0 ? REBALANCE_ACTION_INVEST : REBALANCE_ACTION_NONE, amount);
         }
         // Block rebalance divest if there's a pending user redemption request.
         // Operator must call processRedeemBatch first to handle user liability.
@@ -763,8 +771,8 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         emit RebalanceInvest(requested, requested - remaining, remaining);
     }
 
-    function _divest(uint256 shortfall) internal {
-        uint256 remaining = shortfall;
+    function _divest(uint256 shortfall) internal returns (uint256 remaining) {
+        remaining = shortfall;
         uint256 len = strategyOrder.length;
 
         for (uint256 i = 0; i < len; i++) {
