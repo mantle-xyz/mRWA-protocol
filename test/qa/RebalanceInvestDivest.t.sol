@@ -31,6 +31,7 @@ contract MockPosToken_RB is ERC20 {
     constructor() ERC20("MockPosToken", "mPOS") {}
     function decimals() public pure override returns (uint8) { return 6; }
     function mint(address to, uint256 amount) external { _mint(to, amount); }
+    function burn(address from, uint256 amount) external { _burn(from, amount); }
 }
 
 contract MockSanctionsOracle_RB is ISanctionsOracle {
@@ -66,6 +67,24 @@ contract MockSyncAdapter_RB is IStrategyAdapter {
     function priceOracle() external pure returns (address) { return address(0); }
     function getPosTokenPrice() external pure returns (uint256) { return 1e18; }
     function estimatePosAmount(uint256 assetAmount) external pure returns (uint256) { return assetAmount; }
+    function previewDeposit(uint256 assetAmount)
+        external
+        pure
+        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
+    {
+        ok = assetAmount > 0;
+        executableAssetAmount = assetAmount;
+        expectedPosAmount = 0;
+    }
+    function previewRedeem(uint256 assetAmount)
+        external
+        pure
+        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
+    {
+        ok = assetAmount > 0;
+        executableAssetAmount = assetAmount;
+        expectedPosAmount = 0;
+    }
     function vault() external view returns (address) { return VAULT; }
 
     function totalValue() external view returns (uint256) {
@@ -78,15 +97,22 @@ contract MockSyncAdapter_RB is IStrategyAdapter {
         return amount;
     }
 
-    /// @dev USDC is already in this contract from prior deposit. Transfer actual amount back to vault.
-    function withdrawSync(uint256 amount, address) external returns (uint256) {
+    /// @dev Real adapter: withdrawSync receiver == adapter (controller passes adapter as receiver).
+    ///      USDC accumulates on adapter until later sweepToVault(asset, ...) call.
+    ///      In this mock posToken was minted to adapter at deposit time, so we burn adapter's
+    ///      own pos (no vault-side pull needed). USDC stays on adapter for the subsequent sweep.
+    function withdrawSync(uint256 posAmount, address) external returns (uint256) {
         uint256 bal = IERC20(ASSET).balanceOf(address(this));
-        uint256 actual = amount > bal ? bal : amount;
-        if (actual > 0) IERC20(ASSET).transfer(VAULT, actual);
+        uint256 actual = posAmount > bal ? bal : posAmount;
+        if (actual > 0) {
+            MockPosToken_RB(POS_TOKEN).burn(address(this), actual);
+        }
         return actual;
     }
 
-    function requestRedeemAsync(uint256, address) external {}
+    function requestRedeemAsync(uint256, address) external pure {
+        revert("Unsupported");
+    }
 
     function sweepToVault(address token, uint256 amount) external returns (uint256) {
         uint256 bal = IERC20(token).balanceOf(address(this));
@@ -96,7 +122,9 @@ contract MockSyncAdapter_RB is IStrategyAdapter {
     }
 
     function setPaused(bool) external {}
-    function retryRedeemAsync(uint256, address) external {}
+    function retryRedeemAsync(uint256, address) external pure {
+        revert("Unsupported");
+    }
 }
 
 /// @dev Async adapter: requestRedeemAsync pulls posTokens from vault (simulates protocol redeem request).
@@ -130,6 +158,26 @@ contract MockAsyncAdapter_RB is IStrategyAdapter {
         return assetAmount * 1e18 / posTokenPrice;
     }
 
+    function previewDeposit(uint256 assetAmount)
+        external
+        pure
+        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
+    {
+        ok = assetAmount > 0;
+        executableAssetAmount = assetAmount;
+        expectedPosAmount = 0;
+    }
+
+    function previewRedeem(uint256 assetAmount)
+        external
+        pure
+        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
+    {
+        ok = assetAmount > 0;
+        executableAssetAmount = assetAmount;
+        expectedPosAmount = 0;
+    }
+
     /// @dev totalValue = posToken held by vault * price / 1e18 (matches real SubRedManagementAdapter).
     function totalValue() external view returns (uint256) {
         return IERC20(POS_TOKEN).balanceOf(VAULT) * posTokenPrice / 1e18;
@@ -147,9 +195,8 @@ contract MockAsyncAdapter_RB is IStrategyAdapter {
     }
 
     /// @dev Simulates async redeem request: pulls posTokens from vault (vault approved via approveToAdapter).
-    ///      Real adapter internally computes posAmount from assetAmount; controller pre-approves that amount.
-    function requestRedeemAsync(uint256 assetAmount, address) external {
-        uint256 posAmount = posTokenPrice == 0 ? assetAmount : assetAmount * 1e18 / posTokenPrice;
+    ///      Controller passes posAmount (already converted asset→pos); mock must NOT re-divide by price.
+    function requestRedeemAsync(uint256 posAmount, address) external {
         IERC20(POS_TOKEN).transferFrom(VAULT, address(this), posAmount);
     }
 
@@ -196,6 +243,24 @@ contract MockRevertingAdapter_RB is IStrategyAdapter {
     function priceOracle() external pure returns (address) { return address(0); }
     function getPosTokenPrice() external pure returns (uint256) { return 1e18; }
     function estimatePosAmount(uint256 assetAmount) external pure returns (uint256) { return assetAmount; }
+    function previewDeposit(uint256 assetAmount)
+        external
+        pure
+        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
+    {
+        ok = assetAmount > 0;
+        executableAssetAmount = assetAmount;
+        expectedPosAmount = 0;
+    }
+    function previewRedeem(uint256 assetAmount)
+        external
+        pure
+        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
+    {
+        ok = assetAmount > 0;
+        executableAssetAmount = assetAmount;
+        expectedPosAmount = 0;
+    }
     function vault() external view returns (address) { return VAULT; }
 
     function totalValue() external view returns (uint256) {
@@ -210,15 +275,20 @@ contract MockRevertingAdapter_RB is IStrategyAdapter {
         return amount;
     }
 
-    function withdrawSync(uint256 amount, address) external returns (uint256) {
+    function withdrawSync(uint256 posAmount, address) external returns (uint256) {
         if (REVERT_WITHDRAW_SYNC) revert("withdrawSync failed");
         uint256 bal = IERC20(ASSET).balanceOf(address(this));
-        uint256 actual = amount > bal ? bal : amount;
-        if (actual > 0) IERC20(ASSET).transfer(VAULT, actual);
+        uint256 actual = posAmount > bal ? bal : posAmount;
+        if (actual > 0) {
+            // Posed tokens were minted to adapter on deposit; burn locally and keep USDC on adapter.
+            MockPosToken_RB(POS_TOKEN).burn(address(this), actual);
+        }
         return actual;
     }
 
-    function requestRedeemAsync(uint256, address) external {}
+    function requestRedeemAsync(uint256, address) external pure {
+        revert("Unsupported");
+    }
 
     function sweepToVault(address token, uint256 amount) external returns (uint256) {
         uint256 bal = IERC20(token).balanceOf(address(this));
@@ -228,7 +298,9 @@ contract MockRevertingAdapter_RB is IStrategyAdapter {
     }
 
     function setPaused(bool) external {}
-    function retryRedeemAsync(uint256, address) external {}
+    function retryRedeemAsync(uint256, address) external pure {
+        revert("Unsupported");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -447,7 +519,7 @@ contract RebalanceInvestDivestQATest is Test {
         // targetCash = netAssets * bufferBps / 10000
         // investAmount = freeCash - targetCash
         // For single adapter at 100% weight: alloc = min(shortfall, excessCash) = excessCash
-        (,,, uint256 netAssets,,) = controller.getRebalanceState();
+        (,,, uint256 netAssets,,,) = controller.getRebalanceState();
         // Pre-rebalance: netAssets = fc (vault balance only). Post-rebalance: includes investIF.
         // Use the fact that for first-ever invest: investAmount = fc - targetCash
         uint256 expectedTargetCash = fc * 1000 / BPS;
@@ -508,7 +580,7 @@ contract RebalanceInvestDivestQATest is Test {
         // Verify divest amount using controller's own rebalance state formula
         // controller.getRebalanceState() returns the same values _readRebalanceState computes
         // Note: read AFTER rebalance so we verify against post-state consistency
-        (,, uint256 fcPostRebalance, uint256 netAssetsPost, uint256 targetCashPost,) = controller.getRebalanceState();
+        (, uint256 fcPostRebalance,, uint256 netAssetsPost, uint256 targetCashPost,,) = controller.getRebalanceState();
         // The divest amount = targetCash - freeCash (pre-rebalance)
         // We verify: the in-flight created matches what controller computed
         uint256 actualDivest = redeemIFAfter - redeemIFBefore;
@@ -1217,7 +1289,7 @@ contract RebalanceInvestDivestQATest is Test {
         assertEq(deficit, 0, "no locked shares -> no cashDeficit");
 
         _step("[Step 3] Verify rebalance state: targetCash = netAssets * bufferBps / 10000 (no deficit addition)");
-        (uint256 totalCash,, uint256 freeCash, uint256 netAssets, uint256 targetCash, uint256 threshold) =
+        (uint256 totalCash, uint256 freeCash,, uint256 netAssets, uint256 targetCash, uint256 threshold,) =
             controller.getRebalanceState();
         uint256 expectedTargetCash = netAssets * 1000 / BPS;
         assertEq(targetCash, expectedTargetCash, "targetCash should equal netAssets * bufferBps / 10000 when deficit=0");
@@ -1488,7 +1560,7 @@ contract RebalanceInvestDivestQATest is Test {
         }
 
         _step("[Step 4] Verify getCashDeficit is used in targetCash calculation");
-        (,,, uint256 netAssets, uint256 targetCash,) = controller.getRebalanceState();
+        (,,, uint256 netAssets, uint256 targetCash,,) = controller.getRebalanceState();
         uint256 baseTargetCash = netAssets * 100 / BPS; // bufferTargetBps=100
         uint256 expectedTargetCash = baseTargetCash + deficitAfter;
         assertEq(targetCash, expectedTargetCash, "targetCash = base + cashDeficit");

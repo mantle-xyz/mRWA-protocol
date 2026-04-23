@@ -93,6 +93,26 @@ contract MockAsyncAdapter_REC is IStrategyAdapter {
         return assetAmount.mulDiv(1e18 * (10 ** pDec), posTokenPrice * (10 ** aDec), Math.Rounding.Floor);
     }
 
+    function previewDeposit(uint256 assetAmount)
+        external
+        pure
+        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
+    {
+        ok = assetAmount > 0;
+        executableAssetAmount = assetAmount;
+        expectedPosAmount = 0;
+    }
+
+    function previewRedeem(uint256 assetAmount)
+        external
+        pure
+        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
+    {
+        ok = assetAmount > 0;
+        executableAssetAmount = assetAmount;
+        expectedPosAmount = 0;
+    }
+
     function deposit(uint256 amount, address) external returns (uint256 posAmount) {
         IERC20(ASSET).transferFrom(VAULT, address(this), amount);
         uint8 aDec = IERC20Metadata(ASSET).decimals();
@@ -101,14 +121,12 @@ contract MockAsyncAdapter_REC is IStrategyAdapter {
         MockPosToken_REC(POS_TOKEN).mint(address(this), posAmount);
     }
 
-    function withdrawSync(uint256, address) external pure returns (uint256) { return 0; }
+    function withdrawSync(uint256, address) external pure returns (uint256) { revert("Unsupported"); }
 
-    function requestRedeemAsync(uint256 amountAsset, address) external {
-        uint8 aDec = IERC20Metadata(ASSET).decimals();
-        uint8 pDec = IERC20Metadata(POS_TOKEN).decimals();
-        uint256 quantity = amountAsset.mulDiv(1e18 * (10 ** pDec), posTokenPrice * (10 ** aDec), Math.Rounding.Floor);
-        if (quantity > 0) {
-            IERC20(POS_TOKEN).transferFrom(VAULT, address(this), quantity);
+    /// @dev Controller passes posAmount (position units) directly; no decimal/price re-conversion needed.
+    function requestRedeemAsync(uint256 posAmount, address) external {
+        if (posAmount > 0) {
+            IERC20(POS_TOKEN).transferFrom(VAULT, address(this), posAmount);
         }
     }
 

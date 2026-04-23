@@ -107,6 +107,26 @@ contract MockAsyncAdapter_ARL is IStrategyAdapter {
         return assetAmount.mulDiv(1e18 * (10 ** posDec), posTokenPrice * (10 ** assetDec), Math.Rounding.Floor);
     }
 
+    function previewDeposit(uint256 assetAmount)
+        external
+        pure
+        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
+    {
+        ok = assetAmount > 0;
+        executableAssetAmount = assetAmount;
+        expectedPosAmount = 0;
+    }
+
+    function previewRedeem(uint256 assetAmount)
+        external
+        pure
+        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
+    {
+        ok = assetAmount > 0;
+        executableAssetAmount = assetAmount;
+        expectedPosAmount = 0;
+    }
+
     /// @dev deposit: pull USDC from vault, mint posToken to adapter (simulates external fill)
     function deposit(uint256 amount, address) external returns (uint256 posAmount) {
         IERC20(ASSET).transferFrom(VAULT, address(this), amount);
@@ -118,15 +138,15 @@ contract MockAsyncAdapter_ARL is IStrategyAdapter {
     }
 
     /// @dev Pure async adapter -- no sync withdrawal
-    function withdrawSync(uint256, address) external pure returns (uint256) { return 0; }
+    function withdrawSync(uint256, address) external pure returns (uint256) {
+        revert("Unsupported");
+    }
 
-    /// @dev requestRedeemAsync: calculate posToken internally and pull from vault (matches real adapter)
-    function requestRedeemAsync(uint256 amountAsset, address) external {
-        uint8 assetDec = IERC20Metadata(ASSET).decimals();
-        uint8 posDec = IERC20Metadata(POS_TOKEN).decimals();
-        uint256 quantity = amountAsset.mulDiv(1e18 * (10 ** posDec), posTokenPrice * (10 ** assetDec), Math.Rounding.Floor);
-        if (quantity > 0) {
-            IERC20(POS_TOKEN).transferFrom(VAULT, address(this), quantity);
+    /// @dev requestRedeemAsync: first arg is posAmount (controller already did asset→pos conversion).
+    ///      Matches real adapter flow: pull posToken from vault based on the approved allowance.
+    function requestRedeemAsync(uint256 posAmount, address) external {
+        if (posAmount > 0) {
+            IERC20(POS_TOKEN).transferFrom(VAULT, address(this), posAmount);
         }
     }
 

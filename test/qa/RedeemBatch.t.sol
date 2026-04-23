@@ -45,6 +45,24 @@ contract MockAdapterRB is IStrategyAdapter {
     function priceOracle() external pure returns (address) { return address(0); }
     function getPosTokenPrice() external pure returns (uint256) { return 0; }
     function estimatePosAmount(uint256 assetAmount) external pure returns (uint256) { return assetAmount; }
+    function previewDeposit(uint256 assetAmount)
+        external
+        pure
+        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
+    {
+        ok = assetAmount > 0;
+        executableAssetAmount = assetAmount;
+        expectedPosAmount = 0;
+    }
+    function previewRedeem(uint256 assetAmount)
+        external
+        pure
+        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
+    {
+        ok = assetAmount > 0;
+        executableAssetAmount = assetAmount;
+        expectedPosAmount = 0;
+    }
     function vault() external view returns (address) { return vaultAddress; }
 
     /// @dev totalValue = actual asset balance held by adapter (like a real adapter)
@@ -60,19 +78,23 @@ contract MockAdapterRB is IStrategyAdapter {
         return amount;
     }
 
-    function withdrawSync(uint256 amount, address) external returns (uint256) {
+    /// @dev Async-only adapter; withdrawSync should never be called by controller.
+    function withdrawSync(uint256, address) external returns (uint256) {
         withdrawCount++;
-        // Return funds to vault (real behavior)
-        ERC20(ASSET).transfer(vaultAddress, amount);
-        return amount;
+        revert("Unsupported");
     }
 
+    /// @dev Async-only mock: vault holds only ASSET (no posToken), so we can't transferFrom posToken here.
+    ///      The test simulates settlement by manually moving asset from adapter back to vault later.
     function requestRedeemAsync(uint256, address) external { asyncCount++; }
 
-    /// @dev Sweep funds back to vault (real behavior)
-    function sweepToVault(address token, uint256 amount) external returns (uint256) {
-        ERC20(token).transfer(vaultAddress, amount);
-        return amount;
+    /// @dev Real sweepToVault clamps to min(balance, amount) per BaseAdapter.
+    function sweepToVault(address token, uint256 amount) external returns (uint256 claimed) {
+        uint256 bal = ERC20(token).balanceOf(address(this));
+        claimed = amount > bal ? bal : amount;
+        if (claimed > 0) {
+            ERC20(token).transfer(vaultAddress, claimed);
+        }
     }
 
     function setPaused(bool p) external { paused = p; }
@@ -187,6 +209,15 @@ contract MockVaultRB {
     function totalRedeemInFlight() external view returns (uint256) { return redeemInFlightTotal; }
     function adapterInvestInFlightTokens(address a) external view returns (uint256) { return investInFlightByAdapter[a]; }
     function adapterRedeemInFlightUsdc(address a) external view returns (uint256) { return redeemInFlightByAdapter[a]; }
+
+    /// @dev Simplified totalAssets: physical + inflight - lockedLiabilities.
+    ///      Matches real formula semantics enough for rebalance arithmetic in this mock.
+    function totalAssets() external view returns (uint256) {
+        uint256 total = token.balanceOf(address(this)) + investInFlightTotal + redeemInFlightTotal;
+        uint256 lockedValue = (totalLockedSharesValue * mockedExchangeRate) / 1e18;
+        if (total <= lockedValue) return 0;
+        return total - lockedValue;
+    }
 
     function approveToAdapter(address adapter, address approveToken, uint256 amount) external {
         ERC20(approveToken).approve(adapter, amount);

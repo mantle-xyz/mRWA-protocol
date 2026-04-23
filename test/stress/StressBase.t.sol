@@ -151,6 +151,26 @@ contract MockSyncAdapter_ST is IStrategyAdapter {
         return assetAmount;
     }
 
+    function previewDeposit(uint256 assetAmount)
+        external
+        pure
+        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
+    {
+        ok = assetAmount > 0;
+        executableAssetAmount = assetAmount;
+        expectedPosAmount = 0;
+    }
+
+    function previewRedeem(uint256 assetAmount)
+        external
+        pure
+        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
+    {
+        ok = assetAmount > 0;
+        executableAssetAmount = assetAmount;
+        expectedPosAmount = 0;
+    }
+
     function vault() external view returns (address) {
         return VAULT;
     }
@@ -178,9 +198,13 @@ contract MockSyncAdapter_ST is IStrategyAdapter {
         return posToRedeem;
     }
 
-    function requestRedeemAsync(uint256, address) external {}
+    function requestRedeemAsync(uint256, address) external pure {
+        revert("Unsupported");
+    }
 
-    function retryRedeemAsync(uint256, address) external {}
+    function retryRedeemAsync(uint256, address) external pure {
+        revert("Unsupported");
+    }
 
     function sweepToVault(address token, uint256 amount) external returns (uint256) {
         uint256 bal = IERC20(token).balanceOf(address(this));
@@ -239,6 +263,26 @@ contract MockAsyncAdapter_ST is IStrategyAdapter {
         return assetAmount * 1e18 / posTokenPrice;
     }
 
+    function previewDeposit(uint256 assetAmount)
+        external
+        pure
+        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
+    {
+        ok = assetAmount > 0;
+        executableAssetAmount = assetAmount;
+        expectedPosAmount = 0;
+    }
+
+    function previewRedeem(uint256 assetAmount)
+        external
+        pure
+        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
+    {
+        ok = assetAmount > 0;
+        executableAssetAmount = assetAmount;
+        expectedPosAmount = 0;
+    }
+
     function totalValue() external view returns (uint256) {
         return IERC20(POS_TOKEN).balanceOf(VAULT) * posTokenPrice / 1e18;
     }
@@ -252,11 +296,11 @@ contract MockAsyncAdapter_ST is IStrategyAdapter {
     }
 
     function withdrawSync(uint256, address) external pure returns (uint256) {
-        revert("async only");
+        revert("Unsupported");
     }
 
-    function requestRedeemAsync(uint256 assetAmount, address) external {
-        uint256 posAmount = posTokenPrice == 0 ? assetAmount : assetAmount * 1e18 / posTokenPrice;
+    function requestRedeemAsync(uint256 posAmount, address) external {
+        // Controller passes posAmount (already converted asset→pos); pull directly.
         IERC20(POS_TOKEN).transferFrom(VAULT, address(this), posAmount);
     }
 
@@ -328,6 +372,26 @@ contract MockConfigSyncAdapter_ST is IStrategyAdapter {
         return assetAmount * 1e18 / posTokenPrice;
     }
 
+    function previewDeposit(uint256 assetAmount)
+        external
+        pure
+        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
+    {
+        ok = assetAmount > 0;
+        executableAssetAmount = assetAmount;
+        expectedPosAmount = 0;
+    }
+
+    function previewRedeem(uint256 assetAmount)
+        external
+        pure
+        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
+    {
+        ok = assetAmount > 0;
+        executableAssetAmount = assetAmount;
+        expectedPosAmount = 0;
+    }
+
     /// @dev totalValue = USDC held on adapter (same as MockSyncAdapter_ST).
     ///      This is the "real value" deployed in the strategy.
     function totalValue() external view returns (uint256) {
@@ -341,11 +405,11 @@ contract MockConfigSyncAdapter_ST is IStrategyAdapter {
         return posAmt;
     }
 
-    function withdrawSync(uint256 amount, address) external returns (uint256) {
-        // Pull posTokens from vault → burn them → USDC stays on adapter for sweep
-        uint256 posNeeded = posTokenPrice == 0 ? amount : amount * 1e18 / posTokenPrice;
+    function withdrawSync(uint256 posAmount, address) external returns (uint256) {
+        // Controller passes posAmount directly (already converted asset→pos); do NOT re-divide by price.
+        // Pull posTokens from vault → burn → USDC stays on adapter for sweep.
         uint256 posAvail = IERC20(POS_TOKEN).balanceOf(VAULT);
-        uint256 posToRedeem = posNeeded > posAvail ? posAvail : posNeeded;
+        uint256 posToRedeem = posAmount > posAvail ? posAvail : posAmount;
         if (posToRedeem > 0) {
             IERC20(POS_TOKEN).transferFrom(VAULT, address(this), posToRedeem);
             MockPosToken_ST(POS_TOKEN).burn(address(this), posToRedeem);
@@ -353,8 +417,12 @@ contract MockConfigSyncAdapter_ST is IStrategyAdapter {
         return posToRedeem * posTokenPrice / 1e18;
     }
 
-    function requestRedeemAsync(uint256, address) external {}
-    function retryRedeemAsync(uint256, address) external {}
+    function requestRedeemAsync(uint256, address) external pure {
+        revert("Unsupported");
+    }
+    function retryRedeemAsync(uint256, address) external pure {
+        revert("Unsupported");
+    }
 
     function sweepToVault(address token, uint256 amount) external returns (uint256) {
         uint256 bal = IERC20(token).balanceOf(address(this));

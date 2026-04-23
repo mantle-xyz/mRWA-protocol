@@ -111,20 +111,40 @@ contract MockAdapterFee is IStrategyAdapter {
     function priceOracle() external pure returns (address) { return address(0); }
     function getPosTokenPrice() external pure returns (uint256) { return 0; }
     function estimatePosAmount(uint256 a) external pure returns (uint256) { return a; }
+    function previewDeposit(uint256 assetAmount)
+        external
+        pure
+        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
+    {
+        ok = assetAmount > 0;
+        executableAssetAmount = assetAmount;
+        expectedPosAmount = 0;
+    }
+    function previewRedeem(uint256 assetAmount)
+        external
+        pure
+        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
+    {
+        ok = assetAmount > 0;
+        executableAssetAmount = assetAmount;
+        expectedPosAmount = 0;
+    }
     function vault() external view returns (address) { return vaultAddress; }
     function totalValue() external view returns (uint256) { return ERC20(ASSET).balanceOf(address(this)); }
     function deposit(uint256 amount, address) external returns (uint256) {
         ERC20(ASSET).transferFrom(vaultAddress, address(this), amount);
         return amount;
     }
-    function withdrawSync(uint256 amount, address) external returns (uint256) {
-        ERC20(ASSET).transfer(vaultAddress, amount);
-        return amount;
+    function withdrawSync(uint256, address) external pure returns (uint256) {
+        revert("Unsupported");
     }
     function requestRedeemAsync(uint256, address) external {}
-    function sweepToVault(address token, uint256 amount) external returns (uint256) {
-        ERC20(token).transfer(vaultAddress, amount);
-        return amount;
+    function sweepToVault(address token, uint256 amount) external returns (uint256 claimed) {
+        uint256 bal = ERC20(token).balanceOf(address(this));
+        claimed = amount > bal ? bal : amount;
+        if (claimed > 0) {
+            ERC20(token).transfer(vaultAddress, claimed);
+        }
     }
     function setPaused(bool) external {}
     function retryRedeemAsync(uint256, address) external {}

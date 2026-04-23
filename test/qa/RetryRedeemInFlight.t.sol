@@ -76,6 +76,24 @@ contract MockAsyncAdapter_RT is IStrategyAdapter {
     function priceOracle() external pure returns (address) { return address(0); }
     function getPosTokenPrice() external pure returns (uint256) { return 1e18; }
     function estimatePosAmount(uint256 assetAmount) external pure returns (uint256) { return assetAmount; }
+    function previewDeposit(uint256 assetAmount)
+        external
+        pure
+        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
+    {
+        ok = assetAmount > 0;
+        executableAssetAmount = assetAmount;
+        expectedPosAmount = 0;
+    }
+    function previewRedeem(uint256 assetAmount)
+        external
+        pure
+        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
+    {
+        ok = assetAmount > 0;
+        executableAssetAmount = assetAmount;
+        expectedPosAmount = 0;
+    }
     function vault() external view returns (address) { return vaultAddress; }
 
     /// @dev New semantics: only settled posToken on vault, not adapter local balance.
@@ -137,6 +155,24 @@ contract MockSyncAdapter_RT is IStrategyAdapter {
     function priceOracle() external pure returns (address) { return address(0); }
     function getPosTokenPrice() external pure returns (uint256) { return 1e18; }
     function estimatePosAmount(uint256 assetAmount) external pure returns (uint256) { return assetAmount; }
+    function previewDeposit(uint256 assetAmount)
+        external
+        pure
+        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
+    {
+        ok = assetAmount > 0;
+        executableAssetAmount = assetAmount;
+        expectedPosAmount = 0;
+    }
+    function previewRedeem(uint256 assetAmount)
+        external
+        pure
+        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
+    {
+        ok = assetAmount > 0;
+        executableAssetAmount = assetAmount;
+        expectedPosAmount = 0;
+    }
     function vault() external view returns (address) { return vaultAddress; }
     function totalValue() external view returns (uint256) { return IERC20(ASSET).balanceOf(address(this)); }
 
@@ -144,12 +180,23 @@ contract MockSyncAdapter_RT is IStrategyAdapter {
         IERC20(ASSET).transferFrom(vaultAddress, address(this), amount);
         return amount;
     }
-    function withdrawSync(uint256 amount, address) external returns (uint256) {
+    /// @dev Real sync flow: controller passes posAmount + pre-approves adapter to pull pos from vault.
+    ///      Adapter pulls pos, burns it, USDC stays on adapter (from prior deposit). Later sweepToVault
+    ///      moves USDC to vault. Mock mirrors this so vault-side pos balance correctly decreases.
+    function withdrawSync(uint256 posAmount, address) external returns (uint256) {
         uint256 bal = IERC20(ASSET).balanceOf(address(this));
-        return amount > bal ? bal : amount;
+        uint256 actual = posAmount > bal ? bal : posAmount;
+        if (actual > 0) {
+            IERC20(POS_TOKEN).transferFrom(vaultAddress, address(this), actual);
+        }
+        return actual;
     }
-    function requestRedeemAsync(uint256, address) external {}
-    function retryRedeemAsync(uint256, address) external {}
+    function requestRedeemAsync(uint256, address) external pure {
+        revert("Unsupported");
+    }
+    function retryRedeemAsync(uint256, address) external pure {
+        revert("Unsupported");
+    }
     function sweepToVault(address token, uint256 amount) external returns (uint256) {
         uint256 bal = IERC20(token).balanceOf(address(this));
         uint256 actual = amount > bal ? bal : amount;
