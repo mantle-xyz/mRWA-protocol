@@ -16,6 +16,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {Test, console2} from "forge-std/Test.sol";
 import {OperatorExecutor} from "../../src/protocol/OperatorExecutor.sol";
+import {VaultViewHelper} from "../lib/VaultViewHelper.sol";
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -127,6 +128,7 @@ contract MockStrategyAdapter_GovRisk is IStrategyAdapter {
 // ---------------------------------------------------------------------------
 
 contract GovernanceRiskQATest is Test {
+    using VaultViewHelper for MantleYieldVault;
     MockUSDC_GovRisk internal usdc;
     MockPosToken_GovRisk internal posToken1;
     MockPosToken_GovRisk internal posToken2;
@@ -273,7 +275,7 @@ contract GovernanceRiskQATest is Test {
             uint256 count;
             uint256[] memory tempIds = new uint256[](nextId);
             for (uint256 i = 1; i < nextId; i++) {
-                (, address recAdapter,,,,,bool isInvest,, IMantleYieldVault.InFlightStatus status) = vault.inFlightRecords(i);
+                (address recAdapter, bool isInvest, IMantleYieldVault.InFlightStatus status) = vault.ifAdapterAndStatus(i);
                 if (recAdapter == adpt && isInvest && status == IMantleYieldVault.InFlightStatus.PENDING) {
                     tempIds[count++] = i;
                 }
@@ -285,7 +287,7 @@ contract GovernanceRiskQATest is Test {
             uint256[] memory refunds = new uint256[](count);
             for (uint256 i = 0; i < count; i++) {
                 ids[i] = tempIds[i];
-                (,,, uint256 tokenAmount,,,,,) = vault.inFlightRecords(ids[i]);
+                uint256 tokenAmount = vault.ifTokenAmount(ids[i]);
                 settledPos[i] = tokenAmount;
                 refunds[i] = 0;
             }
@@ -309,7 +311,7 @@ contract GovernanceRiskQATest is Test {
             uint256 count;
             uint256[] memory tempIds = new uint256[](nextId);
             for (uint256 i = 1; i < nextId; i++) {
-                (, address recAdapter,,,,,bool isInvest,, IMantleYieldVault.InFlightStatus status) = vault.inFlightRecords(i);
+                (address recAdapter, bool isInvest, IMantleYieldVault.InFlightStatus status) = vault.ifAdapterAndStatus(i);
                 if (recAdapter == adpt && !isInvest && status == IMantleYieldVault.InFlightStatus.PENDING) {
                     tempIds[count++] = i;
                 }
@@ -320,7 +322,7 @@ contract GovernanceRiskQATest is Test {
             uint256[] memory settledAmounts = new uint256[](count);
             for (uint256 i = 0; i < count; i++) {
                 ids[i] = tempIds[i];
-                (,,,, uint256 usdcAmount,,,,) = vault.inFlightRecords(ids[i]);
+                uint256 usdcAmount = vault.ifUsdcAmount(ids[i]);
                 settledAmounts[i] = usdcAmount;
             }
             uint256[] memory emptyIds = new uint256[](0);
@@ -394,9 +396,9 @@ contract GovernanceRiskQATest is Test {
 
         // Step 3: Verify all requests are PENDING
         _step("[Step 3] Verify all requests are PENDING");
-        (,,,,,,,IMantleYieldVault.RequestStatus statusA) = vault.requests(reqA);
-        (,,,,,,,IMantleYieldVault.RequestStatus statusB) = vault.requests(reqB);
-        (,,,,,,,IMantleYieldVault.RequestStatus statusC) = vault.requests(reqC);
+        IMantleYieldVault.RequestStatus statusA = vault.reqStatus(reqA);
+        IMantleYieldVault.RequestStatus statusB = vault.reqStatus(reqB);
+        IMantleYieldVault.RequestStatus statusC = vault.reqStatus(reqC);
         assertEq(uint256(statusA), uint256(IMantleYieldVault.RequestStatus.PENDING));
         assertEq(uint256(statusB), uint256(IMantleYieldVault.RequestStatus.PENDING));
         assertEq(uint256(statusC), uint256(IMantleYieldVault.RequestStatus.PENDING));
@@ -411,9 +413,9 @@ contract GovernanceRiskQATest is Test {
 
         // Step 5: Verify selective processing results
         _step("[Step 5] Verify selective processing results");
-        (,,,,,,,IMantleYieldVault.RequestStatus statusA2) = vault.requests(reqA);
-        (,,,,,,,IMantleYieldVault.RequestStatus statusB2) = vault.requests(reqB);
-        (,,,,,,,IMantleYieldVault.RequestStatus statusC2) = vault.requests(reqC);
+        IMantleYieldVault.RequestStatus statusA2 = vault.reqStatus(reqA);
+        IMantleYieldVault.RequestStatus statusB2 = vault.reqStatus(reqB);
+        IMantleYieldVault.RequestStatus statusC2 = vault.reqStatus(reqC);
         assertEq(uint256(statusA2), uint256(IMantleYieldVault.RequestStatus.PENDING), "reqA should remain PENDING");
         assertEq(uint256(statusB2), uint256(IMantleYieldVault.RequestStatus.PROCESSING), "reqB should be PROCESSING");
         assertEq(uint256(statusC2), uint256(IMantleYieldVault.RequestStatus.PROCESSING), "reqC should be PROCESSING");
@@ -478,8 +480,8 @@ contract GovernanceRiskQATest is Test {
 
         // Step 7: Finalize late batch first
         _step("[Step 7] Finalize late batch first");
-        (,,,, uint256 lateEst1,,,) = vault.requests(lateReq1);
-        (,,,, uint256 lateEst2,,,) = vault.requests(lateReq2);
+        uint256 lateEst1 = vault.reqEstimate(lateReq1);
+        uint256 lateEst2 = vault.reqEstimate(lateReq2);
         uint256[] memory lateSettled = new uint256[](2);
         lateSettled[0] = lateEst1;
         lateSettled[1] = lateEst2;
@@ -488,8 +490,8 @@ contract GovernanceRiskQATest is Test {
 
         // Step 8: Finalize early batch second
         _step("[Step 8] Finalize early batch second");
-        (,,,, uint256 earlyEst1,,,) = vault.requests(earlyReq1);
-        (,,,, uint256 earlyEst2,,,) = vault.requests(earlyReq2);
+        uint256 earlyEst1 = vault.reqEstimate(earlyReq1);
+        uint256 earlyEst2 = vault.reqEstimate(earlyReq2);
         uint256[] memory earlySettled = new uint256[](2);
         earlySettled[0] = earlyEst1;
         earlySettled[1] = earlyEst2;
@@ -498,10 +500,10 @@ contract GovernanceRiskQATest is Test {
 
         // Step 9: Verify all requests DONE and accounting consistent
         _step("[Step 9] Verify all requests DONE and accounting consistent");
-        (,,,,,,,IMantleYieldVault.RequestStatus s1) = vault.requests(earlyReq1);
-        (,,,,,,,IMantleYieldVault.RequestStatus s2) = vault.requests(earlyReq2);
-        (,,,,,,,IMantleYieldVault.RequestStatus s3) = vault.requests(lateReq1);
-        (,,,,,,,IMantleYieldVault.RequestStatus s4) = vault.requests(lateReq2);
+        IMantleYieldVault.RequestStatus s1 = vault.reqStatus(earlyReq1);
+        IMantleYieldVault.RequestStatus s2 = vault.reqStatus(earlyReq2);
+        IMantleYieldVault.RequestStatus s3 = vault.reqStatus(lateReq1);
+        IMantleYieldVault.RequestStatus s4 = vault.reqStatus(lateReq2);
         assertEq(uint256(s1), uint256(IMantleYieldVault.RequestStatus.DONE));
         assertEq(uint256(s2), uint256(IMantleYieldVault.RequestStatus.DONE));
         assertEq(uint256(s3), uint256(IMantleYieldVault.RequestStatus.DONE));
@@ -581,8 +583,8 @@ contract GovernanceRiskQATest is Test {
         executor.executeProcessRedeemBatch(address(controller), ids);
 
         // Verify requests moved to PROCESSING
-        (,,,,,,,IMantleYieldVault.RequestStatus sA) = vault.requests(reqA);
-        (,,,,,,,IMantleYieldVault.RequestStatus sB) = vault.requests(reqB);
+        IMantleYieldVault.RequestStatus sA = vault.reqStatus(reqA);
+        IMantleYieldVault.RequestStatus sB = vault.reqStatus(reqB);
         assertEq(uint256(sA), uint256(IMantleYieldVault.RequestStatus.PROCESSING));
         assertEq(uint256(sB), uint256(IMantleYieldVault.RequestStatus.PROCESSING));
 
@@ -594,25 +596,11 @@ contract GovernanceRiskQATest is Test {
 
         // Step 5: Settle and finalize
         _step("[Step 5] Settle redeem in-flight and finalize batch");
-        _settleAllRedeemInFlight();
-
-        (,,,, uint256 estA,,,) = vault.requests(reqA);
-        (,,,, uint256 estB,,,) = vault.requests(reqB);
-        uint256[] memory settled = new uint256[](2);
-        settled[0] = estA;
-        settled[1] = estB;
-        vm.prank(bot);
-        executor.executeFinalizeRedeemBatch(address(controller), ids, settled);
+        _settleAndFinalizeBatch(reqA, reqB, ids);
 
         // Step 6: Verify accounting consistency
         _step("[Step 6] Verify accounting consistency");
-        uint256 totalLockedAfter = vault.totalLockedShares();
-        assertEq(totalLockedAfter, 0, "totalLockedShares should be 0 after all requests finalized");
-        (,,,,,,,IMantleYieldVault.RequestStatus finalA) = vault.requests(reqA);
-        (,,,,,,,IMantleYieldVault.RequestStatus finalB) = vault.requests(reqB);
-        assertEq(uint256(finalA), uint256(IMantleYieldVault.RequestStatus.DONE));
-        assertEq(uint256(finalB), uint256(IMantleYieldVault.RequestStatus.DONE));
-        _step(string.concat("  totalLockedShares after: ", vm.toString(vault.totalLockedShares())));
+        _verifyAllDone(reqA, reqB);
         _step("  PASS: Strategy weight changes affect divest path but do not break request state machine");
 
         _logPass();
@@ -770,7 +758,31 @@ contract GovernanceRiskQATest is Test {
         _step(string.concat("  freeCash: ", vm.toString(freeCashInitial)));
         _step(string.concat("  totalAssets: ", vm.toString(totalAssetsInitial)));
 
-        // Step 4: Process and settle only the processed batch
+        // Step 4-6: Process batch, verify states, return locked-shares-mid
+        uint256 totalLockedMid = _processAndVerifyBatch(
+            procReq1, procReq2, neglReq1, neglReq2, totalLockedInitial
+        );
+
+        // Step 7: 30 days pass, new request cycle while neglected ones remain
+        _step("[Step 7] 30 days pass, new request processed while neglected ones remain");
+        vm.warp(block.timestamp + 30 days);
+        _processNewRequestCycle(userC, redeemShares);
+
+        // Step 8: Final accounting check
+        _step("[Step 8] Final accounting consistency check");
+        _verifyFinalAccounting(neglReq1, neglReq2, totalLockedMid);
+
+        _logPass();
+    }
+
+    /// @dev Steps 4-6: process batch, verify statuses, check accounting
+    function _processAndVerifyBatch(
+        uint256 procReq1,
+        uint256 procReq2,
+        uint256 neglReq1,
+        uint256 neglReq2,
+        uint256 totalLockedInitial
+    ) internal returns (uint256 totalLockedMid) {
         _step("[Step 4] Process and finalize only processed batch via controller");
         uint256[] memory procIds = new uint256[](2);
         procIds[0] = procReq1;
@@ -780,8 +792,8 @@ contract GovernanceRiskQATest is Test {
 
         _settleAllRedeemInFlight();
 
-        (,,,, uint256 est1,,,) = vault.requests(procReq1);
-        (,,,, uint256 est2,,,) = vault.requests(procReq2);
+        uint256 est1 = vault.reqEstimate(procReq1);
+        uint256 est2 = vault.reqEstimate(procReq2);
         uint256[] memory settledAmounts = new uint256[](2);
         settledAmounts[0] = est1;
         settledAmounts[1] = est2;
@@ -791,17 +803,17 @@ contract GovernanceRiskQATest is Test {
 
         // Step 5: Verify neglected requests still PENDING with locked liabilities
         _step("[Step 5] Verify neglected requests still occupy locked liabilities");
-        (,,,,,,,IMantleYieldVault.RequestStatus neglS1) = vault.requests(neglReq1);
-        (,,,,,,,IMantleYieldVault.RequestStatus neglS2) = vault.requests(neglReq2);
+        IMantleYieldVault.RequestStatus neglS1 = vault.reqStatus(neglReq1);
+        IMantleYieldVault.RequestStatus neglS2 = vault.reqStatus(neglReq2);
         assertEq(uint256(neglS1), uint256(IMantleYieldVault.RequestStatus.PENDING));
         assertEq(uint256(neglS2), uint256(IMantleYieldVault.RequestStatus.PENDING));
 
-        (,,,,,,,IMantleYieldVault.RequestStatus procS1) = vault.requests(procReq1);
-        (,,,,,,,IMantleYieldVault.RequestStatus procS2) = vault.requests(procReq2);
+        IMantleYieldVault.RequestStatus procS1 = vault.reqStatus(procReq1);
+        IMantleYieldVault.RequestStatus procS2 = vault.reqStatus(procReq2);
         assertEq(uint256(procS1), uint256(IMantleYieldVault.RequestStatus.DONE));
         assertEq(uint256(procS2), uint256(IMantleYieldVault.RequestStatus.DONE));
 
-        uint256 totalLockedMid = vault.totalLockedShares();
+        totalLockedMid = vault.totalLockedShares();
         assertGt(totalLockedMid, 0, "neglected requests still lock shares");
         assertLt(totalLockedMid, totalLockedInitial, "processed requests released their lock");
         _step(string.concat("  totalLockedShares: ", vm.toString(totalLockedMid)));
@@ -813,13 +825,12 @@ contract GovernanceRiskQATest is Test {
         _step(string.concat("  freeCash: ", vm.toString(freeCashMid)));
         _step(string.concat("  totalAssets: ", vm.toString(totalAssetsMid)));
         assertGt(totalAssetsMid, 0, "totalAssets should be positive");
+    }
 
-        // Step 7: 30 days pass, new request cycle while neglected ones remain
-        _step("[Step 7] 30 days pass, new request processed while neglected ones remain");
-        vm.warp(block.timestamp + 30 days);
-
-        _fundAndDeposit(userC, DEPOSIT_AMOUNT);
-        uint256 newReq = _requestRedeemViaGateway(userC, redeemShares);
+    /// @dev Step 7 helper: fund, deposit, request, process, settle, finalize a new request
+    function _processNewRequestCycle(address user, uint256 shares) internal {
+        _fundAndDeposit(user, DEPOSIT_AMOUNT);
+        uint256 newReq = _requestRedeemViaGateway(user, shares);
         _step(string.concat("  New request: ", vm.toString(newReq)));
 
         uint256[] memory newIds = new uint256[](1);
@@ -829,17 +840,18 @@ contract GovernanceRiskQATest is Test {
 
         _settleAllRedeemInFlight();
 
-        (,,,, uint256 newEst,,,) = vault.requests(newReq);
+        uint256 newEst = vault.reqEstimate(newReq);
         uint256[] memory newSettled = new uint256[](1);
         newSettled[0] = newEst;
         vm.prank(bot);
         executor.executeFinalizeRedeemBatch(address(controller), newIds, newSettled);
         _step("  New request processed and finalized");
+    }
 
-        // Step 8: Final accounting check
-        _step("[Step 8] Final accounting consistency check");
-        (,,,,,,,IMantleYieldVault.RequestStatus finalN1) = vault.requests(neglReq1);
-        (,,,,,,,IMantleYieldVault.RequestStatus finalN2) = vault.requests(neglReq2);
+    /// @dev Step 8 helper: verify neglected requests and final accounting
+    function _verifyFinalAccounting(uint256 neglReq1, uint256 neglReq2, uint256 expectedLocked) internal {
+        IMantleYieldVault.RequestStatus finalN1 = vault.reqStatus(neglReq1);
+        IMantleYieldVault.RequestStatus finalN2 = vault.reqStatus(neglReq2);
         assertEq(uint256(finalN1), uint256(IMantleYieldVault.RequestStatus.PENDING), "neglected still PENDING");
         assertEq(uint256(finalN2), uint256(IMantleYieldVault.RequestStatus.PENDING), "neglected still PENDING");
 
@@ -851,10 +863,31 @@ contract GovernanceRiskQATest is Test {
         _step(string.concat("  totalAssets: ", vm.toString(finalTotalAssets)));
 
         assertGt(finalLocked, 0, "still have locked shares from neglected requests");
-        assertEq(finalLocked, totalLockedMid, "neglected lock unchanged after new cycle");
+        assertEq(finalLocked, expectedLocked, "neglected lock unchanged after new cycle");
         assertGt(finalTotalAssets, 0, "totalAssets should remain positive");
         _step("  PASS: System accounting remains consistent despite long-term neglected requests");
+    }
 
-        _logPass();
+    /// @dev Settle all redeem in-flight, then finalize a 2-request batch
+    function _settleAndFinalizeBatch(uint256 reqA, uint256 reqB, uint256[] memory ids) internal {
+        _settleAllRedeemInFlight();
+        uint256 estA = vault.reqEstimate(reqA);
+        uint256 estB = vault.reqEstimate(reqB);
+        uint256[] memory settled = new uint256[](2);
+        settled[0] = estA;
+        settled[1] = estB;
+        vm.prank(bot);
+        executor.executeFinalizeRedeemBatch(address(controller), ids, settled);
+    }
+
+    /// @dev Assert two requests are DONE and locked shares cleared
+    function _verifyAllDone(uint256 reqA, uint256 reqB) internal {
+        uint256 totalLockedAfter = vault.totalLockedShares();
+        assertEq(totalLockedAfter, 0, "totalLockedShares should be 0 after all requests finalized");
+        IMantleYieldVault.RequestStatus finalA = vault.reqStatus(reqA);
+        IMantleYieldVault.RequestStatus finalB = vault.reqStatus(reqB);
+        assertEq(uint256(finalA), uint256(IMantleYieldVault.RequestStatus.DONE));
+        assertEq(uint256(finalB), uint256(IMantleYieldVault.RequestStatus.DONE));
+        _step(string.concat("  totalLockedShares after: ", vm.toString(totalLockedAfter)));
     }
 }

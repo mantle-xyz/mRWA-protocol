@@ -3,11 +3,14 @@ pragma solidity ^0.8.24;
 
 import {IMantleYieldVault} from "../../src/interfaces/vault/IMantleYieldVault.sol";
 import {IStrategyControllerExecutor} from "../../src/interfaces/strategy/IStrategyControllerExecutor.sol";
+import {MantleYieldVault} from "../../src/vault/MantleYieldVault.sol";
+import {VaultViewHelper} from "../lib/VaultViewHelper.sol";
 import {StressBase, MockUSDC_ST} from "./StressBase.t.sol";
 
 /// @title S2: Async Redeem Full Lifecycle Stress
 /// @notice Validates requestRedeem → processRedeemBatch → finalizeRedeemBatch across many rounds
 contract S2_AsyncRedeemFullCycle is StressBase {
+    using VaultViewHelper for MantleYieldVault;
     uint256 constant DEPOSIT_AMOUNT = 50_000e6;
 
     function test_asyncRedeemFullCycle() external {
@@ -57,7 +60,7 @@ contract S2_AsyncRedeemFullCycle is StressBase {
 
                 // Verify processed requests are now PROCESSING
                 for (uint256 i = 0; i < toProcess.length; i++) {
-                    (,,,,,,,IMantleYieldVault.RequestStatus status) = vault.requests(toProcess[i]);
+                    IMantleYieldVault.RequestStatus status = vault.reqStatus(toProcess[i]);
                     assertEq(
                         uint8(status),
                         uint8(IMantleYieldVault.RequestStatus.PROCESSING),
@@ -82,7 +85,7 @@ contract S2_AsyncRedeemFullCycle is StressBase {
 
                 uint256 totalNeeded;
                 for (uint256 i = 0; i < processingIds.length; i++) {
-                    (,, uint256 shares,,,,, ) = vault.requests(processingIds[i]);
+                    uint256 shares = vault.reqShares(processingIds[i]);
                     // Estimate settlement with ±5% variance
                     uint256 estimated = shares * accountant.getRate() / 1e18;
                     uint256 variance = _randBetween(0, estimated * 5 / 100);
@@ -107,7 +110,7 @@ contract S2_AsyncRedeemFullCycle is StressBase {
 
                 // Verify all finalized
                 for (uint256 i = 0; i < processingIds.length; i++) {
-                    (,,,,,,,IMantleYieldVault.RequestStatus status) = vault.requests(processingIds[i]);
+                    IMantleYieldVault.RequestStatus status = vault.reqStatus(processingIds[i]);
                     assertEq(
                         uint8(status),
                         uint8(IMantleYieldVault.RequestStatus.DONE),
@@ -157,8 +160,8 @@ contract S2_AsyncRedeemFullCycle is StressBase {
         uint256 investCount;
         uint256 redeemCount;
         for (uint256 id = _baseInFlightId; id < nextIfId; id++) {
-            (, address ifAdapter,,,,, bool isInvest,, IMantleYieldVault.InFlightStatus ifStatus) =
-                vault.inFlightRecords(id);
+            (address ifAdapter, bool isInvest, IMantleYieldVault.InFlightStatus ifStatus) =
+                vault.ifAdapterAndStatus(id);
             if (ifStatus != IMantleYieldVault.InFlightStatus.PENDING) continue;
             if (ifAdapter != adapter) continue;
             if (isInvest) investCount++;
@@ -167,6 +170,10 @@ contract S2_AsyncRedeemFullCycle is StressBase {
 
         if (investCount == 0 && redeemCount == 0) return;
 
+        _populateAndSettle(adapter, nextIfId, investCount, redeemCount);
+    }
+
+    function _populateAndSettle(address adapter, uint256 nextIfId, uint256 investCount, uint256 redeemCount) internal {
         // Second pass: populate correctly-sized arrays
         uint256[] memory investIds = new uint256[](investCount);
         uint256[] memory investSettledPos = new uint256[](investCount);
@@ -177,19 +184,20 @@ contract S2_AsyncRedeemFullCycle is StressBase {
         uint256 rIdx;
 
         for (uint256 id = _baseInFlightId; id < nextIfId; id++) {
-            (,address ifAdapter,,uint256 tokenAmt, uint256 usdcAmt,,bool isInvest,,IMantleYieldVault.InFlightStatus ifStatus) =
-                vault.inFlightRecords(id);
+            (address ifAdapter, bool isInvest, IMantleYieldVault.InFlightStatus ifStatus) =
+                vault.ifAdapterAndStatus(id);
             if (ifStatus != IMantleYieldVault.InFlightStatus.PENDING) continue;
             if (ifAdapter != adapter) continue;
 
             if (isInvest) {
                 investIds[iIdx] = id;
+                (uint256 tokenAmt, uint256 usdcAmt) = vault.ifTokenAndUsdc(id);
                 investSettledPos[iIdx] = tokenAmt > 0 ? tokenAmt : usdcAmt;
                 investRefunds[iIdx] = 0;
                 iIdx++;
             } else {
                 redeemIds[rIdx] = id;
-                redeemSettled[rIdx] = usdcAmt;
+                redeemSettled[rIdx] = vault.ifUsdcAmount(id);
                 rIdx++;
             }
         }

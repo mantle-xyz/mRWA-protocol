@@ -16,6 +16,7 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Test, console2} from "forge-std/Test.sol";
+import {VaultViewHelper} from "../lib/VaultViewHelper.sol";
 
 // ============================================================
 // Mock Contracts
@@ -163,6 +164,7 @@ contract MockSyncAdapter_RT is IStrategyAdapter {
 // ============================================================
 
 contract RetryRedeemInFlightQATest is Test {
+    using VaultViewHelper for MantleYieldVault;
     MockUSDC_RT internal usdc;
     MockUSDC_RT internal posToken;
     MockUSDC_RT internal posTokenSync;
@@ -295,7 +297,7 @@ contract RetryRedeemInFlightQATest is Test {
         uint256 investId = _lastInFlightId();
 
         // Step 2: settle the invest (posToken arrives at adapter, sweep to vault)
-        (,,, uint256 investTokenAmt,,,,, ) = vault.inFlightRecords(investId);
+        uint256 investTokenAmt = vault.ifTokenAmount(investId);
         posToken.mint(address(asyncAdapter), investTokenAmt);
         _settleInvest(_arr(investId), _arr(investTokenAmt), _arr(0));
 
@@ -387,7 +389,7 @@ contract RetryRedeemInFlightQATest is Test {
         controller.retryRedeemInFlight(address(asyncAdapter), redeemId, retryAmount);
 
         _step("[Step 4] Verify: in-flight unchanged (same ID, still PENDING), adapter called");
-        (,,,,,,,, IMantleYieldVault.InFlightStatus statusAfter) = vault.inFlightRecords(redeemId);
+        IMantleYieldVault.InFlightStatus statusAfter = vault.ifStatus(redeemId);
         assertEq(uint8(statusAfter), uint8(IMantleYieldVault.InFlightStatus.PENDING), "status should remain PENDING");
         assertEq(asyncAdapter.retryCallCount(), 1, "adapter.retryRedeemAsync should be called once");
         assertEq(asyncAdapter.lastRetryPosAmount(), retryAmount, "adapter should receive correct retryPosAmount");
@@ -407,7 +409,7 @@ contract RetryRedeemInFlightQATest is Test {
 
         _step("[Step 1] Create PENDING redeem in-flight");
         (uint256 redeemId, ) = _createRedeemInFlight(1000e6);
-        (,,, uint256 tokenAmount,,,,, ) = vault.inFlightRecords(redeemId);
+        uint256 tokenAmount = vault.ifTokenAmount(redeemId);
 
         _step("[Step 2] Simulate full DiGiFT rejection: all posToken returned to adapter");
         posToken.mint(address(asyncAdapter), tokenAmount);
@@ -420,7 +422,7 @@ contract RetryRedeemInFlightQATest is Test {
         controller.retryRedeemInFlight(address(asyncAdapter), redeemId, tokenAmount);
 
         _step("[Step 4] Verify");
-        (,,,,,,,, IMantleYieldVault.InFlightStatus statusAfter) = vault.inFlightRecords(redeemId);
+        IMantleYieldVault.InFlightStatus statusAfter = vault.ifStatus(redeemId);
         assertEq(uint8(statusAfter), uint8(IMantleYieldVault.InFlightStatus.PENDING), "status should remain PENDING");
         assertEq(asyncAdapter.retryCallCount(), 1);
         assertEq(asyncAdapter.lastRetryPosAmount(), tokenAmount);
@@ -440,7 +442,7 @@ contract RetryRedeemInFlightQATest is Test {
 
         _step("[Step 1] Create PENDING redeem in-flight");
         (uint256 redeemId, ) = _createRedeemInFlight(1000e6);
-        (,,, uint256 tokenAmount,,,,, ) = vault.inFlightRecords(redeemId);
+        uint256 tokenAmount = vault.ifTokenAmount(redeemId);
         posToken.mint(address(asyncAdapter), tokenAmount);
 
         _step("[Step 2] Bot (non-admin) attempts retry");
@@ -494,11 +496,11 @@ contract RetryRedeemInFlightQATest is Test {
 
         _step("[Step 1] Create and settle redeem in-flight to CONFIRMED");
         (uint256 redeemId, ) = _createRedeemInFlight(1000e6);
-        (,,,, uint256 usdcAmount,,,, ) = vault.inFlightRecords(redeemId);
+        uint256 usdcAmount = vault.ifUsdcAmount(redeemId);
         usdc.mint(address(asyncAdapter), usdcAmount);
         _settleRedeem(_arr(redeemId), _arr(usdcAmount));
 
-        (,,,,,,,, IMantleYieldVault.InFlightStatus status) = vault.inFlightRecords(redeemId);
+        IMantleYieldVault.InFlightStatus status = vault.ifStatus(redeemId);
         assertEq(uint8(status), uint8(IMantleYieldVault.InFlightStatus.CONFIRMED), "should be CONFIRMED after settle");
 
         _step("[Step 2] Admin attempts retry on CONFIRMED in-flight");
@@ -550,7 +552,7 @@ contract RetryRedeemInFlightQATest is Test {
 
         _step("[Step 1] Create PENDING redeem in-flight");
         (uint256 redeemId, ) = _createRedeemInFlight(1000e6);
-        (,,, uint256 tokenAmount,,,,, ) = vault.inFlightRecords(redeemId);
+        uint256 tokenAmount = vault.ifTokenAmount(redeemId);
 
         _step("[Step 2] Admin attempts retry with amount > original");
         uint256 excessAmount = tokenAmount + 1;
@@ -573,7 +575,7 @@ contract RetryRedeemInFlightQATest is Test {
 
         _step("[Step 1] Create invest in-flight");
         uint256 investId = _createInvestInFlight(1000e6);
-        (,,,,,, bool isInvest,, IMantleYieldVault.InFlightStatus status) = vault.inFlightRecords(investId);
+        (, bool isInvest, IMantleYieldVault.InFlightStatus status) = vault.ifAdapterAndStatus(investId);
         assertTrue(isInvest, "should be invest in-flight");
         assertEq(uint8(status), uint8(IMantleYieldVault.InFlightStatus.PENDING));
 
@@ -616,7 +618,7 @@ contract RetryRedeemInFlightQATest is Test {
 
         _step("[Step 1] Create PENDING redeem in-flight");
         (uint256 redeemId, uint256 reqId) = _createRedeemInFlight(1000e6);
-        (,,,uint256 tokenAmount, uint256 usdcAmount,,,, ) = vault.inFlightRecords(redeemId);
+        (uint256 tokenAmount, uint256 usdcAmount) = vault.ifTokenAndUsdc(redeemId);
         _step(string.concat("  redeemId=", vm.toString(redeemId),
             " tokenAmount=", vm.toString(tokenAmount),
             " usdcAmount=", vm.toString(usdcAmount)));
@@ -648,7 +650,7 @@ contract RetryRedeemInFlightQATest is Test {
         uint256 userUsdcBefore = usdc.balanceOf(userA);
 
         // Compute settled assets from shares and exchange rate
-        (,, uint256 netShares,, uint256 estAssets,,, ) = vault.requests(reqId);
+        (uint256 netShares,, uint256 estAssets,,) = vault.reqCore(reqId);
         vm.warp(block.timestamp + 2 hours);
         vm.prank(bot);
         executor.executeFinalizeRedeemBatch(address(controller), _arr(reqId), _arr(estAssets));
@@ -656,7 +658,7 @@ contract RetryRedeemInFlightQATest is Test {
         uint256 userUsdcAfter = usdc.balanceOf(userA);
         assertGt(userUsdcAfter, userUsdcBefore, "user should receive USDC after finalize");
 
-        (,,,,,,,IMantleYieldVault.RequestStatus reqStatus) = vault.requests(reqId);
+        IMantleYieldVault.RequestStatus reqStatus = vault.reqStatus(reqId);
         assertEq(uint8(reqStatus), uint8(IMantleYieldVault.RequestStatus.DONE), "request should be DONE");
 
         _step("  PASS: full retry -> settle -> finalize flow completed, user received USDC");
@@ -719,7 +721,7 @@ contract RetryRedeemInFlightQATest is Test {
 
         _step("[Step 1] Create PENDING redeem in-flight");
         (uint256 redeemId, ) = _createRedeemInFlight(1000e6);
-        (,,, uint256 tokenAmount,,,,, ) = vault.inFlightRecords(redeemId);
+        uint256 tokenAmount = vault.ifTokenAmount(redeemId);
 
         _step("[Step 2] First retry: DiGiFT rejects, posToken returned, admin retries");
         posToken.mint(address(asyncAdapter), tokenAmount);
@@ -734,7 +736,7 @@ contract RetryRedeemInFlightQATest is Test {
         assertEq(asyncAdapter.retryCallCount(), 2, "second retry call");
 
         _step("[Step 4] Verify in-flight still PENDING after two retries");
-        (,,,,,,,, IMantleYieldVault.InFlightStatus status) = vault.inFlightRecords(redeemId);
+        IMantleYieldVault.InFlightStatus status = vault.ifStatus(redeemId);
         assertEq(uint8(status), uint8(IMantleYieldVault.InFlightStatus.PENDING), "still PENDING after 2 retries");
 
         _step("  PASS: multiple retries on same in-flight all succeeded");
@@ -753,11 +755,8 @@ contract RetryRedeemInFlightQATest is Test {
         _step("[Step 1] Create PENDING redeem in-flight and snapshot all fields");
         (uint256 redeemId, ) = _createRedeemInFlight(1000e6);
         uint256 nextIdBefore = vault.nextInFlightId();
-        (
-            uint256 idBefore, address adapterBefore, address tokenBefore,
-            uint256 tokenAmountBefore, uint256 usdcAmountBefore, uint256 settledBefore,
-            bool isInvestBefore, uint256 timestampBefore, IMantleYieldVault.InFlightStatus statusBefore
-        ) = vault.inFlightRecords(redeemId);
+        bytes32 snapshotBefore = _hashInFlightRecord(redeemId);
+        uint256 tokenAmountBefore = vault.ifTokenAmount(redeemId);
 
         _step("[Step 2] Retry");
         posToken.mint(address(asyncAdapter), tokenAmountBefore);
@@ -768,21 +767,8 @@ contract RetryRedeemInFlightQATest is Test {
         assertEq(vault.nextInFlightId(), nextIdBefore, "nextInFlightId should not change");
 
         _step("[Step 4] Verify all original fields preserved");
-        (
-            uint256 idAfter, address adapterAfter, address tokenAfter,
-            uint256 tokenAmountAfter, uint256 usdcAmountAfter, uint256 settledAfter,
-            bool isInvestAfter, uint256 timestampAfter, IMantleYieldVault.InFlightStatus statusAfter
-        ) = vault.inFlightRecords(redeemId);
-
-        assertEq(idAfter, idBefore, "id unchanged");
-        assertEq(adapterAfter, adapterBefore, "adapter unchanged");
-        assertEq(tokenAfter, tokenBefore, "token unchanged");
-        assertEq(tokenAmountAfter, tokenAmountBefore, "tokenAmount unchanged");
-        assertEq(usdcAmountAfter, usdcAmountBefore, "usdcAmount unchanged");
-        assertEq(settledAfter, settledBefore, "settledAmount unchanged");
-        assertEq(isInvestAfter, isInvestBefore, "isInvest unchanged");
-        assertEq(timestampAfter, timestampBefore, "timestamp unchanged");
-        assertEq(uint8(statusAfter), uint8(statusBefore), "status unchanged (PENDING)");
+        bytes32 snapshotAfter = _hashInFlightRecord(redeemId);
+        assertEq(snapshotAfter, snapshotBefore, "all in-flight fields unchanged after retry");
 
         _step("  PASS: retry does not mutate in-flight record, no new in-flight created");
         _logPass();
@@ -799,7 +785,7 @@ contract RetryRedeemInFlightQATest is Test {
 
         _step("[Step 1] Create PENDING redeem in-flight while strategy is active");
         (uint256 redeemId, ) = _createRedeemInFlight(1000e6);
-        (,,, uint256 tokenAmount,,,,, ) = vault.inFlightRecords(redeemId);
+        uint256 tokenAmount = vault.ifTokenAmount(redeemId);
 
         _step("[Step 2] Force-deactivate strategy via vm.store");
         // Precondition: strategy is active
@@ -828,7 +814,7 @@ contract RetryRedeemInFlightQATest is Test {
         vm.prank(manager);
         controller.retryRedeemInFlight(address(asyncAdapter), redeemId, tokenAmount);
 
-        (,,,,,,,, IMantleYieldVault.InFlightStatus status) = vault.inFlightRecords(redeemId);
+        IMantleYieldVault.InFlightStatus status = vault.ifStatus(redeemId);
         assertEq(uint8(status), uint8(IMantleYieldVault.InFlightStatus.PENDING));
         assertEq(asyncAdapter.retryCallCount(), 1);
         _step("  PASS: retry succeeded on deactivated strategy (contract only checks exists+isAsync)");
@@ -846,7 +832,7 @@ contract RetryRedeemInFlightQATest is Test {
 
         _step("[Step 1] Create PENDING redeem in-flight");
         (uint256 redeemId, uint256 reqId) = _createRedeemInFlight(1000e6);
-        (,,, uint256 tokenAmount, uint256 originalUsdcAmount,,,, ) = vault.inFlightRecords(redeemId);
+        (uint256 tokenAmount, uint256 originalUsdcAmount) = vault.ifTokenAndUsdc(redeemId);
         _step(string.concat("  original tokenAmount=", vm.toString(tokenAmount),
             " usdcAmount=", vm.toString(originalUsdcAmount)));
 
@@ -891,7 +877,7 @@ contract RetryRedeemInFlightQATest is Test {
 
         _step("[Step 1] Create PENDING redeem in-flight");
         (uint256 redeemId, ) = _createRedeemInFlight(1000e6);
-        (,,, uint256 tokenAmount, uint256 usdcAmount,,,, ) = vault.inFlightRecords(redeemId);
+        (uint256 tokenAmount, uint256 usdcAmount) = vault.ifTokenAndUsdc(redeemId);
 
         _step("[Step 2] Retry");
         posToken.mint(address(asyncAdapter), tokenAmount);
@@ -916,5 +902,15 @@ contract RetryRedeemInFlightQATest is Test {
 
         _step("  PASS: abnormal settle after retry - CONFIRMED with 0 settled, stats cleared");
         _logPass();
+    }
+
+    /// @dev Hash all 9 fields of an in-flight record for before/after comparison
+    function _hashInFlightRecord(uint256 id) internal view returns (bytes32) {
+        (
+            uint256 _id, address adapter, address token,
+            uint256 tokenAmount, uint256 usdcAmount, uint256 settledAmount,
+            bool isInvest, uint256 timestamp, IMantleYieldVault.InFlightStatus status
+        ) = vault.inFlightRecords(id);
+        return keccak256(abi.encode(_id, adapter, token, tokenAmount, usdcAmount, settledAmount, isInvest, timestamp, status));
     }
 }

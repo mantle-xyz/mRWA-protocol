@@ -16,6 +16,7 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Test, console2} from "forge-std/Test.sol";
+import {VaultViewHelper} from "../lib/VaultViewHelper.sol";
 
 // ---------------------------------------------------------------------------
 // Mock contracts
@@ -135,6 +136,7 @@ contract MockAdapterFee is IStrategyAdapter {
 // ---------------------------------------------------------------------------
 
 contract RedemptionFeeImpactQATest is Test {
+    using VaultViewHelper for MantleYieldVault;
     MockUSDC internal usdc;
     MockUSDC internal posToken;
     MockSanctionsOracle internal oracle;
@@ -336,7 +338,7 @@ contract RedemptionFeeImpactQATest is Test {
         _step("[Step 1] userA creates async redeem request at fee=1%");
         uint256 treasurySharesBefore = vault.balanceOf(treasuryAddr);
         uint256 reqId = _requestRedeem(userA, redeemShares);
-        (,,uint256 netShares, uint256 feeShares, uint256 estBefore,,,) = vault.requests(reqId);
+        (uint256 netShares, uint256 feeShares, uint256 estBefore,,) = vault.reqCore(reqId);
 
         // Verify estimatedAssets matches formula: grossAssets - fee
         uint256 grossAssets = (redeemShares * rate) / 1e18;
@@ -360,7 +362,7 @@ contract RedemptionFeeImpactQATest is Test {
         assertEq(vault.redemptionFeeBps(), 300, "fee should be 300 bps");
 
         _step("[Step 3] Re-read the old request data");
-        (,,,,uint256 estAfter,,,) = vault.requests(reqId);
+        uint256 estAfter = vault.reqEstimate(reqId);
         assertEq(estAfter, estBefore, "estimatedAssets should NOT change after fee increase");
 
         _step("[Step 4] Process and finalize via real chain: Bot -> OperatorExecutor -> Controller -> Vault");
@@ -368,7 +370,7 @@ contract RedemptionFeeImpactQATest is Test {
         _processRedeemBatch(_singleId(reqId));
         _finalizeRedeemBatch(_singleId(reqId), _singleAmount(estBefore));
 
-        (,,,,,uint256 settled,,IMantleYieldVault.RequestStatus status) = vault.requests(reqId);
+        (,,, uint256 settled, IMantleYieldVault.RequestStatus status) = vault.reqCore(reqId);
         assertEq(uint8(status), uint8(IMantleYieldVault.RequestStatus.DONE));
         assertEq(settled, estBefore, "settled should match original estimate, not auto-recalculated");
 
@@ -396,7 +398,7 @@ contract RedemptionFeeImpactQATest is Test {
         _step("[Step 1] userA creates async redeem request at fee=1%");
         uint256 treasurySharesBefore = vault.balanceOf(treasuryAddr);
         uint256 reqId = _requestRedeem(userA, redeemShares);
-        (,,, uint256 feeShares, uint256 estBefore,,,) = vault.requests(reqId);
+        (, uint256 feeShares, uint256 estBefore,,) = vault.reqCore(reqId);
 
         // Verify against formula
         uint256 grossAssets = (redeemShares * rate) / 1e18;
@@ -415,7 +417,7 @@ contract RedemptionFeeImpactQATest is Test {
         assertEq(vault.redemptionFeeBps(), 50, "fee should be 50 bps");
 
         _step("[Step 3] Re-read request data - estimatedAssets should be frozen");
-        (,,,,uint256 estAfter,,,) = vault.requests(reqId);
+        uint256 estAfter = vault.reqEstimate(reqId);
         assertEq(estAfter, estBefore, "estimatedAssets should NOT change after fee decrease");
 
         _step("[Step 4] Process and finalize via real chain, verify user receives USDC");
@@ -423,7 +425,7 @@ contract RedemptionFeeImpactQATest is Test {
         _processRedeemBatch(_singleId(reqId));
         _finalizeRedeemBatch(_singleId(reqId), _singleAmount(estBefore));
 
-        (,,,,,uint256 settled,,) = vault.requests(reqId);
+        uint256 settled = vault.reqSettled(reqId);
         assertEq(settled, estBefore, "settled should match original estimate");
         assertEq(usdc.balanceOf(userA) - userUsdcBefore, estBefore, "user should receive exact settled USDC");
         _step("  PASS: old request estimatedAssets unchanged after fee decrease");
@@ -447,7 +449,7 @@ contract RedemptionFeeImpactQATest is Test {
         _step("[Step 1] userA creates old request at fee=1%");
         uint256 treasuryBefore = vault.balanceOf(treasuryAddr);
         uint256 reqOld = _requestRedeem(userA, redeemShares);
-        (,,,,uint256 estOld,,,) = vault.requests(reqOld);
+        uint256 estOld = vault.reqEstimate(reqOld);
         uint256 expectedOldFee = _ceilDiv(grossAssets * 100, FEE_BASIS);
         uint256 expectedEstOld = grossAssets - expectedOldFee;
         assertEq(estOld, expectedEstOld, "old estimatedAssets should match 1% fee formula");
@@ -461,16 +463,7 @@ contract RedemptionFeeImpactQATest is Test {
         vault.setRedemptionFee(300);
 
         _step("[Step 3] userB creates new request at fee=3%");
-        uint256 treasuryBeforeNew = vault.balanceOf(treasuryAddr);
-        uint256 reqNew = _requestRedeem(userB, redeemShares);
-        (,,,,uint256 estNew,,,) = vault.requests(reqNew);
-        uint256 expectedNewFee = _ceilDiv(grossAssets * 300, FEE_BASIS);
-        uint256 expectedEstNew = grossAssets - expectedNewFee;
-        assertEq(estNew, expectedEstNew, "new estimatedAssets should match 3% fee formula");
-        // Treasury received new fee shares
-        uint256 expectedNewTreasury = _ceilDiv(redeemShares * 300, FEE_BASIS);
-        assertEq(vault.balanceOf(treasuryAddr) - treasuryBeforeNew, expectedNewTreasury, "treasury should receive 3% feeShares");
-        _step(string.concat("  new estimatedAssets = ", vm.toString(estNew), " (fee=", vm.toString(expectedNewFee), ")"));
+        (uint256 estNew, uint256 expectedNewFee) = _createAndVerifyNewRequest(redeemShares, grossAssets, 300);
 
         _step("[Step 4] Verify the difference matches fee delta");
         assertTrue(estOld > estNew, "old request (1% fee) should have higher estimatedAssets than new (3% fee)");
@@ -498,7 +491,7 @@ contract RedemptionFeeImpactQATest is Test {
         _step("[Step 1] userA creates old async request at fee=1%");
         uint256 treasuryBefore1 = vault.balanceOf(treasuryAddr);
         uint256 reqOld = _requestRedeem(userA, redeemShares);
-        (,,,,uint256 estOld,,,) = vault.requests(reqOld);
+        uint256 estOld = vault.reqEstimate(reqOld);
         uint256 expectedOldFee = _ceilDiv(grossAssets * 100, FEE_BASIS);
         assertEq(estOld, grossAssets - expectedOldFee, "old async should use 1% fee formula");
         _step(string.concat("  old async estimatedAssets = ", vm.toString(estOld)));
@@ -521,7 +514,7 @@ contract RedemptionFeeImpactQATest is Test {
 
         _step("[Step 4] userB creates new async request at new fee=3%");
         uint256 reqNew = _requestRedeem(userB, redeemShares);
-        (,,,,uint256 estNew,,,) = vault.requests(reqNew);
+        uint256 estNew = vault.reqEstimate(reqNew);
         assertEq(estNew, grossAssets - expectedNewFee, "new async should use 3% fee formula");
         _step(string.concat("  new async estimatedAssets = ", vm.toString(estNew)));
 
@@ -558,7 +551,7 @@ contract RedemptionFeeImpactQATest is Test {
         _step("[Step 2] userA creates request at fee=3%");
         uint256 treasuryBefore = vault.balanceOf(treasuryAddr);
         uint256 reqId = _requestRedeem(userA, redeemShares);
-        (,,,,uint256 estBefore,,,) = vault.requests(reqId);
+        uint256 estBefore = vault.reqEstimate(reqId);
         uint256 expectedFee3pct = _ceilDiv(grossAssets * 300, FEE_BASIS);
         assertEq(estBefore, grossAssets - expectedFee3pct, "estimatedAssets should match 3% fee formula");
         _step(string.concat("  estimatedAssets = ", vm.toString(estBefore), " (fee=3%)"));
@@ -576,13 +569,13 @@ contract RedemptionFeeImpactQATest is Test {
         assertEq(vault.maxRedemptionFeeBps(), 200, "max should be updated");
 
         _step("[Step 5] Old request estimatedAssets should NOT be recalculated");
-        (,,,,uint256 estAfter,,,) = vault.requests(reqId);
+        uint256 estAfter = vault.reqEstimate(reqId);
         assertEq(estAfter, estBefore, "old request estimatedAssets should remain frozen");
 
         _step("[Step 6] New request should use the converged fee (2%)");
         uint256 treasuryBeforeNew = vault.balanceOf(treasuryAddr);
         uint256 reqNew = _requestRedeem(userB, redeemShares);
-        (,,,,uint256 estNew,,,) = vault.requests(reqNew);
+        uint256 estNew = vault.reqEstimate(reqNew);
         uint256 expectedFee2pct = _ceilDiv(grossAssets * 200, FEE_BASIS);
         assertEq(estNew, grossAssets - expectedFee2pct, "new estimatedAssets should match 2% fee formula");
         assertTrue(estNew > estBefore, "new request at 2% fee should estimate more than old at 3%");
@@ -635,7 +628,7 @@ contract RedemptionFeeImpactQATest is Test {
         _step("[Step 3] userB creates async redeem request");
         uint256 treasurySharesBeforeAsync = vault.balanceOf(treasuryAddr);
         uint256 reqId = _requestRedeem(userB, redeemShares);
-        (,,,uint256 reqFeeShares,,,,) = vault.requests(reqId);
+        uint256 reqFeeShares = vault.reqFeeShares(reqId);
         uint256 feeSharesAsync = vault.balanceOf(treasuryAddr) - treasurySharesBeforeAsync;
         assertEq(feeSharesAsync, expectedTreasuryShares, "treasury should receive exact feeShares from async request");
         assertEq(reqFeeShares, expectedTreasuryShares, "request.feeShares should match formula");
@@ -813,7 +806,7 @@ contract RedemptionFeeImpactQATest is Test {
         assertEq(treasurySharesAfterAsync, treasurySharesBefore, "no fee shares for async request at 0% fee");
 
         // Verify request: feeShares=0, estimatedAssets=grossAssets
-        (,,,uint256 feeShares, uint256 estAssets,,,) = vault.requests(reqId);
+        (, uint256 feeShares, uint256 estAssets,,) = vault.reqCore(reqId);
         assertEq(feeShares, 0, "feeShares should be 0 when fee is 0");
         assertEq(estAssets, grossAssets, "estimatedAssets should equal grossAssets at 0% fee");
         _step(string.concat("  async estimatedAssets = ", vm.toString(estAssets), " == grossAssets"));
@@ -902,7 +895,7 @@ contract RedemptionFeeImpactQATest is Test {
 
         _step("[Step 1] userA creates request at rate=1e18, fee=1%");
         uint256 reqId = _requestRedeem(userA, redeemShares);
-        (,,uint256 netShares,, uint256 estOriginal,,,) = vault.requests(reqId);
+        (uint256 netShares,, uint256 estOriginal,,) = vault.reqCore(reqId);
         uint256 grossAtOriginalRate = (redeemShares * originalRate) / 1e18;
         uint256 feeAtOriginalRate = _ceilDiv(grossAtOriginalRate * INITIAL_FEE_BPS, FEE_BASIS);
         assertEq(estOriginal, grossAtOriginalRate - feeAtOriginalRate, "estimatedAssets should match formula at original rate");
@@ -913,7 +906,7 @@ contract RedemptionFeeImpactQATest is Test {
         vault.setRedemptionFee(300);
 
         _step("[Step 3] Verify old request estimatedAssets not auto-recalculated");
-        (,,,,uint256 estAfterFeeChange,,,) = vault.requests(reqId);
+        uint256 estAfterFeeChange = vault.reqEstimate(reqId);
         assertEq(estAfterFeeChange, estOriginal, "estimatedAssets should not auto-recalculate");
 
         _step("[Step 4] Exchange rate drops slightly (e.g. strategy incurred small loss)");
@@ -940,7 +933,7 @@ contract RedemptionFeeImpactQATest is Test {
         _finalizeRedeemBatch(_singleId(reqId), _singleAmount(actualSettled));
 
         _step("[Step 7] Verify settlement recorded correctly");
-        (,,,,uint256 estFinal, uint256 settled,,IMantleYieldVault.RequestStatus status) = vault.requests(reqId);
+        (,, uint256 estFinal, uint256 settled, IMantleYieldVault.RequestStatus status) = vault.reqCore(reqId);
         assertEq(uint8(status), uint8(IMantleYieldVault.RequestStatus.DONE));
         assertEq(estFinal, estOriginal, "estimatedAssets should remain as originally recorded (frozen)");
         assertEq(settled, actualSettled, "settledAssets should reflect actual rate-based settlement");
@@ -951,5 +944,21 @@ contract RedemptionFeeImpactQATest is Test {
         _step(string.concat("  user USDC received = ", vm.toString(userUsdcDelta)));
         _step("  PASS: rate change + fee change -> settlement difference transparent via event, no deadlock");
         _logPass();
+    }
+
+    /// @dev Create a new request for userB at the given fee, verify estimatedAssets and treasury
+    function _createAndVerifyNewRequest(uint256 redeemShares, uint256 grossAssets, uint256 feeBps)
+        internal
+        returns (uint256 estNew, uint256 expectedNewFee)
+    {
+        uint256 treasuryBeforeNew = vault.balanceOf(treasuryAddr);
+        uint256 reqNew = _requestRedeem(userB, redeemShares);
+        estNew = vault.reqEstimate(reqNew);
+        expectedNewFee = _ceilDiv(grossAssets * feeBps, FEE_BASIS);
+        uint256 expectedEstNew = grossAssets - expectedNewFee;
+        assertEq(estNew, expectedEstNew, "new estimatedAssets should match fee formula");
+        uint256 expectedNewTreasury = _ceilDiv(redeemShares * feeBps, FEE_BASIS);
+        assertEq(vault.balanceOf(treasuryAddr) - treasuryBeforeNew, expectedNewTreasury, "treasury should receive feeShares");
+        _step(string.concat("  new estimatedAssets = ", vm.toString(estNew), " (fee=", vm.toString(expectedNewFee), ")"));
     }
 }
