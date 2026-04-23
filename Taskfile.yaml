@@ -61,6 +61,27 @@ tasks:
         vars:
           EXTRA_ARGS: ${ROOT_DIR}/script/DeployAll.s.sol {{.CLI_ARGS}}
 
+  DeployInstance:
+    desc: Deploy a new protocol instance using existing on-chain factories (no new impls/factories)
+    cmds:
+      - task: _script
+        vars:
+          EXTRA_ARGS: ${ROOT_DIR}/script/DeployInstance.s.sol {{.CLI_ARGS}}
+
+  VerifyInstance:
+    desc: Verify DeployInstance contracts on block explorer (re-runs with --resume --verify)
+    cmds:
+      - task: _script
+        vars:
+          EXTRA_ARGS: ${ROOT_DIR}/script/DeployInstance.s.sol --broadcast --resume --verify {{.CLI_ARGS}}
+
+  VerifySubRedManagementAdapter:
+    desc: Verify SubRedManagementAdapter on block explorer (re-runs with --resume --verify)
+    cmds:
+      - task: _script
+        vars:
+          EXTRA_ARGS: ${ROOT_DIR}/script/strategy/DeploySubRedManagementAdapter.s.sol --broadcast --resume --verify {{.CLI_ARGS}}
+
 
   RegisterStrategy:
     cmds:
