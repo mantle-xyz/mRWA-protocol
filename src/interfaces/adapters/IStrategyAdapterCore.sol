@@ -10,6 +10,14 @@ interface IStrategyAdapterCore {
     /// @dev Priority: oracle valid price > manual written price > default 1e18.
     function getPosTokenPrice() external view returns (uint256);
     function estimatePosAmount(uint256 assetAmount) external view returns (uint256 positionAmount);
+    function previewDeposit(uint256 assetAmount)
+        external
+        view
+        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount);
+    function previewRedeem(uint256 assetAmount)
+        external
+        view
+        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount);
     function vault() external view returns (address);
     function totalValue() external view returns (uint256);
     function deposit(uint256 amount, address receiver) external returns (uint256 sharesOrPos);

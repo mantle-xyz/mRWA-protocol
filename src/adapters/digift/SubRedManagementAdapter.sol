@@ -16,9 +16,13 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
     ISubRedManagement public immutable SUB_RED;
     address public immutable ST_TOKEN;
 
+    uint256 public subscribeStepAsset;
+    uint256 public redeemStepPos;
+
     uint64 public subscribeDeadlineWindow = 6 hours;
     uint64 public redeemDeadlineWindow = 6 hours;
 
+    event ExecutionStepsUpdated(uint256 subscribeStepAsset, uint256 redeemStepPos);
     event SubscribeDeadlineWindowUpdated(uint64 newWindow);
     event RedeemDeadlineWindowUpdated(uint64 newWindow);
 
@@ -85,9 +89,10 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
         if (priceE18 == 0) {
             return _scaleToStRaw(amountAsset, assetDecimals, stDecimals);
         }
-        uint256 stScale = 10 ** stDecimals;
-        uint256 assetScale = 10 ** assetDecimals;
-        return Math.mulDiv(amountAsset, 1e18 * stScale, priceE18 * assetScale, Math.Rounding.Floor);
+        if (stDecimals >= assetDecimals) {
+            return Math.mulDiv(amountAsset, 1e18 * (10 ** (stDecimals - assetDecimals)), priceE18, Math.Rounding.Floor);
+        }
+        return Math.mulDiv(amountAsset, 1e18, priceE18 * (10 ** (assetDecimals - stDecimals)), Math.Rounding.Floor);
     }
 
     function _scaleToStRaw(uint256 amountAssetRaw, uint8 assetDecimals, uint8 stDecimals)
@@ -124,9 +129,28 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
         if (priceE18 == 0) {
             return _scaleToAssetRaw(amountPosRaw, stDecimals, assetDecimals);
         }
-        uint256 stScale = 10 ** stDecimals;
-        uint256 assetScale = 10 ** assetDecimals;
-        return Math.mulDiv(amountPosRaw, priceE18 * assetScale, 1e18 * stScale, Math.Rounding.Floor);
+        if (assetDecimals >= stDecimals) {
+            return Math.mulDiv(amountPosRaw, priceE18 * (10 ** (assetDecimals - stDecimals)), 1e18, Math.Rounding.Floor);
+        }
+        return Math.mulDiv(amountPosRaw, priceE18, 1e18 * (10 ** (stDecimals - assetDecimals)), Math.Rounding.Floor);
+    }
+
+    function _estimateAssetAmount(uint256 amountPosRaw, uint8 assetDecimals, uint8 stDecimals, Math.Rounding rounding)
+        internal
+        view
+        returns (uint256)
+    {
+        if (amountPosRaw == 0) {
+            return _scaleToAssetRaw(amountPosRaw, stDecimals, assetDecimals, rounding);
+        }
+        uint256 priceE18 = getPosTokenPrice();
+        if (priceE18 == 0) {
+            return _scaleToAssetRaw(amountPosRaw, stDecimals, assetDecimals, rounding);
+        }
+        if (assetDecimals >= stDecimals) {
+            return Math.mulDiv(amountPosRaw, priceE18 * (10 ** (assetDecimals - stDecimals)), 1e18, rounding);
+        }
+        return Math.mulDiv(amountPosRaw, priceE18, 1e18 * (10 ** (stDecimals - assetDecimals)), rounding);
     }
 
     /**
@@ -139,6 +163,58 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
         uint8 stDecimals = IERC20Metadata(ST_TOKEN).decimals();
         uint256 settledVaultPosBalance = IERC20(ST_TOKEN).balanceOf(VAULT);
         return _estimateAssetAmount(settledVaultPosBalance, assetDecimals, stDecimals);
+    }
+
+    function previewDeposit(uint256 amountAsset)
+        external
+        view
+        override
+        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
+    {
+        return _previewDeposit(amountAsset);
+    }
+
+    function _previewDeposit(uint256 amountAsset)
+        internal
+        view
+        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
+    {
+        executableAssetAmount = _floorToStep(amountAsset, subscribeStepAsset);
+        if (executableAssetAmount == 0) {
+            return (false, 0, 0);
+        }
+
+        uint8 assetDecimals = IERC20Metadata(address(ASSET)).decimals();
+        uint8 stDecimals = IERC20Metadata(ST_TOKEN).decimals();
+        expectedPosAmount = _estimatePosAmountInternal(executableAssetAmount, assetDecimals, stDecimals);
+        ok = executableAssetAmount > 0;
+    }
+
+    function previewRedeem(uint256 amountAsset)
+        external
+        view
+        override
+        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
+    {
+        uint8 assetDecimals = IERC20Metadata(address(ASSET)).decimals();
+        uint8 stDecimals = IERC20Metadata(ST_TOKEN).decimals();
+
+        uint256 originalPosAmount = _estimatePosAmountInternal(amountAsset, assetDecimals, stDecimals);
+        if (originalPosAmount == 0) {
+            return (false, 0, 0);
+        }
+
+        expectedPosAmount = _floorToStep(originalPosAmount, redeemStepPos);
+        if (expectedPosAmount == 0) {
+            return (false, 0, 0);
+        }
+
+        if (expectedPosAmount == originalPosAmount) {
+            return (true, amountAsset, expectedPosAmount);
+        }
+
+        executableAssetAmount = _estimateAssetAmount(expectedPosAmount, assetDecimals, stDecimals, Math.Rounding.Ceil);
+        ok = executableAssetAmount > 0;
     }
 
     // =============================================================
@@ -165,6 +241,16 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
         emit RedeemDeadlineWindowUpdated(newWindow);
     }
 
+    function setExecutionSteps(uint256 subscribeStepAsset_, uint256 redeemStepPos_)
+        external
+        onlyRole(DEFAULT_ADMIN_ROLE)
+    {
+        subscribeStepAsset = subscribeStepAsset_;
+        redeemStepPos = redeemStepPos_;
+
+        emit ExecutionStepsUpdated(subscribeStepAsset_, redeemStepPos_);
+    }
+
     // =============================================================
     // Controller Actions
     // =============================================================
@@ -173,7 +259,7 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
      * @notice Pull funds from Vault and submit subscribe.
      * @param amountAsset Asset amount to subscribe (vault asset raw units).
      * @param receiver Receiver parameter reserved by IStrategyAdapter.
-     * @return Subscribed position amount (ST raw units).
+     * @return expectedPosAmount Estimated subscribed position amount (ST raw units).
      * @dev Only callable by controller when not paused.
      */
     function deposit(uint256 amountAsset, address receiver)
@@ -183,40 +269,34 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
         whenNotPaused
         returns (uint256)
     {
-        if (amountAsset == 0) {
+        (bool ok, uint256 executableAssetAmount, uint256 previewPosAmount) = _previewDeposit(amountAsset);
+        if (!ok || amountAsset != executableAssetAmount) {
             revert InvalidAmount();
         }
-        receiver;
-        // Pull asset from Vault using temporary allowance set by StrategyController.
+        // Controller already validated via previewDeposit(); no redundant checks here.
         ASSET.safeTransferFrom(VAULT, address(this), amountAsset);
         _subscribe(amountAsset, uint64(block.timestamp + subscribeDeadlineWindow));
-        _emitAdapterDeposit(amountAsset, receiver, amountAsset);
-        uint8 assetDecimals = IERC20Metadata(address(ASSET)).decimals();
-        uint8 stDecimals = IERC20Metadata(ST_TOKEN).decimals();
-        return _estimatePosAmountInternal(amountAsset, assetDecimals, stDecimals);
+        _emitAdapterDeposit(amountAsset, receiver, previewPosAmount);
+        return previewPosAmount;
     }
 
     /**
-     * @notice Register an async redeem request.
-     * @param amountAsset Requested redeem amount (asset raw units).
-     * @dev amountAsset is asset-denominated; ST quantity is derived via estimatePosAmount(amountAsset).
-     * @param receiver Receiver recorded in the standardized async redeem request event.
+     * @notice Register an async redeem request using position-token quantity.
+     * @param posAmount Position-token quantity to redeem (ST raw units).
+     * @param receiver Receiver recorded in the adapter-level redeem request event.
      * @dev Only callable by controller when not paused.
      * @dev Pulls position token from vault, then submits redeem request to SubRed.
      */
-    function requestRedeemAsync(uint256 amountAsset, address receiver) external override onlyController whenNotPaused {
-        uint8 assetDecimals = IERC20Metadata(address(ASSET)).decimals();
-        uint8 stDecimals = IERC20Metadata(ST_TOKEN).decimals();
-        uint256 quantity = _estimatePosAmountInternal(amountAsset, assetDecimals, stDecimals);
-        IERC20(ST_TOKEN).safeTransferFrom(VAULT, address(this), quantity);
-        _redeem(quantity, uint64(block.timestamp + redeemDeadlineWindow));
-        _registerAsyncRedeem(amountAsset, receiver);
+    function requestRedeemAsync(uint256 posAmount, address receiver) external override onlyController whenNotPaused {
+        IERC20(ST_TOKEN).safeTransferFrom(VAULT, address(this), posAmount);
+        _redeem(posAmount, uint64(block.timestamp + redeemDeadlineWindow));
+        _registerAsyncRedeem(posAmount, receiver);
     }
 
     /**
      * @notice Retry async redeem using position tokens currently held by this adapter.
      * @param retryPosAmount Position-token amount to redeem from adapter local balance.
-     * @param receiver Receiver used for standardized async redeem request events.
+     * @param receiver Receiver used for adapter-level async redeem request events.
      * @dev Only callable by controller when not paused.
      */
     function retryRedeemAsync(uint256 retryPosAmount, address receiver) external override onlyController whenNotPaused {
@@ -227,12 +307,8 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
             revert InvalidAmount();
         }
 
-        uint8 assetDecimals = IERC20Metadata(address(ASSET)).decimals();
-        uint8 stDecimals = IERC20Metadata(ST_TOKEN).decimals();
-        uint256 retryAssetAmount = _estimateAssetAmount(retryPosAmount, assetDecimals, stDecimals);
-
         _redeem(retryPosAmount, uint64(block.timestamp + redeemDeadlineWindow));
-        _registerAsyncRedeem(retryAssetAmount, receiver);
+        _registerAsyncRedeem(retryPosAmount, receiver);
     }
 
     // =============================================================
@@ -255,6 +331,13 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
         ASSET.forceApprove(address(SUB_RED), 0);
     }
 
+    function _floorToStep(uint256 amount, uint256 step) internal pure returns (uint256) {
+        if (step == 0) {
+            return amount;
+        }
+        return amount - (amount % step);
+    }
+
     /**
      * @notice Internal helper to call SubRed redeem.
      * @param quantity Amount of ST token (shares) to redeem.
@@ -269,5 +352,20 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
         IERC20(ST_TOKEN).forceApprove(address(SUB_RED), quantity);
         SUB_RED.redeem(ST_TOKEN, address(ASSET), quantity, deadline);
         IERC20(ST_TOKEN).forceApprove(address(SUB_RED), 0);
+    }
+
+    function _scaleToAssetRaw(uint256 amountStRaw, uint8 stDecimals, uint8 assetDecimals, Math.Rounding rounding)
+        internal
+        pure
+        returns (uint256)
+    {
+        if (assetDecimals >= stDecimals) {
+            return amountStRaw * (10 ** (assetDecimals - stDecimals));
+        }
+        uint256 divisor = 10 ** (stDecimals - assetDecimals);
+        if (rounding == Math.Rounding.Ceil) {
+            return Math.ceilDiv(amountStRaw, divisor);
+        }
+        return amountStRaw / divisor;
     }
 }
