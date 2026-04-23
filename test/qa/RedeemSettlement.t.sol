@@ -95,6 +95,26 @@ contract MockAsyncAdapter_RS is IStrategyAdapter {
         return assetAmount.mulDiv(1e18 * (10 ** pDec), posTokenPrice * (10 ** aDec), Math.Rounding.Floor);
     }
 
+    function previewDeposit(uint256 assetAmount)
+        external
+        pure
+        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
+    {
+        ok = assetAmount > 0;
+        executableAssetAmount = assetAmount;
+        expectedPosAmount = 0;
+    }
+
+    function previewRedeem(uint256 assetAmount)
+        external
+        pure
+        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
+    {
+        ok = assetAmount > 0;
+        executableAssetAmount = assetAmount;
+        expectedPosAmount = 0;
+    }
+
     function deposit(uint256 amount, address) external returns (uint256 posAmount) {
         IERC20(ASSET).transferFrom(VAULT, address(this), amount);
         uint8 aDec = IERC20Metadata(ASSET).decimals();

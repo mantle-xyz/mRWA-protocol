@@ -94,6 +94,26 @@ contract MockStrategyAdapter is IStrategyAdapter {
         return assetAmount;
     }
 
+    function previewDeposit(uint256 assetAmount)
+        external
+        pure
+        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
+    {
+        ok = assetAmount > 0;
+        executableAssetAmount = assetAmount;
+        expectedPosAmount = 0;
+    }
+
+    function previewRedeem(uint256 assetAmount)
+        external
+        pure
+        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
+    {
+        ok = assetAmount > 0;
+        executableAssetAmount = assetAmount;
+        expectedPosAmount = 0;
+    }
+
     function vault() external view returns (address) {
         return VAULT;
     }
@@ -1216,18 +1236,23 @@ contract ControllerStrategyConfigTest is Test {
         _step("[Step 1] Call getRebalanceState() to inspect current state");
         (
             uint256 totalCash,
-            uint256 locked,
             uint256 freeCash,
+            uint256 idealCash,
             uint256 netAssets,
             uint256 targetCash,
-            uint256 threshold
+            uint256 threshold,
+            bool hasPendingRequest
         ) = controller.getRebalanceState();
+        // Derive `locked` for log compatibility (locked = totalCash - freeCash).
+        uint256 locked = totalCash - freeCash;
         _step(string.concat("  totalCash   = ", vm.toString(totalCash)));
         _step(string.concat("  locked      = ", vm.toString(locked)));
         _step(string.concat("  freeCash    = ", vm.toString(freeCash)));
+        _step(string.concat("  idealCash   = ", vm.toString(idealCash)));
         _step(string.concat("  netAssets   = ", vm.toString(netAssets)));
         _step(string.concat("  targetCash  = ", vm.toString(targetCash)));
         _step(string.concat("  threshold   = ", vm.toString(threshold)));
+        _step(string.concat("  hasPending  = ", vm.toString(hasPendingRequest)));
 
         _step("[Step 2] Call previewRebalance() to get expected action");
         (bool shouldRebalance, uint8 action, uint256 amount) = controller.previewRebalance();

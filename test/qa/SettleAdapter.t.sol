@@ -75,6 +75,26 @@ contract MockAdapterSA is IStrategyAdapter {
         return assetAmount;
     }
 
+    function previewDeposit(uint256 assetAmount)
+        external
+        pure
+        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
+    {
+        ok = assetAmount > 0;
+        executableAssetAmount = assetAmount;
+        expectedPosAmount = 0;
+    }
+
+    function previewRedeem(uint256 assetAmount)
+        external
+        pure
+        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
+    {
+        ok = assetAmount > 0;
+        executableAssetAmount = assetAmount;
+        expectedPosAmount = 0;
+    }
+
     function vault() external pure returns (address) {
         return address(0);
     }

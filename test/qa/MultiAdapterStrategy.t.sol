@@ -67,6 +67,24 @@ contract MockSyncAdapter_MA is IStrategyAdapter {
     function priceOracle() external pure returns (address) { return address(0); }
     function getPosTokenPrice() external pure returns (uint256) { return 1e18; }
     function estimatePosAmount(uint256 assetAmount) external pure returns (uint256) { return assetAmount; }
+    function previewDeposit(uint256 assetAmount)
+        external
+        pure
+        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
+    {
+        ok = assetAmount > 0;
+        executableAssetAmount = assetAmount;
+        expectedPosAmount = 0;
+    }
+    function previewRedeem(uint256 assetAmount)
+        external
+        pure
+        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
+    {
+        ok = assetAmount > 0;
+        executableAssetAmount = assetAmount;
+        expectedPosAmount = 0;
+    }
     function vault() external view returns (address) { return VAULT; }
 
     function totalValue() external view returns (uint256) {
@@ -88,7 +106,9 @@ contract MockSyncAdapter_MA is IStrategyAdapter {
         return actual;
     }
 
-    function requestRedeemAsync(uint256, address) external {}
+    function requestRedeemAsync(uint256, address) external pure {
+        revert("Unsupported");
+    }
 
     function sweepToVault(address token, uint256 amount) external returns (uint256) {
         uint256 bal = IERC20(token).balanceOf(address(this));
@@ -98,7 +118,9 @@ contract MockSyncAdapter_MA is IStrategyAdapter {
     }
 
     function setPaused(bool) external {}
-    function retryRedeemAsync(uint256, address) external {}
+    function retryRedeemAsync(uint256, address) external pure {
+        revert("Unsupported");
+    }
 }
 
 /// @dev Async adapter with variable posTokenPrice.
@@ -128,6 +150,26 @@ contract MockAsyncAdapter_MA is IStrategyAdapter {
         return assetAmount * 1e18 / posTokenPrice;
     }
 
+    function previewDeposit(uint256 assetAmount)
+        external
+        pure
+        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
+    {
+        ok = assetAmount > 0;
+        executableAssetAmount = assetAmount;
+        expectedPosAmount = 0;
+    }
+
+    function previewRedeem(uint256 assetAmount)
+        external
+        pure
+        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
+    {
+        ok = assetAmount > 0;
+        executableAssetAmount = assetAmount;
+        expectedPosAmount = 0;
+    }
+
     function totalValue() external view returns (uint256) {
         return IERC20(POS_TOKEN).balanceOf(VAULT) * posTokenPrice / 1e18;
     }
@@ -143,8 +185,8 @@ contract MockAsyncAdapter_MA is IStrategyAdapter {
         revert("async only");
     }
 
-    function requestRedeemAsync(uint256 assetAmount, address) external {
-        uint256 posAmount = posTokenPrice == 0 ? assetAmount : assetAmount * 1e18 / posTokenPrice;
+    function requestRedeemAsync(uint256 posAmount, address) external {
+        // Real adapter: controller already converted asset→pos and passes posAmount directly.
         IERC20(POS_TOKEN).transferFrom(VAULT, address(this), posAmount);
     }
 
