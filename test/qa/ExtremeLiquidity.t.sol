@@ -6,6 +6,7 @@ import {ISanctionsOracle} from "../../src/interfaces/compliance/ISanctionsOracle
 import {IMantleYieldVault} from "../../src/interfaces/vault/IMantleYieldVault.sol";
 import {IMantleVaultGateway} from "../../src/interfaces/vault/IMantleVaultGateway.sol";
 import {MantleYieldVault} from "../../src/vault/MantleYieldVault.sol";
+import {VaultViewHelper} from "../lib/VaultViewHelper.sol";
 import {MantleVaultGateway} from "../../src/vault/MantleVaultGateway.sol";
 import {Accountant} from "../../src/accountant/Accountant.sol";
 import {StrategyController} from "../../src/protocol/StrategyController.sol";
@@ -129,6 +130,7 @@ contract MockStrategyAdapter_EL is IStrategyAdapter {
 // ---------------------------------------------------------------------------
 
 contract ExtremeLiquidityQATest is Test {
+    using VaultViewHelper for MantleYieldVault;
     MockUSDC_EL internal usdc;
     MockPosToken_EL internal posToken;
     MockSanctionsOracle_EL internal oracle;
@@ -387,7 +389,7 @@ contract ExtremeLiquidityQATest is Test {
         assertTrue(requestId != 0, "request should be created even when freeCash was 0");
         _step(string.concat("  requestId = ", vm.toString(requestId)));
 
-        (,,,,,,,IMantleYieldVault.RequestStatus status) = vault.requests(requestId);
+        IMantleYieldVault.RequestStatus status = vault.reqStatus(requestId);
         assertEq(uint256(status), uint256(IMantleYieldVault.RequestStatus.PENDING), "status should be PENDING");
         _step("  PASS: async redeem request created successfully despite prior freeCash=0");
         _logPass();
@@ -443,7 +445,7 @@ contract ExtremeLiquidityQATest is Test {
         vm.prank(bot);
         executor.executeProcessRedeemBatch(address(controller), ids);
 
-        (,,,,,,,IMantleYieldVault.RequestStatus statusAfter) = vault.requests(requestId);
+        IMantleYieldVault.RequestStatus statusAfter = vault.reqStatus(requestId);
         assertEq(uint256(statusAfter), uint256(IMantleYieldVault.RequestStatus.PROCESSING));
 
         uint256 vaultBal = usdc.balanceOf(address(vault));
@@ -453,7 +455,7 @@ contract ExtremeLiquidityQATest is Test {
         _step(string.concat("  totalRedeemInFlight: ", vm.toString(redeemIF)));
 
         _step("[Step 4] Attempt finalize - vault lacks physical cash (in-flight not yet returned)");
-        (,,,, uint256 estAssets,,,) = vault.requests(requestId);
+        uint256 estAssets = vault.reqEstimate(requestId);
         _step(string.concat("  estimatedAssets: ", vm.toString(estAssets)));
         assertLt(vaultBal, estAssets, "vault should not have enough USDC (still in adapter as in-flight)");
 
@@ -467,7 +469,7 @@ contract ExtremeLiquidityQATest is Test {
         executor.executeFinalizeRedeemBatch(address(controller), ids, settledAssets);
 
         _step("[Step 5] Verify request stays in PROCESSING (in-flight not settled)");
-        (,,,,,,,IMantleYieldVault.RequestStatus statusFinal) = vault.requests(requestId);
+        IMantleYieldVault.RequestStatus statusFinal = vault.reqStatus(requestId);
         assertEq(uint256(statusFinal), uint256(IMantleYieldVault.RequestStatus.PROCESSING), "should still be PROCESSING");
         assertGt(vault.totalRedeemInFlight(), 0, "redeem in-flight still pending");
         _step("  PASS: finalizeRedeemBatch reverts with InsufficientCashForReady, funds stuck in async in-flight");
@@ -497,7 +499,7 @@ contract ExtremeLiquidityQATest is Test {
         vm.prank(bot);
         executor.executeProcessRedeemBatch(address(controller), ids);
 
-        (,,,,,,,IMantleYieldVault.RequestStatus statusAfter) = vault.requests(requestId);
+        IMantleYieldVault.RequestStatus statusAfter = vault.reqStatus(requestId);
         assertEq(uint256(statusAfter), uint256(IMantleYieldVault.RequestStatus.PROCESSING));
         uint256 vaultBalBeforeNewDeposit = usdc.balanceOf(address(vault));
         _step(string.concat("  vault USDC before new deposit: ", vm.toString(vaultBalBeforeNewDeposit)));
@@ -509,7 +511,7 @@ contract ExtremeLiquidityQATest is Test {
         _step(string.concat("  vault USDC after new deposit: ", vm.toString(vaultBalAfterDeposit)));
 
         _step("[Step 4] Finalize old request - uses new deposit funds");
-        (,,,, uint256 estAssets,,,) = vault.requests(requestId);
+        uint256 estAssets = vault.reqEstimate(requestId);
         _step(string.concat("  estimatedAssets: ", vm.toString(estAssets)));
 
         uint256 user1BalBefore = usdc.balanceOf(user1);
@@ -519,7 +521,7 @@ contract ExtremeLiquidityQATest is Test {
         vm.prank(bot);
         executor.executeFinalizeRedeemBatch(address(controller), ids, settledAmounts);
 
-        (,,,,,,,IMantleYieldVault.RequestStatus finalStatus) = vault.requests(requestId);
+        IMantleYieldVault.RequestStatus finalStatus = vault.reqStatus(requestId);
         assertEq(uint256(finalStatus), uint256(IMantleYieldVault.RequestStatus.DONE));
 
         _step("[Step 5] Verify new deposit funds were consumed by old request settlement");
@@ -580,7 +582,7 @@ contract ExtremeLiquidityQATest is Test {
         uint256 redeemId = nextIfBefore; // first new in-flight
 
         uint256 totalRedeemBefore = vault.totalRedeemInFlight();
-        (,,,,uint256 originalUsdcAmount,,,,) = vault.inFlightRecords(redeemId);
+        uint256 originalUsdcAmount = vault.ifUsdcAmount(redeemId);
         _step(string.concat("  redeem in-flight id: ", vm.toString(redeemId)));
         _step(string.concat("  original usdcAmount (X): ", vm.toString(originalUsdcAmount)));
         _step(string.concat("  totalRedeemInFlight: ", vm.toString(totalRedeemBefore)));
@@ -605,7 +607,7 @@ contract ExtremeLiquidityQATest is Test {
         );
 
         _step("[Step 4] Verify settledAmount = Y (actual), and in-flight decremented by X (original)");
-        (,,,,,uint256 settledAmount,,, IMantleYieldVault.InFlightStatus ifStatus) = vault.inFlightRecords(redeemId);
+        (uint256 settledAmount, IMantleYieldVault.InFlightStatus ifStatus) = vault.ifSettledAndStatus(redeemId);
         assertEq(settledAmount, actualSettled, "settledAmount should be actual value Y");
         assertEq(uint256(ifStatus), uint256(IMantleYieldVault.InFlightStatus.CONFIRMED));
         _step(string.concat("  settledAmount = ", vm.toString(settledAmount)));
@@ -782,17 +784,17 @@ contract ExtremeLiquidityQATest is Test {
         ids[0] = reqId2;
         vm.prank(bot);
         executor.executeProcessRedeemBatch(address(controller), ids);
-        (,,,,,,,IMantleYieldVault.RequestStatus st2) = vault.requests(reqId2);
+        IMantleYieldVault.RequestStatus st2 = vault.reqStatus(reqId2);
         assertEq(uint256(st2), uint256(IMantleYieldVault.RequestStatus.PROCESSING), "user2 should be PROCESSING");
 
-        (,,,, uint256 est2,,,) = vault.requests(reqId2);
+        uint256 est2 = vault.reqEstimate(reqId2);
         uint256 vaultBalForSettle = usdc.balanceOf(address(vault));
         uint256 settleAmount = est2 <= vaultBalForSettle ? est2 : vaultBalForSettle;
         uint256[] memory settled = new uint256[](1);
         settled[0] = settleAmount;
         vm.prank(bot);
         executor.executeFinalizeRedeemBatch(address(controller), ids, settled);
-        (,,,,,,,IMantleYieldVault.RequestStatus st2Final) = vault.requests(reqId2);
+        IMantleYieldVault.RequestStatus st2Final = vault.reqStatus(reqId2);
         assertEq(uint256(st2Final), uint256(IMantleYieldVault.RequestStatus.DONE), "user2 should be DONE");
         totalPaid += settleAmount;
         _step(string.concat("  user2 async settled: ", vm.toString(settleAmount)));
@@ -979,10 +981,10 @@ contract ExtremeLiquidityQATest is Test {
         ids[0] = reqId;
         vm.prank(bot);
         executor.executeProcessRedeemBatch(address(controller), ids);
-        (,,,,,,,IMantleYieldVault.RequestStatus st) = vault.requests(reqId);
+        IMantleYieldVault.RequestStatus st = vault.reqStatus(reqId);
         assertEq(uint256(st), uint256(IMantleYieldVault.RequestStatus.PROCESSING), "should be PROCESSING");
 
-        (,,,, uint256 est,,,) = vault.requests(reqId);
+        uint256 est = vault.reqEstimate(reqId);
         uint256 vaultBalNow = usdc.balanceOf(address(vault));
         _step(string.concat("  estimatedAssets: ", vm.toString(est)));
         _step(string.concat("  vault USDC: ", vm.toString(vaultBalNow)));
@@ -993,7 +995,7 @@ contract ExtremeLiquidityQATest is Test {
             settled[0] = est;
             vm.prank(bot);
             executor.executeFinalizeRedeemBatch(address(controller), ids, settled);
-            (,,,,,,,IMantleYieldVault.RequestStatus stFinal) = vault.requests(reqId);
+            IMantleYieldVault.RequestStatus stFinal = vault.reqStatus(reqId);
             assertEq(uint256(stFinal), uint256(IMantleYieldVault.RequestStatus.DONE));
             _step("  finalize succeeded - new deposits provided enough liquidity");
         } else {
@@ -1002,7 +1004,7 @@ contract ExtremeLiquidityQATest is Test {
             vm.prank(bot);
             vm.expectPartialRevert(StrategyController.InsufficientCashForReady.selector);
             executor.executeFinalizeRedeemBatch(address(controller), ids, settled);
-            (,,,,,,,IMantleYieldVault.RequestStatus stFinal) = vault.requests(reqId);
+            IMantleYieldVault.RequestStatus stFinal = vault.reqStatus(reqId);
             assertEq(uint256(stFinal), uint256(IMantleYieldVault.RequestStatus.PROCESSING), "stays PROCESSING");
             _step("  finalize reverted - adapters still unpaid, insufficient cash");
         }
@@ -1034,11 +1036,11 @@ contract ExtremeLiquidityQATest is Test {
         ids[0] = requestId;
         vm.prank(bot);
         executor.executeProcessRedeemBatch(address(controller), ids);
-        (,,,,,,,IMantleYieldVault.RequestStatus stAfterProcess) = vault.requests(requestId);
+        IMantleYieldVault.RequestStatus stAfterProcess = vault.reqStatus(requestId);
         assertEq(uint256(stAfterProcess), uint256(IMantleYieldVault.RequestStatus.PROCESSING));
 
         _step("[Step 3] Verify vault USDC insufficient for settlement");
-        (,,,, uint256 estAssets,,,) = vault.requests(requestId);
+        uint256 estAssets = vault.reqEstimate(requestId);
         uint256 vaultBalBefore = usdc.balanceOf(address(vault));
         _step(string.concat("  estimatedAssets: ", vm.toString(estAssets)));
         _step(string.concat("  vault USDC: ", vm.toString(vaultBalBefore)));
@@ -1056,7 +1058,7 @@ contract ExtremeLiquidityQATest is Test {
         vm.prank(bot);
         executor.executeFinalizeRedeemBatch(address(controller), ids, settledAmounts);
 
-        (,,,,,,,IMantleYieldVault.RequestStatus finalStatus) = vault.requests(requestId);
+        IMantleYieldVault.RequestStatus finalStatus = vault.reqStatus(requestId);
         assertEq(uint256(finalStatus), uint256(IMantleYieldVault.RequestStatus.DONE));
 
         _step("[Step 6] Verify user1 received funds and vault balance decreased");
@@ -1095,16 +1097,44 @@ contract ExtremeLiquidityQATest is Test {
         ids1[0] = reqId1;
         vm.prank(bot);
         executor.executeProcessRedeemBatch(address(controller), ids1);
-        (,,,,,,,IMantleYieldVault.RequestStatus st1) = vault.requests(reqId1);
+        IMantleYieldVault.RequestStatus st1 = vault.reqStatus(reqId1);
         assertEq(uint256(st1), uint256(IMantleYieldVault.RequestStatus.PROCESSING));
-        (,,,,,,,IMantleYieldVault.RequestStatus st2) = vault.requests(reqId2);
+        IMantleYieldVault.RequestStatus st2 = vault.reqStatus(reqId2);
         assertEq(uint256(st2), uint256(IMantleYieldVault.RequestStatus.PENDING));
         _step("  reqId1 = PROCESSING, reqId2 = PENDING");
 
         _step("[Step 3] Simulate long waiting period, verify no state drift");
+        _verifyNoDriftOverTime(user1, user2);
+
+        _step("[Step 4] New user deposits during waiting period");
+        _depositViaGateway(user3, 15_000e6);
+        _step(string.concat("  vault USDC after user3 deposit: ", vm.toString(usdc.balanceOf(address(vault)))));
+
+        _step("[Step 5] Liquidity recovers - finalize reqId1 via controller");
+        _finalizeAndVerify(reqId1, ids1);
+        _step("  reqId1 finalized to DONE");
+
+        _step("[Step 6] Process and finalize reqId2 via controller");
+        uint256[] memory ids2 = new uint256[](1);
+        ids2[0] = reqId2;
+        vm.prank(bot);
+        executor.executeProcessRedeemBatch(address(controller), ids2);
+        _finalizeAndVerify(reqId2, ids2);
+        _step("  reqId2 finalized to DONE");
+
+        _step("[Step 7] Verify all bookkeeping cleaned up");
+        assertEq(vault.totalLockedShares(), 0, "all locked shares released");
+        assertEq(vault.pendingRedeemRequest(user1), 0, "user1 pending cleared");
+        assertEq(vault.pendingRedeemRequest(user2), 0, "user2 pending cleared");
+        _step("  PASS: long-pending requests do not corrupt bookkeeping; system recovers after liquidity restored");
+        _logPass();
+    }
+
+    /// @dev Verify no state drift over 30 days for two users
+    function _verifyNoDriftOverTime(address u1, address u2) internal {
         uint256 lockedT0 = vault.totalLockedShares();
-        uint256 pendingU1T0 = vault.pendingRedeemRequest(user1);
-        uint256 pendingU2T0 = vault.pendingRedeemRequest(user2);
+        uint256 pendingU1T0 = vault.pendingRedeemRequest(u1);
+        uint256 pendingU2T0 = vault.pendingRedeemRequest(u2);
         uint256 totalAssetsT0 = vault.totalAssets();
         uint256 freeCashT0 = vault.getFreeCash();
         _step(string.concat("  T0 locked=", vm.toString(lockedT0),
@@ -1116,47 +1146,22 @@ contract ExtremeLiquidityQATest is Test {
         vm.warp(block.timestamp + 30 days);
 
         uint256 lockedT1 = vault.totalLockedShares();
-        uint256 pendingU1T1 = vault.pendingRedeemRequest(user1);
-        uint256 pendingU2T1 = vault.pendingRedeemRequest(user2);
+        uint256 pendingU1T1 = vault.pendingRedeemRequest(u1);
+        uint256 pendingU2T1 = vault.pendingRedeemRequest(u2);
         assertEq(lockedT0, lockedT1, "locked shares stable over 30 days");
         assertEq(pendingU1T0, pendingU1T1, "pendingU1 stable");
         assertEq(pendingU2T0, pendingU2T1, "pendingU2 stable");
         _step("  T1 (30d later): no state drift");
+    }
 
-        _step("[Step 4] New user deposits during waiting period");
-        _depositViaGateway(user3, 15_000e6);
-        _step(string.concat("  vault USDC after user3 deposit: ", vm.toString(usdc.balanceOf(address(vault)))));
-
-        _step("[Step 5] Liquidity recovers - finalize reqId1 via controller");
-        (,,,, uint256 estAssets1,,,) = vault.requests(reqId1);
-        uint256[] memory settled1 = new uint256[](1);
-        settled1[0] = estAssets1;
+    /// @dev Finalize a single request and assert DONE
+    function _finalizeAndVerify(uint256 reqId, uint256[] memory ids) internal {
+        uint256 estAssets = vault.reqEstimate(reqId);
+        uint256[] memory settled = new uint256[](1);
+        settled[0] = estAssets;
         vm.prank(bot);
-        executor.executeFinalizeRedeemBatch(address(controller), ids1, settled1);
-        (,,,,,,,IMantleYieldVault.RequestStatus s1Final) = vault.requests(reqId1);
-        assertEq(uint256(s1Final), uint256(IMantleYieldVault.RequestStatus.DONE));
-        _step("  reqId1 finalized to DONE");
-
-        _step("[Step 6] Process and finalize reqId2 via controller");
-        uint256[] memory ids2 = new uint256[](1);
-        ids2[0] = reqId2;
-        vm.prank(bot);
-        executor.executeProcessRedeemBatch(address(controller), ids2);
-
-        (,,,, uint256 estAssets2,,,) = vault.requests(reqId2);
-        uint256[] memory settled2 = new uint256[](1);
-        settled2[0] = estAssets2;
-        vm.prank(bot);
-        executor.executeFinalizeRedeemBatch(address(controller), ids2, settled2);
-        (,,,,,,,IMantleYieldVault.RequestStatus s2Final) = vault.requests(reqId2);
-        assertEq(uint256(s2Final), uint256(IMantleYieldVault.RequestStatus.DONE));
-        _step("  reqId2 finalized to DONE");
-
-        _step("[Step 7] Verify all bookkeeping cleaned up");
-        assertEq(vault.totalLockedShares(), 0, "all locked shares released");
-        assertEq(vault.pendingRedeemRequest(user1), 0, "user1 pending cleared");
-        assertEq(vault.pendingRedeemRequest(user2), 0, "user2 pending cleared");
-        _step("  PASS: long-pending requests do not corrupt bookkeeping; system recovers after liquidity restored");
-        _logPass();
+        executor.executeFinalizeRedeemBatch(address(controller), ids, settled);
+        IMantleYieldVault.RequestStatus sFinal = vault.reqStatus(reqId);
+        assertEq(uint256(sFinal), uint256(IMantleYieldVault.RequestStatus.DONE));
     }
 }

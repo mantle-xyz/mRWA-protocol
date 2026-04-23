@@ -1624,11 +1624,7 @@ contract UpgradeScenariosQATest is Test {
         _beaconUpgrade(beacon, admin, address(newImpl));
 
         _step("[Step 4] Verify state preserved and rebalance works after upgrade");
-        (uint16 weight, uint16 priority, bool isAsync, bool isActive, bool exists) =
-            ctrl.strategyInfo(address(adapter));
-        assertEq(weight, 10_000, "weight preserved");
-        assertTrue(isActive, "still active");
-        assertTrue(exists, "still exists");
+        _verifyStrategyPreserved(ctrl, address(adapter));
         assertEq(StrategyControllerV2(ctrlAddr).version(), 2, "V2 version available");
 
         // Rebalance again after upgrade (mint more funds)
@@ -1690,40 +1686,21 @@ contract UpgradeScenariosQATest is Test {
             address(mockVault), admin, address(opExec), admin, 1000, 200, 0
         );
         StrategyController ctrl = StrategyController(ctrlAddr);
-        mockVault.registerAdapter(address(adapter));
-
-        vm.startPrank(admin);
-        ctrl.registerStrategy(address(adapter), 10_000, 1, false);
-        ctrl.activateStrategy(address(adapter));
-        address[] memory order = new address[](1);
-        order[0] = address(adapter);
-        ctrl.setStrategyOrder(order);
-        vm.stopPrank();
+        _registerActivateAndSetOrder(ctrl, mockVault, adapter);
 
         asset_.mint(address(mockVault), 5_000e6);
         vm.prank(bot);
         opExec.executeRebalance(address(ctrl));
 
-        // Record V1 state
-        uint16 bufferV1 = ctrl.bufferTargetBps();
-        uint16 thresholdV1 = ctrl.rebalanceThresholdBps();
-        address vaultAddrV1 = address(ctrl.vault());
-        (uint16 tw, uint16 pr, bool ia, bool act, bool ex) = ctrl.strategyInfo(address(adapter));
+        // Record V1 state snapshot
+        bytes32 v1StateHash = _hashControllerState(ctrl, address(adapter));
 
         _step("[Step 2] Upgrade beacon to V2 with appended storage");
         StrategyControllerV2WithStorage newImpl = new StrategyControllerV2WithStorage();
         _beaconUpgrade(beacon, admin, address(newImpl));
 
         _step("[Step 3] Verify V1 state preserved");
-        assertEq(ctrl.bufferTargetBps(), bufferV1, "bufferTargetBps preserved");
-        assertEq(ctrl.rebalanceThresholdBps(), thresholdV1, "rebalanceThresholdBps preserved");
-        assertEq(address(ctrl.vault()), vaultAddrV1, "vault preserved");
-        (uint16 tw2, uint16 pr2, bool ia2, bool act2, bool ex2) = ctrl.strategyInfo(address(adapter));
-        assertEq(tw2, tw, "strategy weight preserved");
-        assertEq(pr2, pr, "strategy priority preserved");
-        assertEq(ia2, ia, "strategy isAsync preserved");
-        assertEq(act2, act, "strategy isActive preserved");
-        assertEq(ex2, ex, "strategy exists preserved");
+        assertEq(_hashControllerState(ctrl, address(adapter)), v1StateHash, "controller state fully preserved");
 
         _step("[Step 4] V2 new method available");
         StrategyControllerV2WithStorage ctrlV2 = StrategyControllerV2WithStorage(ctrlAddr);
@@ -1867,24 +1844,10 @@ contract UpgradeScenariosQATest is Test {
         StrategyController ctrl2 = StrategyController(ctrl2Addr);
 
         _step("[Step 2] Controller1 registers/activates adapterA");
-        vault1.registerAdapter(address(adapterA));
-        vm.startPrank(admin);
-        ctrl1.registerStrategy(address(adapterA), 10_000, 1, false);
-        ctrl1.activateStrategy(address(adapterA));
-        address[] memory order1 = new address[](1);
-        order1[0] = address(adapterA);
-        ctrl1.setStrategyOrder(order1);
-        vm.stopPrank();
+        _registerActivateAndSetOrder(ctrl1, vault1, adapterA);
 
         _step("[Step 3] Controller2 registers/activates adapterB");
-        vault2.registerAdapter(address(adapterB));
-        vm.startPrank(admin);
-        ctrl2.registerStrategy(address(adapterB), 10_000, 1, false);
-        ctrl2.activateStrategy(address(adapterB));
-        address[] memory order2 = new address[](1);
-        order2[0] = address(adapterB);
-        ctrl2.setStrategyOrder(order2);
-        vm.stopPrank();
+        _registerActivateAndSetOrder(ctrl2, vault2, adapterB);
 
         _step("[Step 4] Rebalance both independently");
         asset_.mint(address(vault1), 5_000e6);
@@ -1994,26 +1957,12 @@ contract UpgradeScenariosQATest is Test {
         assertTrue(investBefore > 0, "invest in-flight > 0");
 
         _step("[Step 2] Settle adapter through OperatorExecutor");
-        (,,, uint256 tokenAmount,,,,,) = mockVault.inFlightRecords(inFlightId);
-
-        uint256[] memory investIds = new uint256[](1);
-        investIds[0] = inFlightId;
-        uint256[] memory investSettled = new uint256[](1);
-        investSettled[0] = tokenAmount;
-        uint256[] memory emptyIds = new uint256[](0);
-        uint256[] memory emptyAmounts = new uint256[](0);
-
-        vm.prank(bot);
-        opExec.executeSettleAdapter(
-            ctrlAddr,
-            address(adapter),
-            IStrategyControllerExecutor.InvestSettlementInput(investIds, investSettled, new uint256[](investIds.length)),
-            IStrategyControllerExecutor.RedeemSettlementInput(emptyIds, emptyAmounts)
-        );
+        _settleInvestInFlight(mockVault, opExec, ctrlAddr, address(adapter));
 
         _step("[Step 3] Verify settlement completed");
         assertEq(mockVault.investInFlightTotal(), 0, "invest in-flight cleared");
-        (,,,,,,,, IMantleYieldVault.InFlightStatus status) = mockVault.inFlightRecords(inFlightId);
+        IMantleYieldVault.InFlightStatus status;
+        (,,,,,,,, status) = mockVault.inFlightRecords(inFlightId);
         assertEq(uint8(status), uint8(IMantleYieldVault.InFlightStatus.CONFIRMED), "in-flight confirmed");
         _step("  PASS: OperatorExecutor settleAdapter full chain works");
 
@@ -2069,47 +2018,12 @@ contract UpgradeScenariosQATest is Test {
         assertTrue(adapter.depositCount() > 0, "invest executed");
 
         _step("[Step 5] settleAdapter (confirm invest in-flight)");
-        uint256 inFlightId = mockVault.inFlightIdCursor();
-        (,,, uint256 tokenAmt,,,,,) = mockVault.inFlightRecords(inFlightId);
-        uint256[] memory investIds = new uint256[](1);
-        investIds[0] = inFlightId;
-        uint256[] memory investSettled = new uint256[](1);
-        investSettled[0] = tokenAmt;
-        uint256[] memory emptyIds = new uint256[](0);
-        uint256[] memory emptyAmounts = new uint256[](0);
-        vm.prank(bot);
-        opExec.executeSettleAdapter(
-            ctrlAddr,
-            address(adapter),
-            IStrategyControllerExecutor.InvestSettlementInput(investIds, investSettled, new uint256[](investIds.length)),
-            IStrategyControllerExecutor.RedeemSettlementInput(emptyIds, emptyAmounts)
-        );
+        _settleInvestInFlight(mockVault, opExec, ctrlAddr, address(adapter));
         assertEq(mockVault.investInFlightTotal(), 0, "in-flight settled");
 
         _step("[Step 6] Register a second adapter, move weight, set order to exclude first adapter");
         MockAdapterForUpgrade adapter2 = new MockAdapterForUpgrade(address(asset_), address(posToken_));
-        mockVault.registerAdapter(address(adapter2));
-        vm.startPrank(admin);
-        ctrl.registerStrategy(address(adapter2), 0, 2, false);
-        ctrl.activateStrategy(address(adapter2));
-
-        // Move all weight from adapter to adapter2 and set order to only adapter2
-        address[] memory adaptersList = new address[](2);
-        adaptersList[0] = address(adapter);
-        adaptersList[1] = address(adapter2);
-        uint16[] memory weights = new uint16[](2);
-        weights[0] = 0;
-        weights[1] = 10_000;
-        uint16[] memory priorities = new uint16[](2);
-        priorities[0] = 1;
-        priorities[1] = 2;
-        bool[] memory isAsyncs = new bool[](2);
-        isAsyncs[0] = false;
-        isAsyncs[1] = false;
-        address[] memory newOrder = new address[](1);
-        newOrder[0] = address(adapter2);
-        ctrl.updateStrategiesAndOrder(adaptersList, weights, priorities, isAsyncs, newOrder);
-        vm.stopPrank();
+        _registerAndSwapToAdapter2(ctrl, mockVault, adapter, adapter2);
         assertEq(ctrl.strategyOrderLength(), 1, "order has only adapter2");
 
         _step("[Step 7] deactivateStrategy (first adapter)");
@@ -2670,6 +2584,98 @@ contract UpgradeScenariosQATest is Test {
     // ===================================================================
 
     /// @dev Helper: deploy Accountant via BeaconProxy with MockVaultForUpgrade
+    /// @dev Helper: settle all pending invest in-flights for a given adapter via OperatorExecutor
+    function _settleInvestInFlight(
+        MockVaultForController mv,
+        OperatorExecutor opExec,
+        address ctrlAddr,
+        address adapterAddr
+    ) internal {
+        uint256 inFlightId = mv.inFlightIdCursor();
+        (,,, uint256 tokenAmt,,,,,) = mv.inFlightRecords(inFlightId);
+        uint256[] memory investIds = new uint256[](1);
+        investIds[0] = inFlightId;
+        uint256[] memory investSettled = new uint256[](1);
+        investSettled[0] = tokenAmt;
+        vm.prank(bot);
+        opExec.executeSettleAdapter(
+            ctrlAddr,
+            adapterAddr,
+            IStrategyControllerExecutor.InvestSettlementInput(investIds, investSettled, new uint256[](1)),
+            IStrategyControllerExecutor.RedeemSettlementInput(new uint256[](0), new uint256[](0))
+        );
+    }
+
+    /// @dev Register adapter, activate, and set as sole strategy order
+    function _registerActivateAndSetOrder(
+        StrategyController ctrl,
+        MockVaultForController mv,
+        MockAdapterForUpgrade adapter
+    ) internal {
+        mv.registerAdapter(address(adapter));
+        vm.startPrank(admin);
+        ctrl.registerStrategy(address(adapter), 10_000, 1, false);
+        ctrl.activateStrategy(address(adapter));
+        address[] memory order = new address[](1);
+        order[0] = address(adapter);
+        ctrl.setStrategyOrder(order);
+        vm.stopPrank();
+    }
+
+    /// @dev Verify strategy info preserved after upgrade
+    function _verifyStrategyPreserved(StrategyController ctrl, address adapterAddr) internal view {
+        (uint16 weight,, , bool isActive, bool exists) = ctrl.strategyInfo(adapterAddr);
+        assertEq(weight, 10_000, "weight preserved");
+        assertTrue(isActive, "still active");
+        assertTrue(exists, "still exists");
+    }
+
+    /// @dev Hash all strategyInfo fields for before/after comparison
+    function _hashStrategyInfo(StrategyController ctrl, address adapterAddr) internal view returns (bytes32) {
+        (uint16 w, uint16 p, bool ia, bool act, bool ex) = ctrl.strategyInfo(adapterAddr);
+        return keccak256(abi.encode(w, p, ia, act, ex));
+    }
+
+    /// @dev Hash controller config + strategy info for before/after snapshot comparison
+    function _hashControllerState(StrategyController ctrl, address adapterAddr) internal view returns (bytes32) {
+        return keccak256(abi.encode(
+            ctrl.bufferTargetBps(),
+            ctrl.rebalanceThresholdBps(),
+            address(ctrl.vault()),
+            _hashStrategyInfo(ctrl, adapterAddr)
+        ));
+    }
+
+    /// @dev Register adapter2, move all weight from adapter to adapter2, set order to adapter2 only
+    function _registerAndSwapToAdapter2(
+        StrategyController ctrl,
+        MockVaultForController mv,
+        MockAdapterForUpgrade adapter,
+        MockAdapterForUpgrade adapter2
+    ) internal {
+        mv.registerAdapter(address(adapter2));
+        vm.startPrank(admin);
+        ctrl.registerStrategy(address(adapter2), 0, 2, false);
+        ctrl.activateStrategy(address(adapter2));
+
+        address[] memory adaptersList = new address[](2);
+        adaptersList[0] = address(adapter);
+        adaptersList[1] = address(adapter2);
+        uint16[] memory weights = new uint16[](2);
+        weights[0] = 0;
+        weights[1] = 10_000;
+        uint16[] memory priorities = new uint16[](2);
+        priorities[0] = 1;
+        priorities[1] = 2;
+        bool[] memory isAsyncs = new bool[](2);
+        isAsyncs[0] = false;
+        isAsyncs[1] = false;
+        address[] memory newOrder = new address[](1);
+        newOrder[0] = address(adapter2);
+        ctrl.updateStrategiesAndOrder(adaptersList, weights, priorities, isAsyncs, newOrder);
+        vm.stopPrank();
+    }
+
     function _deployAccountantWithMockVault(MockVaultForUpgrade mockVault)
         internal
         returns (Accountant acct, AccountantFactory factory)

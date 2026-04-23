@@ -17,6 +17,7 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Test, console2} from "forge-std/Test.sol";
 import {LogUtil} from "../lib/LogUtil.sol";
+import {VaultViewHelper} from "../lib/VaultViewHelper.sol";
 
 // =============================================================================
 //  Mock Contracts (Local mode only)
@@ -370,6 +371,8 @@ contract MockConfigSyncAdapter_ST is IStrategyAdapter {
 // =============================================================================
 
 abstract contract StressBase is LogUtil {
+    using VaultViewHelper for MantleYieldVault;
+
     // =========================================================================
     //  Configuration (environment variables with defaults)
     // =========================================================================
@@ -897,7 +900,7 @@ abstract contract StressBase is LogUtil {
         assertEq(snapAfter.vaultNextRequestId, before.vaultNextRequestId + 1, "request: id incremented");
 
         // Verify request object
-        (,, uint256 reqShares,,,,, IMantleYieldVault.RequestStatus status) = vault.requests(requestId);
+        (uint256 reqShares, IMantleYieldVault.RequestStatus status) = vault.reqSharesAndStatus(requestId);
         assertEq(reqShares, netShares, "request: req.shares");
         assertEq(uint8(status), uint8(IMantleYieldVault.RequestStatus.PENDING), "request: status PENDING");
 
@@ -918,7 +921,7 @@ abstract contract StressBase is LogUtil {
         // Sum shares for logging
         uint256 totalShares;
         for (uint256 i = 0; i < ids.length; i++) {
-            (,, uint256 sh,,,,, ) = vault.requests(ids[i]);
+            uint256 sh = vault.reqShares(ids[i]);
             totalShares += sh;
         }
         logInfo(string.concat(
@@ -1015,13 +1018,13 @@ abstract contract StressBase is LogUtil {
         uint256 nextId = vault.nextRequestId();
         uint256 count;
         for (uint256 id = _baseRequestId; id < nextId; id++) {
-            (,,,,,,, IMantleYieldVault.RequestStatus status) = vault.requests(id);
+            IMantleYieldVault.RequestStatus status = vault.reqStatus(id);
             if (status == targetStatus) count++;
         }
         uint256[] memory ids = new uint256[](count);
         uint256 idx;
         for (uint256 id = _baseRequestId; id < nextId; id++) {
-            (,,,,,,, IMantleYieldVault.RequestStatus status) = vault.requests(id);
+            IMantleYieldVault.RequestStatus status = vault.reqStatus(id);
             if (status == targetStatus) {
                 ids[idx++] = id;
             }
@@ -1131,7 +1134,7 @@ abstract contract StressBase is LogUtil {
         // Pending/Processing requests
         uint256 nextReq = vault.nextRequestId();
         for (uint256 id = _baseRequestId; id < nextReq; id++) {
-            (,, uint256 sh,,, uint256 sa,, IMantleYieldVault.RequestStatus st) = vault.requests(id);
+            (uint256 sh,, , uint256 sa, IMantleYieldVault.RequestStatus st) = vault.reqCore(id);
             if (st == IMantleYieldVault.RequestStatus.PENDING || st == IMantleYieldVault.RequestStatus.PROCESSING) {
                 logError(string.concat("request[", _toStr(id), "]"),
                     string.concat("shares=", _toStr(sh), " settled=", _toStr(sa), " status=", _toStr(uint256(uint8(st)))));
@@ -1140,7 +1143,7 @@ abstract contract StressBase is LogUtil {
         // Pending in-flight
         uint256 nextIf = vault.nextInFlightId();
         for (uint256 id = _baseInFlightId; id < nextIf; id++) {
-            (, address ifAdapter,,, uint256 uAmt,, bool isInv,, IMantleYieldVault.InFlightStatus ifs) = vault.inFlightRecords(id);
+            (address ifAdapter,, uint256 uAmt, bool isInv, IMantleYieldVault.InFlightStatus ifs) = vault.ifFull(id);
             if (ifs == IMantleYieldVault.InFlightStatus.PENDING) {
                 logError(string.concat("inflight[", _toStr(id), "]"),
                     string.concat("adapter=", vm.toString(ifAdapter), " usdc=", _toStr(uAmt), " isInvest=", isInv ? "true" : "false"));
@@ -1276,7 +1279,7 @@ abstract contract StressBase is LogUtil {
         uint256 sumLocked;
 
         for (uint256 id = _baseRequestId; id < nextId; id++) {
-            (,, uint256 shares,,,,, IMantleYieldVault.RequestStatus status) = vault.requests(id);
+            (uint256 shares, IMantleYieldVault.RequestStatus status) = vault.reqSharesAndStatus(id);
             if (
                 status == IMantleYieldVault.RequestStatus.PENDING
                     || status == IMantleYieldVault.RequestStatus.PROCESSING
@@ -1310,7 +1313,7 @@ abstract contract StressBase is LogUtil {
         // Advance past DONE / CANCELLED requests
         uint256 nextReq = vault.nextRequestId();
         while (_baseRequestId < nextReq) {
-            (,,,,,,, IMantleYieldVault.RequestStatus s) = vault.requests(_baseRequestId);
+            IMantleYieldVault.RequestStatus s = vault.reqStatus(_baseRequestId);
             if (s == IMantleYieldVault.RequestStatus.PENDING || s == IMantleYieldVault.RequestStatus.PROCESSING) break;
             _baseRequestId++;
         }
@@ -1318,7 +1321,7 @@ abstract contract StressBase is LogUtil {
         // Advance past SETTLED in-flight records
         uint256 nextIf = vault.nextInFlightId();
         while (_baseInFlightId < nextIf) {
-            (,,,,,,,, IMantleYieldVault.InFlightStatus s) = vault.inFlightRecords(_baseInFlightId);
+            IMantleYieldVault.InFlightStatus s = vault.ifStatus(_baseInFlightId);
             if (s == IMantleYieldVault.InFlightStatus.PENDING) break;
             _baseInFlightId++;
         }

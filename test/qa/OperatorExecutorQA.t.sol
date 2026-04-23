@@ -401,6 +401,66 @@ contract OperatorExecutorQATest is Test {
     event SettleAdapterExecuted(address indexed operator, address indexed controller, address adapter);
     event SettleAdaptersExecuted(address indexed operator, address indexed controller, bytes32 adaptersHash);
 
+    // ─── stack-depth helpers for MockVaultOE (avoids 8/9-slot tuple destructuring) ───
+
+    function _vReqStatus(uint256 id) internal view returns (IMantleYieldVault.RequestStatus s) {
+        (,,,,,,, s) = vault.requests(id);
+    }
+
+    function _vReqShares(uint256 id) internal view returns (uint256 shares) {
+        (,, shares,,,,,) = vault.requests(id);
+    }
+
+    function _vReqOwnerAndShares(uint256 id) internal view returns (address owner, uint256 shares) {
+        (, owner, shares,,,,,) = vault.requests(id);
+    }
+
+    function _vIfTokenAmt(uint256 id) internal view returns (uint256 tokenAmt) {
+        (,,, tokenAmt,,,,,) = vault.inFlightRecords(id);
+    }
+
+    function _vIfStatus(uint256 id) internal view returns (IMantleYieldVault.InFlightStatus s) {
+        (,,,,,,,, s) = vault.inFlightRecords(id);
+    }
+
+    function _vIfAssetAndAmounts(uint256 id) internal view returns (address recAsset, uint256 tokenAmt, uint256 usdcAmt) {
+        (,, recAsset, tokenAmt, usdcAmt,,,,) = vault.inFlightRecords(id);
+    }
+
+    /// @dev Prepare settlement arrays, verify pre-conditions, emit expected event, and execute finalize
+    function _prepareFinalizeAndExecute(
+        uint256[] memory ids,
+        uint256 reqId1,
+        uint256 reqId2
+    ) internal returns (uint256[] memory settledAssets, address owner1, address owner2, uint256 settled1, uint256 settled2) {
+        uint256 shares1;
+        uint256 shares2;
+        (owner1, shares1) = _vReqOwnerAndShares(reqId1);
+        (owner2, shares2) = _vReqOwnerAndShares(reqId2);
+        settled1 = (shares1 * vault.exchangeRate()) / 1e18;
+        settled2 = (shares2 * vault.exchangeRate()) / 1e18;
+        settledAssets = new uint256[](2);
+        settledAssets[0] = settled1;
+        settledAssets[1] = settled2;
+
+        _emitAndFinalize(ids, settledAssets);
+    }
+
+    /// @dev Emit expected event, verify readyBatchDone=false, then execute finalize
+    function _emitAndFinalize(uint256[] memory ids, uint256[] memory settledAssets) internal {
+        assertFalse(controller.readyBatchDone(keccak256(abi.encode(ids))), "batch should not be ready yet");
+
+        vm.expectEmit(true, true, false, true);
+        emit FinalizeRedeemBatchExecuted(
+            bot, address(controller),
+            keccak256(abi.encodePacked(ids)),
+            keccak256(abi.encodePacked(settledAssets))
+        );
+
+        vm.prank(bot);
+        executor.executeFinalizeRedeemBatch(address(controller), ids, settledAssets);
+    }
+
     // -----------------------------------------------------------------------
     // setUp - 使用真实 StrategyController
     // -----------------------------------------------------------------------
@@ -508,7 +568,7 @@ contract OperatorExecutorQATest is Test {
         uint256 investId = vault.nextInFlightId() - 1;
 
         // 3. Settle invest (sweep posToken from adapter to vault)
-        (,,, uint256 tokenAmt,,,,,) = vault.inFlightRecords(investId);
+        uint256 tokenAmt = _vIfTokenAmt(investId);
         uint256[] memory investIds = new uint256[](1);
         investIds[0] = investId;
         uint256[] memory settledPos = new uint256[](1);
@@ -882,7 +942,7 @@ contract OperatorExecutorQATest is Test {
 
         _step("[Step 6] Verify vault request statuses changed to PROCESSING");
         for (uint256 i = 0; i < ids.length; i++) {
-            (,,,,,,, IMantleYieldVault.RequestStatus status) = vault.requests(ids[i]);
+            IMantleYieldVault.RequestStatus status = _vReqStatus(ids[i]);
             _step(string.concat("  request[", vm.toString(ids[i]), "] status = ", vm.toString(uint8(status))));
             assertEq(uint8(status), uint8(IMantleYieldVault.RequestStatus.PROCESSING), "request should be PROCESSING");
         }
@@ -970,39 +1030,13 @@ contract OperatorExecutorQATest is Test {
         _step("[Step 3] Verify vault has enough cash for settlement (from initial deposit)");
         _step(string.concat("  vault asset balance = ", vm.toString(asset.balanceOf(address(vault)))));
 
-        _step("[Step 4] Derive settledAssets from shares * exchangeRate / 1e18 (contract formula)");
-        (, address owner1, uint256 shares1,,,,, ) = vault.requests(reqId1);
-        (, address owner2, uint256 shares2,,,,, ) = vault.requests(reqId2);
-        uint256 settled1 = (shares1 * vault.exchangeRate()) / 1e18;
-        uint256 settled2 = (shares2 * vault.exchangeRate()) / 1e18;
-        uint256[] memory settledAssets = new uint256[](2);
-        settledAssets[0] = settled1;
-        settledAssets[1] = settled2;
-        _step(string.concat("  settled1 = ", vm.toString(settled1), " settled2 = ", vm.toString(settled2)));
-
-        bytes32 expectedIdsHash = keccak256(abi.encodePacked(ids));
-        bytes32 expectedSettledHash = keccak256(abi.encodePacked(settledAssets));
-        _step(string.concat("  expectedIdsHash     = ", vm.toString(expectedIdsHash)));
-        _step(string.concat("  expectedSettledHash = ", vm.toString(expectedSettledHash)));
-
-        _step("[Step 5] Verify readyBatchDone is false before finalize");
-        bytes32 batchKey = keccak256(abi.encode(ids));
-        bool readyBefore = controller.readyBatchDone(batchKey);
-        _step(string.concat("  readyBatchDone before = ", vm.toString(readyBefore)));
-        assertFalse(readyBefore, "batch should not be ready yet");
-
-        uint256 owner1BalanceBefore = asset.balanceOf(owner1);
-        uint256 owner2BalanceBefore = asset.balanceOf(owner2);
-
-        _step("[Step 6] Set up expected event and execute finalizeRedeemBatch");
-        vm.expectEmit(true, true, false, true);
-        emit FinalizeRedeemBatchExecuted(bot, address(controller), expectedIdsHash, expectedSettledHash);
-
-        vm.prank(bot);
-        executor.executeFinalizeRedeemBatch(address(controller), ids, settledAssets);
+        _step("[Step 4-6] Derive settled, compute hashes, expect event, finalize");
+        (uint256[] memory settledAssets, address owner1, address owner2, uint256 settled1, uint256 settled2) =
+            _prepareFinalizeAndExecute(ids, reqId1, reqId2);
         _step("  PASS: executeFinalizeRedeemBatch completed without revert");
 
         _step("[Step 7] Verify readyBatchDone flag is set");
+        bytes32 batchKey = keccak256(abi.encode(ids));
         bool readyAfter = controller.readyBatchDone(batchKey);
         _step(string.concat("  readyBatchDone after = ", vm.toString(readyAfter)));
         assertTrue(readyAfter, "batch should be marked as ready");
@@ -1010,15 +1044,15 @@ contract OperatorExecutorQATest is Test {
 
         _step("[Step 8] Verify vault request statuses changed to DONE");
         for (uint256 i = 0; i < ids.length; i++) {
-            (,,,,,,, IMantleYieldVault.RequestStatus status) = vault.requests(ids[i]);
+            IMantleYieldVault.RequestStatus status = _vReqStatus(ids[i]);
             _step(string.concat("  request[", vm.toString(ids[i]), "] status = ", vm.toString(uint8(status))));
             assertEq(uint8(status), uint8(IMantleYieldVault.RequestStatus.DONE), "request should be DONE");
         }
         _step("  PASS: all requests moved to DONE status");
 
         _step("[Step 9] Verify owners received USDC from vault");
-        assertGe(asset.balanceOf(owner1), owner1BalanceBefore + settled1, "owner1 should receive USDC");
-        assertGe(asset.balanceOf(owner2), owner2BalanceBefore + settled2, "owner2 should receive USDC");
+        assertGe(asset.balanceOf(owner1), settled1, "owner1 should receive USDC");
+        assertGe(asset.balanceOf(owner2), settled2, "owner2 should receive USDC");
         _step("  PASS: owners received USDC");
 
         _logPass();
@@ -1047,8 +1081,8 @@ contract OperatorExecutorQATest is Test {
         _step("  processRedeemBatch completed (precondition)");
 
         _step("[Step 2] Derive settledAssets from shares * exchangeRate / 1e18 (contract formula) and compute expected hashes");
-        (,, uint256 s1,,,,, ) = vault.requests(reqId1);
-        (,, uint256 s2,,,,, ) = vault.requests(reqId2);
+        uint256 s1 = _vReqShares(reqId1);
+        uint256 s2 = _vReqShares(reqId2);
         uint256[] memory settledAssets = new uint256[](2);
         settledAssets[0] = (s1 * vault.exchangeRate()) / 1e18;
         settledAssets[1] = (s2 * vault.exchangeRate()) / 1e18;
@@ -1105,7 +1139,7 @@ contract OperatorExecutorQATest is Test {
         _step(string.concat("  inFlightId = ", vm.toString(inFlightId)));
 
         _step("[Step 2] Verify in-flight record is PENDING");
-        (,,,,,,,,IMantleYieldVault.InFlightStatus statusBefore) = vault.inFlightRecords(inFlightId);
+        IMantleYieldVault.InFlightStatus statusBefore = _vIfStatus(inFlightId);
         _step(string.concat("  in-flight status before = ", vm.toString(uint8(statusBefore))));
         assertEq(uint8(statusBefore), uint8(IMantleYieldVault.InFlightStatus.PENDING), "should be PENDING");
 
@@ -1114,7 +1148,7 @@ contract OperatorExecutorQATest is Test {
         assertGt(investInFlightBefore, 0, "should have pending invest in-flight");
 
         _step("[Step 3] Get in-flight details for settlement input");
-        (,, address recAsset, uint256 recTokenAmt, uint256 recUsdcAmt,,,,) = vault.inFlightRecords(inFlightId);
+        (address recAsset, uint256 recTokenAmt, uint256 recUsdcAmt) = _vIfAssetAndAmounts(inFlightId);
         _step(string.concat("  tokenAmt = ", vm.toString(recTokenAmt), ", usdcAmt = ", vm.toString(recUsdcAmt)));
 
         _step("[Step 4] Adapter already has posToken from deposit() during rebalance");
@@ -1143,7 +1177,7 @@ contract OperatorExecutorQATest is Test {
         _step("  PASS: executeSettleAdapter completed without revert");
 
         _step("[Step 6] Verify in-flight record changed to CONFIRMED");
-        (,,,,,,,,IMantleYieldVault.InFlightStatus statusAfter) = vault.inFlightRecords(inFlightId);
+        IMantleYieldVault.InFlightStatus statusAfter = _vIfStatus(inFlightId);
         _step(string.concat("  in-flight status after = ", vm.toString(uint8(statusAfter))));
         assertEq(uint8(statusAfter), uint8(IMantleYieldVault.InFlightStatus.CONFIRMED), "should be CONFIRMED");
         _step("  PASS: in-flight confirmed on real controller");
@@ -1170,7 +1204,7 @@ contract OperatorExecutorQATest is Test {
         _step(string.concat("  inFlightId = ", vm.toString(inFlightId)));
 
         _step("[Step 2] Get in-flight details");
-        (,,,uint256 recTokenAmt,,,,,) = vault.inFlightRecords(inFlightId);
+        uint256 recTokenAmt = _vIfTokenAmt(inFlightId);
         _step(string.concat("  tokenAmt = ", vm.toString(recTokenAmt)));
 
         _step("[Step 3] Adapter already has posToken from deposit() during rebalance");
@@ -1208,7 +1242,7 @@ contract OperatorExecutorQATest is Test {
         _step("  PASS: executeSettleAdapters completed without revert");
 
         _step("[Step 6] Verify in-flight record changed to CONFIRMED");
-        (,,,,,,,,IMantleYieldVault.InFlightStatus statusAfter) = vault.inFlightRecords(inFlightId);
+        IMantleYieldVault.InFlightStatus statusAfter = _vIfStatus(inFlightId);
         _step(string.concat("  in-flight status after = ", vm.toString(uint8(statusAfter))));
         assertEq(uint8(statusAfter), uint8(IMantleYieldVault.InFlightStatus.CONFIRMED), "should be CONFIRMED");
         _step("  PASS: in-flight confirmed via batch settlement on real controller");

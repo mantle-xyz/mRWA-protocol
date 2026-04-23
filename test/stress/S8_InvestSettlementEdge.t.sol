@@ -4,6 +4,8 @@ pragma solidity ^0.8.24;
 import {IMantleYieldVault} from "../../src/interfaces/vault/IMantleYieldVault.sol";
 import {IStrategyControllerExecutor} from "../../src/interfaces/strategy/IStrategyControllerExecutor.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {MantleYieldVault} from "../../src/vault/MantleYieldVault.sol";
+import {VaultViewHelper} from "../lib/VaultViewHelper.sol";
 import {StressBase, MockUSDC_ST, MockPosToken_ST, MockAsyncAdapter_ST} from "./StressBase.t.sol";
 import {console2} from "forge-std/Test.sol";
 
@@ -11,6 +13,7 @@ import {console2} from "forge-std/Test.sol";
 /// @notice Validates partial invest settlement (5-95% refund) and full refund (underlying asset
 ///         rejection) scenarios, ensuring vault asset conservation and in-flight record integrity.
 contract S8_InvestSettlementEdge is StressBase {
+    using VaultViewHelper for MantleYieldVault;
     uint256 constant LARGE_DEPOSIT = 200_000e6;
 
     function test_investSettlementEdge() external {
@@ -115,40 +118,28 @@ contract S8_InvestSettlementEdge is StressBase {
         // Count matching records
         uint256 count;
         for (uint256 id = _baseInFlightId; id < nextIfId; id++) {
-            (, address ifAdapter,,,,, bool isInvest,, IMantleYieldVault.InFlightStatus s) =
-                vault.inFlightRecords(id);
+            (address ifAdapter, bool isInvest, IMantleYieldVault.InFlightStatus s) =
+                vault.ifAdapterAndStatus(id);
             if (s == IMantleYieldVault.InFlightStatus.PENDING && isInvest && ifAdapter == adapter) count++;
         }
         if (count == 0) return;
 
-        // Build settlement arrays
+        _buildAndSettleUniformRefund(adapter, nextIfId, count, refundPct);
+    }
+
+    function _buildAndSettleUniformRefund(address adapter, uint256 nextIfId, uint256 count, uint256 refundPct) internal {
         uint256[] memory ids = new uint256[](count);
         uint256[] memory settledPos = new uint256[](count);
         uint256[] memory refunds = new uint256[](count);
         uint256 idx;
 
         for (uint256 id = _baseInFlightId; id < nextIfId; id++) {
-            (, address ifAdapter,, uint256 tokenAmt, uint256 usdcAmt,, bool isInvest,, IMantleYieldVault.InFlightStatus s) =
-                vault.inFlightRecords(id);
+            (address ifAdapter, bool isInvest, IMantleYieldVault.InFlightStatus s) =
+                vault.ifAdapterAndStatus(id);
             if (s != IMantleYieldVault.InFlightStatus.PENDING || !isInvest || ifAdapter != adapter) continue;
 
             ids[idx] = id;
-            uint256 refundUsdc = usdcAmt * refundPct / 100;
-            uint256 settled = tokenAmt * (100 - refundPct) / 100;
-            settledPos[idx] = settled;
-            refunds[idx] = refundUsdc;
-
-            // Adjust adapter assets: burn excess posTokens that weren't "obtained"
-            uint256 excessPos = tokenAmt - settled;
-            if (excessPos > 0) {
-                MockPosToken_ST(_posTokenOf(adapter)).burn(adapter, excessPos);
-            }
-
-            // For async adapter: release refunded USDC from protocol hold
-            if (adapter == address(asyncAdapter) && refundUsdc > 0) {
-                _totalUsdcInjected += MockAsyncAdapter_ST(payable(adapter)).simulateRedeemSettlement(refundUsdc);
-            }
-
+            _computeRefundEntry(adapter, id, idx, refundPct, settledPos, refunds);
             idx++;
         }
 
@@ -163,6 +154,26 @@ contract S8_InvestSettlementEdge is StressBase {
         );
     }
 
+    /// @dev Compute settled/refund for a single invest entry and adjust adapter assets
+    function _computeRefundEntry(
+        address adapter, uint256 id, uint256 idx, uint256 refundPct,
+        uint256[] memory settledPos, uint256[] memory refunds
+    ) internal {
+        (uint256 tokenAmt, uint256 usdcAmt) = vault.ifTokenAndUsdc(id);
+        uint256 refundUsdc = usdcAmt * refundPct / 100;
+        uint256 settled = tokenAmt * (100 - refundPct) / 100;
+        settledPos[idx] = settled;
+        refunds[idx] = refundUsdc;
+
+        uint256 excessPos = tokenAmt - settled;
+        if (excessPos > 0) {
+            MockPosToken_ST(_posTokenOf(adapter)).burn(adapter, excessPos);
+        }
+        if (adapter == address(asyncAdapter) && refundUsdc > 0) {
+            _totalUsdcInjected += MockAsyncAdapter_ST(payable(adapter)).simulateRedeemSettlement(refundUsdc);
+        }
+    }
+
     /// @dev Settle each PENDING invest in-flight for `adapter` with a random refund percentage.
     function _settleInvestMixedForAdapter(address adapter) internal {
         uint256 nextIfId = vault.nextInFlightId();
@@ -170,49 +181,29 @@ contract S8_InvestSettlementEdge is StressBase {
         // Count matching records
         uint256 count;
         for (uint256 id = _baseInFlightId; id < nextIfId; id++) {
-            (, address ifAdapter,,,,, bool isInvest,, IMantleYieldVault.InFlightStatus s) =
-                vault.inFlightRecords(id);
+            (address ifAdapter, bool isInvest, IMantleYieldVault.InFlightStatus s) =
+                vault.ifAdapterAndStatus(id);
             if (s == IMantleYieldVault.InFlightStatus.PENDING && isInvest && ifAdapter == adapter) count++;
         }
         if (count == 0) return;
 
-        // Build settlement arrays with per-record random refund
+        _buildAndSettleMixedRefund(adapter, nextIfId, count);
+    }
+
+    function _buildAndSettleMixedRefund(address adapter, uint256 nextIfId, uint256 count) internal {
         uint256[] memory ids = new uint256[](count);
         uint256[] memory settledPos = new uint256[](count);
         uint256[] memory refundsArr = new uint256[](count);
         uint256 idx;
 
         for (uint256 id = _baseInFlightId; id < nextIfId; id++) {
-            (, address ifAdapter,, uint256 tokenAmt, uint256 usdcAmt,, bool isInvest,, IMantleYieldVault.InFlightStatus s) =
-                vault.inFlightRecords(id);
+            (address ifAdapter, bool isInvest, IMantleYieldVault.InFlightStatus s) =
+                vault.ifAdapterAndStatus(id);
             if (s != IMantleYieldVault.InFlightStatus.PENDING || !isInvest || ifAdapter != adapter) continue;
 
             ids[idx] = id;
-
-            // Random refund: 0%, 10%, 30%, 50%, 80%, 100%
-            uint256 pctChoices = _rand(6);
-            uint256 refundPct;
-            if (pctChoices == 0) refundPct = 0;
-            else if (pctChoices == 1) refundPct = 10;
-            else if (pctChoices == 2) refundPct = 30;
-            else if (pctChoices == 3) refundPct = 50;
-            else if (pctChoices == 4) refundPct = 80;
-            else refundPct = 100;
-
-            uint256 refundUsdc = usdcAmt * refundPct / 100;
-            uint256 settled = tokenAmt * (100 - refundPct) / 100;
-            settledPos[idx] = settled;
-            refundsArr[idx] = refundUsdc;
-
-            // Adjust adapter assets
-            uint256 excessPos = tokenAmt - settled;
-            if (excessPos > 0) {
-                MockPosToken_ST(_posTokenOf(adapter)).burn(adapter, excessPos);
-            }
-            if (adapter == address(asyncAdapter) && refundUsdc > 0) {
-                _totalUsdcInjected += MockAsyncAdapter_ST(payable(adapter)).simulateRedeemSettlement(refundUsdc);
-            }
-
+            uint256 refundPct = _pickRandomRefundPct();
+            _computeRefundEntry(adapter, id, idx, refundPct, settledPos, refundsArr);
             idx++;
         }
 
@@ -225,6 +216,16 @@ contract S8_InvestSettlementEdge is StressBase {
             }),
             _emptyRedeemInput()
         );
+    }
+
+    function _pickRandomRefundPct() internal returns (uint256) {
+        uint256 pctChoices = _rand(6);
+        if (pctChoices == 0) return 0;
+        if (pctChoices == 1) return 10;
+        if (pctChoices == 2) return 30;
+        if (pctChoices == 3) return 50;
+        if (pctChoices == 4) return 80;
+        return 100;
     }
 
     // =========================================================================
