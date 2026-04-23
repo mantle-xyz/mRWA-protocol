@@ -14,8 +14,9 @@ bracket_spacing = false
 int_types = "long"
 sort_imports = true
 
-etherscan_api_key = "${ETHERSCAN_API_KEY}"
-
+[etherscan]
+mantle_sepolia = { key = "${ETHERSCAN_API_KEY}", url = "https://explorer.sepolia.mantle.xyz/api?" }
+mantle = { key = "${ETHERSCAN_API_KEY}", url = "https://explorer.mantle.xyz/api?" }
 
 [rpc_endpoints]
 mantle_sepolia = "https://rpc.sepolia.mantle.xyz"
