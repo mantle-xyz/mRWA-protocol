@@ -69,18 +69,18 @@ tasks:
           EXTRA_ARGS: ${ROOT_DIR}/script/DeployInstance.s.sol {{.CLI_ARGS}}
 
   VerifyInstance:
-    desc: Verify DeployInstance contracts on block explorer (re-runs with --resume --verify)
+    desc: Verify DeployInstance contracts on block explorer (re-runs with --resume; F_VERIFY=true adds --verify)
     cmds:
       - task: _script
         vars:
-          EXTRA_ARGS: ${ROOT_DIR}/script/DeployInstance.s.sol --broadcast --resume --verify {{.CLI_ARGS}}
+          EXTRA_ARGS: ${ROOT_DIR}/script/DeployInstance.s.sol --broadcast --resume {{.CLI_ARGS}}
 
   VerifySubRedManagementAdapter:
-    desc: Verify SubRedManagementAdapter on block explorer (re-runs with --resume --verify)
+    desc: Verify SubRedManagementAdapter on block explorer (re-runs with --resume; F_VERIFY=true adds --verify)
     cmds:
       - task: _script
         vars:
-          EXTRA_ARGS: ${ROOT_DIR}/script/strategy/DeploySubRedManagementAdapter.s.sol --broadcast --resume --verify {{.CLI_ARGS}}
+          EXTRA_ARGS: ${ROOT_DIR}/script/strategy/DeploySubRedManagementAdapter.s.sol --broadcast --resume {{.CLI_ARGS}}
 
 
   RegisterStrategy:
