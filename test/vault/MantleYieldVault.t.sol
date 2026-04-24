@@ -130,6 +130,14 @@ contract MockStrategyAdapter is IStrategyAdapter {
         return assetAmount;
     }
 
+    function minSubscribeAsset() external pure override returns (uint256) {
+        return 0;
+    }
+
+    function minRedeemPos() external pure override returns (uint256) {
+        return 0;
+    }
+
     function previewDeposit(uint256 assetAmount)
         external
         pure

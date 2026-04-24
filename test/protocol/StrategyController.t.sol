@@ -113,6 +113,14 @@ contract MockStrategyAdapter is IStrategyAdapter {
         return assetAmount;
     }
 
+    function minSubscribeAsset() external pure returns (uint256) {
+        return 0;
+    }
+
+    function minRedeemPos() external pure returns (uint256) {
+        return 0;
+    }
+
     function previewDeposit(uint256 assetAmount)
         external
         pure
@@ -1107,8 +1115,9 @@ contract StrategyControllerUnitTest is Test {
     }
 
     function test_ProcessRedeemBatch_EmitsDivestSkipped_OnAsyncRedeemRevert() public {
-        // adapter pool (step-aligned) = 700 >= shortfall 700 → allow proceed even though async call fails.
-        // req becomes PROCESSING, rebalance will补 through buffer-aligned divest in subsequent calls.
+        // Adapter pool = 700 (>= shortfall) but async call reverts → soft skip.
+        // Request still advances to PROCESSING; finalize waits for cash via subsequent
+        // pRB aggregation, rebalance, or deposits.
         _registerSingleAsyncStrategy();
         asyncAdapter.setTotalValue(700e18);
         asyncAdapter.setFailFlags(false, false, true);
