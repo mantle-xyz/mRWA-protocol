@@ -49,6 +49,9 @@ abstract contract MantleYieldVaultStorage is
     uint256 public minDepositAmount;
 
     uint256 public totalLockedShares;
+    // Count of redemption requests currently in PENDING status (not yet PROCESSING).
+    // Used by controller to gate rebalance divest — prevents pre-empting user liability.
+    uint256 public pendingRequestCount;
 
     // Invest in-flight: USDC sent out -> adapter underlying tokens not yet received
     uint256 public totalInvestInFlight;

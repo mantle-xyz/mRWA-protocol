@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import {IStrategyAdapterCore} from "../../interfaces/adapters/IStrategyAdapterCore.sol";
 import {ISubRedManagement} from "../../interfaces/adapters/digift/ISubRedManagement.sol";
 import {BaseAsync7540Adapter} from "../base/capabilities/BaseAsync7540Adapter.sol";
 
@@ -19,10 +20,16 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
     uint256 public subscribeStepAsset;
     uint256 public redeemStepPos;
 
+    /// @inheritdoc IStrategyAdapterCore
+    uint256 public override minSubscribeAsset;
+    /// @inheritdoc IStrategyAdapterCore
+    uint256 public override minRedeemPos;
+
     uint64 public subscribeDeadlineWindow = 6 hours;
     uint64 public redeemDeadlineWindow = 6 hours;
 
     event ExecutionStepsUpdated(uint256 subscribeStepAsset, uint256 redeemStepPos);
+    event MinAmountsUpdated(uint256 minSubscribeAsset, uint256 minRedeemPos);
     event SubscribeDeadlineWindowUpdated(uint64 newWindow);
     event RedeemDeadlineWindowUpdated(uint64 newWindow);
 
@@ -180,7 +187,7 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
         returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
     {
         executableAssetAmount = _floorToStep(amountAsset, subscribeStepAsset);
-        if (executableAssetAmount == 0) {
+        if (executableAssetAmount == 0 || executableAssetAmount < minSubscribeAsset) {
             return (false, 0, 0);
         }
 
@@ -205,7 +212,7 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
         }
 
         expectedPosAmount = _floorToStep(originalPosAmount, redeemStepPos);
-        if (expectedPosAmount == 0) {
+        if (expectedPosAmount == 0 || expectedPosAmount < minRedeemPos) {
             return (false, 0, 0);
         }
 
@@ -249,6 +256,19 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
         redeemStepPos = redeemStepPos_;
 
         emit ExecutionStepsUpdated(subscribeStepAsset_, redeemStepPos_);
+    }
+
+    /// @notice Set the minimum subscribe/redeem amounts enforced by the underlying DigiFt venue.
+    /// @param minSubscribeAsset_ Min asset amount (USDC) for subscribe. Zero disables the check.
+    /// @param minRedeemPos_ Min position-token amount for redeem. Zero disables the check.
+    /// @dev Values here should mirror DigiFt's own minimums. preview* will return (false, 0, 0)
+    ///      when the aligned amount is below these thresholds, so controller paths can skip
+    ///      gracefully instead of reverting inside DigiFt.
+    function setMinAmounts(uint256 minSubscribeAsset_, uint256 minRedeemPos_) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        minSubscribeAsset = minSubscribeAsset_;
+        minRedeemPos = minRedeemPos_;
+
+        emit MinAmountsUpdated(minSubscribeAsset_, minRedeemPos_);
     }
 
     // =============================================================

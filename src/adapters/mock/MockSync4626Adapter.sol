@@ -27,6 +27,14 @@ contract MockSync4626Adapter is BaseSync4626Adapter {
         positionAmount = TARGET_4626.previewWithdraw(assetAmount);
     }
 
+    function minSubscribeAsset() external pure override returns (uint256) {
+        return 0;
+    }
+
+    function minRedeemPos() external pure override returns (uint256) {
+        return 0;
+    }
+
     /// @dev Only settled position (4626 shares on adapter + vault). Unsettled ASSET
     ///      on the adapter is already tracked by vault in-flight accounting.
     function totalValue() external view override returns (uint256) {

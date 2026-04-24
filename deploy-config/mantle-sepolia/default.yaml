@@ -10,18 +10,19 @@ envs:
   F_AWS_KMS_KEY_ID: ""
   F_SENDER: "0x65Cf61678Cf120a8F40c2F3aEDCb50BBA0e85c78"
   F_VERBOSE: true
-  F_RPC_URL: "https://rpc.sepolia.mantle.xyz"
+  F_RPC_URL: "https://rpc-moon.sepolia.mantle.xyz/v1/OTEyYjhkZmJlZGFjOGFkMGUxZDNmMDYz"
+  F_VERIFY: "true" # set to "true" to verify on broadcast; use VerifyXxx tasks to verify post-deploy
 
   # ── Addresses (roles) ────────────────────────────────────────
   F_ADMIN_ADDRESS: "0x65Cf61678Cf120a8F40c2F3aEDCb50BBA0e85c78"
   # 0x3C8af6063c934dc25F7dB727bBB6c7DeEBE21Bb2 is driven by mnemonic index 1
-  F_COMPLIANCE_BOT_ADDRESS: "0x3C8af6063c934dc25F7dB727bBB6c7DeEBE21Bb2"   # SanctionsOracle COMPLIANCE_ROLE
-  F_BOT_ADDRESS: "0x3C8af6063c934dc25F7dB727bBB6c7DeEBE21Bb2"              # AccountantExecutor BOT_ROLE
-  F_SIGNER_ADDRESS: "0x3C8af6063c934dc25F7dB727bBB6c7DeEBE21Bb2"           # OperatorExecutor SIGNER_ROLE
+  F_COMPLIANCE_BOT_ADDRESS: "0x026C0fA47A4D10cb83bB580DaD884c10986115c0" # SanctionsOracle COMPLIANCE_ROLE
+  F_BOT_ADDRESS: "0x026C0fA47A4D10cb83bB580DaD884c10986115c0" # AccountantExecutor BOT_ROLE
+  F_SIGNER_ADDRESS: "0x026C0fA47A4D10cb83bB580DaD884c10986115c0" # OperatorExecutor SIGNER_ROLE
   F_STRATEGY_MANAGER_ADDRESS: "0x3C8af6063c934dc25F7dB727bBB6c7DeEBE21Bb2" # StrategyController STRATEGY_MANAGER_ROLE
-  F_TREASURY_ADDRESS: "0x3C8af6063c934dc25F7dB727bBB6c7DeEBE21Bb2"         # Vault fee share recipient
-  F_PAUSER_ADDRESS: "0x3C8af6063c934dc25F7dB727bBB6c7DeEBE21Bb2"           # Vault PAUSER_ROLE
-  
+  F_TREASURY_ADDRESS: "0x3C8af6063c934dc25F7dB727bBB6c7DeEBE21Bb2" # Vault fee share recipient
+  F_PAUSER_ADDRESS: "0x3C8af6063c934dc25F7dB727bBB6c7DeEBE21Bb2" # Vault PAUSER_ROLE
+
   # -- Factory addresses ────────────────────────────────────────
   F_ACCOUNTANT_FACTORY: "0x31a1f8de58833d3b0c833616c195f58f3a6ece3f"
   F_SANCTIONS_ORACLE_FACTORY: "0x0fea4bf1fc99568ed0dae4fc72d9c5866d694284"
@@ -32,38 +33,52 @@ envs:
 
   # ── Accountant params ────────────────────────────────────────
   F_INITIAL_RATE: "1000000000000000000" # 1e18
-  F_MANAGEMENT_FEE_BPS: "50"           # 0.5%
+  F_MANAGEMENT_FEE_BPS: "50" # 0.5%
 
   # ── StrategyController params ────────────────────────────────
-  F_BUFFER_TARGET_BPS: "0"           # 0%
-  F_REBALANCE_THRESHOLD_BPS: "10"     # 0.1%
-  F_REBALANCE_COOLDOWN: "3600"         # 1 hour
+  F_BUFFER_TARGET_BPS: "0" # 0%
+  F_REBALANCE_THRESHOLD_BPS: "10" # 0.1%
+  F_REBALANCE_COOLDOWN: "3600" # 1 hour
 
   # ── RegisterStrategy params ──────────────────────────────────
-  F_CONTROLLER_ADDRESS: "0x4b1091880de0ac5068a7a7eccfb786e7f2b58258"     # StrategyController proxy
-  F_STRATEGY_ADAPTER_ADDRESS: "0x85475d000b53cef680aef1bf55b8a61730242e98"
-  F_TARGET_WEIGHT_BPS: "10000"       # 100%
-  F_PRIORITY: "0"                    # execution priority (lower = higher)
-  F_IS_ASYNC: "true"                 # true for ERC-7540, false for ERC-4626
-  F_SET_ORDER: "true"                # update strategyOrder after registration
+  F_CONTROLLER_ADDRESS: "0xaa01C640d69a81738B4C938f358B7AD4d2C30a11" # StrategyController proxy
+  F_STRATEGY_ADAPTER_ADDRESS: "0x357c09B751C3f82291ceb0E351e6F847F8e4B8a8"
+  F_TARGET_WEIGHT_BPS: "10000" # 100%
+  F_PRIORITY: "0" # execution priority (lower = higher)
+  F_IS_ASYNC: "true" # true for ERC-7540, false for ERC-4626
+  F_SET_ORDER: "true" # update strategyOrder after registration
 
   # ── DeploySubRedManagementAdapter params ─────────────────────
-  ADAPTER_VAULT: "0xec7f6c86b223f280bedebac0f043e807ae2990c4"
+  ADAPTER_VAULT: "0xBea92b4557bC79E99549849f6f00D8B476ec3B08"
   ADAPTER_SUBRED_MANAGEMENT: "0xee8fd912a7635b76ecd3a8c76912b8f449035e9b"
   ADAPTER_ST_TOKEN: "0x2633d46912428c8ad02a130ac7d47a31771d9858"
   ADAPTER_ADMIN: "0x65Cf61678Cf120a8F40c2F3aEDCb50BBA0e85c78"
-  ADAPTER_CONTROLLER: "0x4b1091880de0ac5068a7a7eccfb786e7f2b58258"
-  ADAPTER_ACCOUNTANT: "0xb8bd4197426d6c2587f6149be7d4b8a7b1a90fd4"
-  ADAPTER_PRICE_ORACLE: "0xC0D6c66610783a72b4bf88E0d8474cCcD64856F8"  # optional, default: address(0)
-  F_USDC_ADDRESS: "0xcb89f5acc8f21a115192a0649fdf6b5d75880289"       
+  ADAPTER_CONTROLLER: "0xaa01C640d69a81738B4C938f358B7AD4d2C30a11"
+  ADAPTER_ACCOUNTANT: "0xC6389294721650F47B2CD732B3820EB3022582ff"
+  ADAPTER_PRICE_ORACLE: "0xC0D6c66610783a72b4bf88E0d8474cCcD64856F8" # optional, default: address(0)
+  # Venue step sizes & minimums (raw units). 0 = "no constraint".
+  # DigiFt stToken has 2-decimal granularity on their side: step = 0.01 stToken = 1e16 raw units
+  ADAPTER_SUBSCRIBE_STEP_ASSET: "0"         # USDC 6 decimals; 0 = no step alignment
+  ADAPTER_REDEEM_STEP_POS: "10000000000000000"  # 1e16 = 0.01 stToken (DigiFt's 2-decimal granularity)
+  ADAPTER_MIN_SUBSCRIBE_ASSET: "0"          # USDC 6 decimals; update once DigiFt min known
+  ADAPTER_MIN_REDEEM_POS: "0"               # stToken 18 decimals; update once DigiFt min known
 
+  # ── ReplaceStrategyAdapter params ───────────────────────────
+  # Set these just before running `task ReplaceStrategyAdapter`.
+  REPLACE_OLD_ADAPTER: ""                   # adapter to retire (must have 0 in-flight)
+  REPLACE_NEW_ADAPTER: ""                   # new adapter (already deployed via DeploySubRedManagementAdapter)
+  # Optional overrides — leave unset to inherit OLD's config:
+  # REPLACE_WEIGHT_BPS: ""
+  # REPLACE_PRIORITY: ""
+  # REPLACE_IS_ASYNC: ""
+  F_USDC_ADDRESS: "0xcb89f5acc8f21a115192a0649fdf6b5d75880289"
 
   F_STRATEGY_CONTROLLER_FACTORY: "0xcc9d85bfc8757362caa513c7684489b2effc23f3"
 
   # ── Vault params ─────────────────────────────────────────────
-  F_MAX_REDEMPTION_FEE_BPS: "500"      # 5% cap
-  F_MAX_RATE_CHANGE_BPS: "500"         # 5% cap
-  F_REDEMPTION_FEE_BPS: "10"           # 0.1%
-  F_MIN_REDEEM_AMOUNT: "1000000"       # 1 USDC (6 decimals)
-  F_MIN_DEPOSIT_AMOUNT: "1000000"      # 1 USDC (6 decimals)
+  F_MAX_REDEMPTION_FEE_BPS: "500" # 5% cap
+  F_MAX_RATE_CHANGE_BPS: "500" # 5% cap
+  F_REDEMPTION_FEE_BPS: "10" # 0.1%
+  F_MIN_REDEEM_AMOUNT: "1000000" # 1 USDC (6 decimals)
+  F_MIN_DEPOSIT_AMOUNT: "1000000" # 1 USDC (6 decimals)
   F_SYNC_REDEEM_DISABLED: "false"

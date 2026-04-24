@@ -118,6 +118,8 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     error UpdateStrategiesLengthMismatch();
     error DuplicateStrategyUpdate(address adapter);
     error InvestPosAmountUnavailable(address adapter, uint256 assetAmount);
+    /// @notice Adapter pool (step-aligned total value) is strictly less than the required shortfall.
+    ///         Request stays PENDING and can be retried once adapter value grows.
     error DivestInsufficient(uint256 required, uint256 remaining);
     error StrategyAlreadyActive(address adapter);
     error StrategyAlreadyInactive(address adapter);
@@ -525,16 +527,19 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         uint256 shortfall = cashDeficit < batchTotalAsset ? cashDeficit : batchTotalAsset;
         if (shortfall > 0) {
             // Snapshot adapter pool value (step-aligned) BEFORE divest
-            // to distinguish step residual vs true insufficiency.
+            // to tell real pool shortage apart from soft conditions (below-min / step residual).
             uint256 adapterPoolBefore = _adapterPoolValue();
             uint256 divestRemaining = _divest(shortfall);
             if (divestRemaining > 0 && adapterPoolBefore < shortfall) {
-                // True insufficient: adapter pool is not enough, the whole TX will revert, the request will remain PENDING and can be retried.
+                // Only revert on true insufficiency (pool strictly below demand). Requests stay
+                // PENDING so they can retry when adapter value grows.
                 revert DivestInsufficient(shortfall, divestRemaining);
             }
-            // Otherwise (pool is enough, but divest has step residual or no progress because shortfall < step):
-            // Allow through. The request will enter PROCESSING, and subsequent divest will be filled by rebalance to align with the step,
-            // or the operator will use adjusted settledAssets to absorb dust in finalize.
+            // Otherwise (partial fill / every adapter below min / step residual): allow through.
+            // Request enters PROCESSING; finalize waits until physical cash arrives via
+            //   - later pRB calls that aggregate enough shortfall to clear adapter min, or
+            //   - rebalance divest triggered by growing cashDeficit across PROCESSING requests, or
+            //   - new user deposits injecting USDC directly.
         }
 
         vault.updateRequestBatch(ids, IMantleYieldVault.RequestStatus.PROCESSING);
@@ -653,9 +658,9 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         targetCash += vault.getCashDeficit();
         // threshold defines the no-op band around targetCash to avoid rebalance churn.
         threshold = (netAssets * rebalanceThresholdBps) / BPS_DENOMINATOR;
-        // hasPendingRequest: whether latest redeem request is still PENDING.
-        // Used to block rebalance divest until operator processes it.
-        hasPendingRequest = _hasPendingLatestRequest();
+        // hasPendingRequest: whether there are unprocessed redeem requests.
+        // Used to block rebalance divest until operator processes them.
+        hasPendingRequest = vault.pendingRequestCount() > 0;
     }
 
     function _freeCash() internal view returns (uint256) {
@@ -688,15 +693,6 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
                 // If preview call fails, conservative handling, continue to exclude from total.
             }
         }
-    }
-
-    /// @dev Check if the most recent redemption request is still PENDING.
-    /// @dev Used to prevent rebalance divest from pre-empting user redemption handling.
-    function _hasPendingLatestRequest() internal view returns (bool) {
-        uint256 nextId = vault.nextRequestId();
-        if (nextId <= 1) return false; // no requests ever
-        (,,,,,,, IMantleYieldVault.RequestStatus status) = vault.requests(nextId - 1);
-        return status == IMantleYieldVault.RequestStatus.PENDING;
     }
 
     function _computeRebalanceDecision(

@@ -114,6 +114,10 @@ forge_script() {
   fi
 
   # verifier options
+  if [[ "$F_VERIFY" == "true" ]]; then
+    FORGE_OPTS="${FORGE_OPTS} --verify"
+    log_info "Verification enabled (etherscan config from foundry.toml)"
+  fi
 
   log_info "forge script ${FORGE_OPTS} ${@}"
 

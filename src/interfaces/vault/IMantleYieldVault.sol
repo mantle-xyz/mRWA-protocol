@@ -193,6 +193,7 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     function totalRedeemInFlight() external view returns (uint256);
     function adapterInvestInFlightTokens(address adapter) external view returns (uint256);
     function adapterRedeemInFlightUsdc(address adapter) external view returns (uint256);
+    function pendingRequestCount() external view returns (uint256);
 
     function getTokenInfos() external view returns (tokenInfo[] memory);
 
