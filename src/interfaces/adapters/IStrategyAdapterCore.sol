@@ -10,6 +10,12 @@ interface IStrategyAdapterCore {
     /// @dev Priority: oracle valid price > manual written price > default 1e18.
     function getPosTokenPrice() external view returns (uint256);
     function estimatePosAmount(uint256 assetAmount) external view returns (uint256 positionAmount);
+    /// @notice Minimum asset amount accepted by the underlying venue's subscribe/deposit path.
+    /// @dev Zero means "no minimum". Controller/vault can gate flows against this.
+    function minSubscribeAsset() external view returns (uint256);
+    /// @notice Minimum position-token amount accepted by the underlying venue's redeem path.
+    /// @dev Zero means "no minimum". Controller uses this to skip divest calls that would revert.
+    function minRedeemPos() external view returns (uint256);
     function previewDeposit(uint256 assetAmount)
         external
         view
