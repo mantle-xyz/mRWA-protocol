@@ -686,4 +686,55 @@ contract SanctionsInteractionQATest is Test {
         _step("  PASS: all three paths behave correctly and distinctly");
         _logPass();
     }
+
+    // -----------------------------------------------------------------------
+    // 9. test_SanctionSafeIn_TokenIsAsset_NotVault  [N-20]
+    // -----------------------------------------------------------------------
+
+    function test_SanctionSafeIn_TokenIsAsset_NotVault() public {
+        _logCase(
+            "test_SanctionSafeIn_TokenIsAsset_NotVault",
+            unicode"[N-20] SanctionSafeIn 事件的 token 参数使用 asset() 而非 address(vault)"
+        );
+
+        // --- Step 1: User deposits and creates an async redeem request ---
+        _step("[Step 1] UserA deposits and creates async redeem request");
+        uint256 shares = _depositViaGateway(userA, 10_000e6);
+        uint256 reqId = _requestRedeemViaGateway(userA, shares);
+        _step(string.concat("  shares = ", vm.toString(shares), ", reqId = ", vm.toString(reqId)));
+
+        // --- Step 2: Process the redeem batch ---
+        _step("[Step 2] Process redeem batch");
+        _processRedeemBatch(_singleArr(reqId));
+
+        // --- Step 3: Sanction userA AFTER processing ---
+        _step("[Step 3] Sanction userA after processing (before finalize)");
+        oracle.setSanctioned(userA, true);
+
+        // --- Step 4: Finalize and capture SanctionSafeIn event ---
+        _step("[Step 4] Finalize redeem batch - verify SanctionSafeIn event parameters");
+        (,,,, uint256 estimated,,,) = vault.requests(reqId);
+
+        // Expect the SanctionSafeIn event with token = asset() (USDC address)
+        vm.expectEmit(true, true, false, true, address(vault));
+        emit IMantleYieldVault.SanctionSafeIn(userA, address(usdc), estimated);
+
+        _finalizeRedeemBatch(_singleArr(reqId), _singleArr(estimated));
+
+        // --- Step 5: Verify token parameter values ---
+        _step("[Step 5] Verify token parameter meaning");
+        assertFalse(
+            address(usdc) == address(vault),
+            "precondition: asset address differs from vault address"
+        );
+        _step(string.concat("  vault.asset()   = ", vm.toString(address(usdc))));
+        _step(string.concat("  address(vault)  = ", vm.toString(address(vault))));
+        _step("  PASS: SanctionSafeIn event token = asset() (USDC), not address(vault)");
+
+        // Also verify the USDC actually arrived at sanctionSafe
+        uint256 safeBalance = usdc.balanceOf(sanctionSafe);
+        assertGe(safeBalance, estimated, "sanctionSafe received USDC");
+        _step(string.concat("  sanctionSafe USDC balance >= estimated = ", vm.toString(estimated)));
+        _logPass();
+    }
 }

@@ -327,12 +327,12 @@ contract RedeemEdgeCasesQATest is Test {
     }
 
     // =======================================================================
-    // 1. Duplicate process same batch -- BatchAlreadyProcessed
+    // 1. Duplicate process same batch -- Vault__InvalidState(PROCESSING) (M-1)
     // =======================================================================
 
     function test_DuplicateProcess_BatchAlreadyProcessed() public {
         _logCase("test_DuplicateProcess_BatchAlreadyProcessed",
-            unicode"同一 batch 重复 process -- 幂等保护");
+            unicode"同一 batch 重复 process -- 幂等保护 (M-1: BatchAlreadyProcessed -> Vault__InvalidState)");
 
         _deposit(userA, 5000e6);
         vm.prank(userA);
@@ -342,18 +342,19 @@ contract RedeemEdgeCasesQATest is Test {
         vm.prank(bot);
         executor.executeProcessRedeemBatch(address(controller), _arr(reqId));
 
-        // Verify request is PROCESSING after first process
+        // Verify request is PROCESSING after first process (M-3: state lives on Vault)
         (,,,,,,, IMantleYieldVault.RequestStatus statusAfterProcess) = vault.requests(reqId);
         assertEq(uint8(statusAfterProcess), uint8(IMantleYieldVault.RequestStatus.PROCESSING), "request PROCESSING after first process");
 
-        // Verify processingBatchDone
-        bytes32 batchKey = keccak256(abi.encode(_arr(reqId)));
-        assertTrue(controller.processingBatchDone(batchKey), "batch marked done after first process");
-
-        // Second process same ids reverts
+        // Second process same ids reverts with Vault__InvalidState(id, PROCESSING)
+        // because updateRequestBatch requires strictly monotonic transition and PROCESSING <= current=PROCESSING fails.
         vm.prank(bot);
         vm.expectRevert(
-            abi.encodeWithSelector(StrategyController.BatchAlreadyProcessed.selector, keccak256(abi.encode(_arr(reqId))))
+            abi.encodeWithSelector(
+                IMantleYieldVault.Vault__InvalidState.selector,
+                reqId,
+                IMantleYieldVault.RequestStatus.PROCESSING
+            )
         );
         executor.executeProcessRedeemBatch(address(controller), _arr(reqId));
 
@@ -452,22 +453,21 @@ contract RedeemEdgeCasesQATest is Test {
     }
 
     // =======================================================================
-    // 4. Invest + settle ordering issue -- DivestIncomplete then extra rebalance
+    // 4. Invest + settle ordering issue -- DivestInsufficient revert (M-12)
     // =======================================================================
 
     function test_InvestNotSettled_ProcessFirst_NeedsExtraRebalance() public {
         _logCase("test_InvestNotSettled_ProcessFirst_NeedsExtraRebalance",
-            unicode"investInFlight 未 settle + 先 process 的操作顺序问题 -- 服务层核心风险");
+            unicode"investInFlight 未 settle + 先 process (M-12: DivestInsufficient revert; request stays PENDING)");
 
-        // A deposits 500, invest + settle (posToken on vault)
+        // A deposits 500, invest + settle (posToken=500 on vault)
         _deposit(userA, 500e6);
         _investAll();
         uint256 investIdA = _lastInFlightId();
         (,,, uint256 posAmtA,,,,, ) = vault.inFlightRecords(investIdA);
         _settleInvest(_arr(investIdA), _arr(posAmtA), _arr(0));
-        uint256 vaultPosA = posToken.balanceOf(address(vault));
 
-        // B deposits 1000, invest but NOT settle
+        // B deposits 1000, invest but NOT settle (investInFlight = 1000)
         _deposit(userB, 1000e6);
         _investAll();
         uint256 investIdB = _lastInFlightId();
@@ -478,53 +478,50 @@ contract RedeemEdgeCasesQATest is Test {
         vm.prank(userB);
         uint256 reqId = gateway.requestRedeem(sharesB);
 
-        // Process FIRST (wrong order) -- only A's posToken on vault
+        // M-12/M-15: Process FIRST (wrong order) -- adapterPool=500 (A's posToken) < shortfall=1000
+        //            → StrategyController.processRedeemBatch reverts with DivestInsufficient.
+        //            Request remains PENDING; no in-flight created on this failed path.
         vm.prank(bot);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                StrategyController.DivestInsufficient.selector,
+                1000e6,
+                500e6
+            )
+        );
         executor.executeProcessRedeemBatch(address(controller), _arr(reqId));
 
-        // processingBatchDone[key] = true -- cannot re-process
-        bytes32 batchKey = keccak256(abi.encode(_arr(reqId)));
-        assertTrue(controller.processingBatchDone(batchKey), "batch marked done");
+        // Verify request stayed PENDING and no redeem in-flight was created.
+        (,,,,,,, IMantleYieldVault.RequestStatus sAfterRevert) = vault.requests(reqId);
+        assertEq(uint8(sAfterRevert), uint8(IMantleYieldVault.RequestStatus.PENDING), "request remains PENDING after revert");
+        assertEq(vault.totalRedeemInFlight(), 0, "no redeemInFlight created on revert");
 
-        // Verify partial divest -- redeemInFlight only covers what was available
-        uint256 redeemIF = vault.totalRedeemInFlight();
-        console2.log("redeemInFlight (partial):", redeemIF);
-
-        // Now settle B's investInFlight
+        // Now settle B's investInFlight -- posToken moves from adapter bookkeeping to vault.
         (,,, uint256 posAmtB,,,,, ) = vault.inFlightRecords(investIdB);
         _settleInvest(_arr(investIdB), _arr(posAmtB), _arr(0));
         assertEq(vault.totalInvestInFlight(), 0, "B invest settled");
 
-        // Settle partial redeemInFlight -- must exist (A's 500 posToken was divested)
-        assertGt(redeemIF, 0, "partial divest must have created redeemInFlight");
+        // Retry process -- adapterPool=1500 >= shortfall=1000, so succeeds.
+        vm.prank(bot);
+        executor.executeProcessRedeemBatch(address(controller), _arr(reqId));
+
+        (,,,,,,, IMantleYieldVault.RequestStatus sAfterProc) = vault.requests(reqId);
+        assertEq(uint8(sAfterProc), uint8(IMantleYieldVault.RequestStatus.PROCESSING), "request PROCESSING after retry");
+
+        // Settle the single redeemInFlight created by this process.
+        uint256 redeemIF = vault.totalRedeemInFlight();
+        assertGt(redeemIF, 0, "divest on retry must have created redeemInFlight");
         uint256 redeemId1 = _lastInFlightId();
-        // Verify this is a redeem inflight (not the invest we just settled)
         (, , , , uint256 usdcAmt, , bool isInvest, , ) = vault.inFlightRecords(redeemId1);
         assertFalse(isInvest, "should be redeem inflight, not invest");
         assertGt(usdcAmt, 0, "redeem inflight should have USDC amount");
         adapter.simulateRedeemSettlement(usdcAmt);
         _settleRedeem(_arr(redeemId1), _arr(usdcAmt));
 
-        // Extra rebalance to divest remaining (vault now has more posToken from B's settled invest)
-        vm.prank(admin);
-        controller.setRiskParams(10_000, 0, 0); // buffer=100% -> want all cash
-        vm.prank(bot);
-        executor.executeRebalance(address(controller));
-
-        // Settle new redeemInFlight -- extra divest must have created it
-        uint256 redeemIF2 = vault.totalRedeemInFlight();
-        assertGt(redeemIF2, 0, "extra rebalance must have triggered new divest");
-        uint256 redeemId2 = _lastInFlightId();
-        (, , , , uint256 usdcAmt2, , , , ) = vault.inFlightRecords(redeemId2);
-        adapter.simulateRedeemSettlement(usdcAmt2);
-        _settleRedeem(_arr(redeemId2), _arr(usdcAmt2));
-
-        // Finalize
+        // Finalize B's redeem.
         uint256 settledAssets = _convertToAssetsFloor(sharesB);
         uint256 vaultUsdc = usdc.balanceOf(address(vault));
-        console2.log("vault USDC before finalize:", vaultUsdc);
-        console2.log("settledAssets needed:", settledAssets);
-        assertGe(vaultUsdc, settledAssets, "vault has enough after extra cycle");
+        assertGe(vaultUsdc, settledAssets, "vault has enough after settle");
 
         uint256 balBBefore = usdc.balanceOf(userB);
         vm.prank(bot);
@@ -532,9 +529,8 @@ contract RedeemEdgeCasesQATest is Test {
         assertEq(usdc.balanceOf(userB) - balBBefore, settledAssets, "B received USDC");
         assertEq(vault.totalLockedShares(), 0, "locked cleared");
 
-        // Verify DONE + pendingShares cleared
         (,,,,,,, IMantleYieldVault.RequestStatus statusDone) = vault.requests(reqId);
-        assertEq(uint8(statusDone), uint8(IMantleYieldVault.RequestStatus.DONE), "request status DONE");
+        assertEq(uint8(statusDone), uint8(IMantleYieldVault.RequestStatus.DONE), "request DONE");
         assertEq(vault.pendingRedeemRequest(userB), 0, "B pendingShares cleared");
 
         _logPass();

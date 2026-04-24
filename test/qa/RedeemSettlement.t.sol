@@ -125,12 +125,10 @@ contract MockAsyncAdapter_RS is IStrategyAdapter {
 
     function withdrawSync(uint256, address) external pure returns (uint256) { return 0; }
 
-    function requestRedeemAsync(uint256 amountAsset, address) external {
-        uint8 aDec = IERC20Metadata(ASSET).decimals();
-        uint8 pDec = IERC20Metadata(POS_TOKEN).decimals();
-        uint256 quantity = amountAsset.mulDiv(1e18 * (10 ** pDec), posTokenPrice * (10 ** aDec), Math.Rounding.Floor);
-        if (quantity > 0) {
-            IERC20(POS_TOKEN).transferFrom(VAULT, address(this), quantity);
+    /// @dev M-14/N-14: parameter is now posAmount directly (no conversion needed).
+    function requestRedeemAsync(uint256 posAmount, address) external {
+        if (posAmount > 0) {
+            IERC20(POS_TOKEN).transferFrom(VAULT, address(this), posAmount);
         }
     }
 
