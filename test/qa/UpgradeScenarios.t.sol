@@ -376,6 +376,27 @@ contract MockVaultForController {
         return locked > totalCash ? locked - totalCash : 0;
     }
 
+    /// @dev Simplified mirror of MantleYieldVault.totalAssets().
+    function totalAssets() external view returns (uint256) {
+        uint256 total = token.balanceOf(address(this)) + investInFlightTotal + redeemInFlightTotal;
+        return total > locked ? total - locked : 0;
+    }
+
+    /// @dev M-8: StrategyController._hasPendingLatestRequest probes this. No requests in these
+    ///      integration tests, so returning 1 keeps the predicate false.
+    function nextRequestId() external pure returns (uint256) {
+        return 1;
+    }
+
+    /// @dev Required for _hasPendingLatestRequest fallback path — never hit while nextRequestId()==1.
+    function requests(uint256)
+        external
+        pure
+        returns (uint256, address, uint256, uint256, uint256, uint256, uint256, IMantleYieldVault.RequestStatus)
+    {
+        return (0, address(0), 0, 0, 0, 0, 0, IMantleYieldVault.RequestStatus.NONE);
+    }
+
     function approveToAdapter(address adapter, address approveToken, uint256 amount) external {
         ERC20(approveToken).approve(adapter, amount);
     }

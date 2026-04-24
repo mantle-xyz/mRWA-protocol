@@ -268,6 +268,15 @@ contract MockVaultOE {
         return floatingLocked > totalCash ? floatingLocked - totalCash : 0;
     }
 
+    /// @dev Simplified mirror of MantleYieldVault.totalAssets(): cash + in-flight buckets minus
+    ///      the floating-locked (liability) portion. Adapter posToken valuation omitted — tests
+    ///      that require adapter-side NAV use purpose-built mocks.
+    function totalAssets() external view returns (uint256) {
+        uint256 total = token.balanceOf(address(this)) + investInFlightTotal + redeemInFlightTotal;
+        uint256 floatingLocked = (totalLockedSharesValue * mockedExchangeRate) / 1e18;
+        return total > floatingLocked ? total - floatingLocked : 0;
+    }
+
     function approveToAdapter(address adapter, address approveToken, uint256 amount) external {
         ERC20(approveToken).approve(adapter, amount);
     }
@@ -466,9 +475,13 @@ contract OperatorExecutorQATest is Test {
         _emitAndFinalize(ids, settledAssets);
     }
 
-    /// @dev Emit expected event, verify readyBatchDone=false, then execute finalize
+    /// @dev Emit expected event, verify requests are PROCESSING (not DONE), then execute finalize.
+    ///      M-3: controller.readyBatchDone mapping removed; state lives on Vault request status.
     function _emitAndFinalize(uint256[] memory ids, uint256[] memory settledAssets) internal {
-        assertFalse(controller.readyBatchDone(keccak256(abi.encode(ids))), "batch should not be ready yet");
+        for (uint256 i = 0; i < ids.length; i++) {
+            (,,,,,,, IMantleYieldVault.RequestStatus sPre) = vault.requests(ids[i]);
+            assertTrue(sPre != IMantleYieldVault.RequestStatus.DONE, "batch should not be ready yet");
+        }
 
         vm.expectEmit(true, true, false, true);
         emit FinalizeRedeemBatchExecuted(
@@ -939,12 +952,12 @@ contract OperatorExecutorQATest is Test {
         bytes32 expectedIdsHash = keccak256(abi.encodePacked(ids));
         _step(string.concat("  expectedIdsHash = ", vm.toString(expectedIdsHash)));
 
-        _step("[Step 3] Compute batchKey for later verification");
-        bytes32 batchKey = keccak256(abi.encode(ids));
-        _step(string.concat("  batchKey = ", vm.toString(batchKey)));
-        bool batchDoneBefore = controller.processingBatchDone(batchKey);
-        _step(string.concat("  processingBatchDone before = ", vm.toString(batchDoneBefore)));
-        assertFalse(batchDoneBefore, "batch should not be processed yet");
+        _step("[Step 3] Verify all requests are initially PENDING (M-3: state lives on Vault)");
+        for (uint256 i = 0; i < ids.length; i++) {
+            (,,,,,,, IMantleYieldVault.RequestStatus sPre) = vault.requests(ids[i]);
+            _step(string.concat("  request[", vm.toString(ids[i]), "] status(before) = ", vm.toString(uint8(sPre))));
+            assertEq(uint8(sPre), uint8(IMantleYieldVault.RequestStatus.PENDING), "request should be PENDING before process");
+        }
 
         _step("[Step 4] Set up expected event and execute processRedeemBatch");
         vm.expectEmit(true, true, false, true);
@@ -954,13 +967,7 @@ contract OperatorExecutorQATest is Test {
         executor.executeProcessRedeemBatch(address(controller), ids);
         _step("  PASS: executeProcessRedeemBatch completed without revert");
 
-        _step("[Step 5] Verify processingBatchDone flag is set (real StrategyController state)");
-        bool batchDoneAfter = controller.processingBatchDone(batchKey);
-        _step(string.concat("  processingBatchDone after = ", vm.toString(batchDoneAfter)));
-        assertTrue(batchDoneAfter, "batch should be marked as processed");
-        _step("  PASS: processingBatchDone flag set on real controller");
-
-        _step("[Step 6] Verify vault request statuses changed to PROCESSING");
+        _step("[Step 5] Verify vault request statuses changed to PROCESSING");
         for (uint256 i = 0; i < ids.length; i++) {
             IMantleYieldVault.RequestStatus status = _vReqStatus(ids[i]);
             _step(string.concat("  request[", vm.toString(ids[i]), "] status = ", vm.toString(uint8(status))));
@@ -1055,14 +1062,7 @@ contract OperatorExecutorQATest is Test {
             _prepareFinalizeAndExecute(ids, reqId1, reqId2);
         _step("  PASS: executeFinalizeRedeemBatch completed without revert");
 
-        _step("[Step 7] Verify readyBatchDone flag is set");
-        bytes32 batchKey = keccak256(abi.encode(ids));
-        bool readyAfter = controller.readyBatchDone(batchKey);
-        _step(string.concat("  readyBatchDone after = ", vm.toString(readyAfter)));
-        assertTrue(readyAfter, "batch should be marked as ready");
-        _step("  PASS: readyBatchDone flag set on real controller");
-
-        _step("[Step 8] Verify vault request statuses changed to DONE");
+        _step("[Step 7] Verify vault request statuses changed to DONE (M-3: state lives on Vault)");
         for (uint256 i = 0; i < ids.length; i++) {
             IMantleYieldVault.RequestStatus status = _vReqStatus(ids[i]);
             _step(string.concat("  request[", vm.toString(ids[i]), "] status = ", vm.toString(uint8(status))));
@@ -1495,23 +1495,18 @@ contract OperatorExecutorQATest is Test {
         _step(string.concat("  ids.length = ", vm.toString(ids.length)));
 
         _step("[Step 2] Bot calls executeProcessRedeemBatch with empty ids");
-        bytes32 batchKey = keccak256(abi.encode(ids));
         vm.prank(bot);
         executor.executeProcessRedeemBatch(address(controller), ids);
         _step("  PASS: OperatorExecutor does not validate empty array; call forwarded to downstream");
 
-        _step("[Step 3] Verify empty array was processed by controller");
-        bool batchDone = controller.processingBatchDone(batchKey);
-        _step(string.concat("  processingBatchDone = ", vm.toString(batchDone)));
-        assertTrue(batchDone, "empty batch should be marked as processed");
-        _step("  PASS: downstream processed empty ids array");
+        _step("[Step 3] Empty batch has no per-request state to observe (M-3: state lives on Vault requests)");
+        _step("  downstream updateRequestBatch loops over 0 ids, no state change, no revert");
 
-        _step("[Step 4] Call again with same empty ids - real downstream revert (BatchAlreadyProcessed)");
-        _step("  This demonstrates that downstream controller validates and reverts when appropriate");
+        _step("[Step 4] Call again with same empty ids - still a no-op (no batch-level guard remains)");
+        _step("  M-1: StrategyController.BatchAlreadyProcessed has been removed; idempotency check is per-request on Vault");
         vm.prank(bot);
-        vm.expectRevert(abi.encodeWithSelector(StrategyController.BatchAlreadyProcessed.selector, batchKey));
         executor.executeProcessRedeemBatch(address(controller), ids);
-        _step("  PASS: downstream BatchAlreadyProcessed revert propagated; entire call reverted");
+        _step("  PASS: second empty call does not revert (no batch key, no per-request state to conflict with)");
 
         _logPass();
     }
@@ -1552,11 +1547,12 @@ contract OperatorExecutorQATest is Test {
         executor.executeFinalizeRedeemBatch(address(controller), ids, settledAssets);
         _step("  PASS: downstream ClaimInputsLengthMismatch revert propagated; entire call reverted");
 
-        _step("[Step 5] Verify readyBatchDone remains false (finalize did not succeed)");
-        bytes32 batchKey = keccak256(abi.encode(ids));
-        bool readyDone = controller.readyBatchDone(batchKey);
-        _step(string.concat("  readyBatchDone = ", vm.toString(readyDone)));
-        assertFalse(readyDone, "batch should not be marked ready after revert");
+        _step("[Step 5] Verify request statuses remain PROCESSING (finalize did not succeed) - M-3");
+        for (uint256 i = 0; i < ids.length; i++) {
+            (,,,,,,, IMantleYieldVault.RequestStatus s) = vault.requests(ids[i]);
+            _step(string.concat("  request[", vm.toString(ids[i]), "] status = ", vm.toString(uint8(s))));
+            assertTrue(s != IMantleYieldVault.RequestStatus.DONE, "request should not be DONE after failed finalize");
+        }
         _step("  PASS: downstream revert prevented state change");
 
         _logPass();
@@ -1696,10 +1692,12 @@ contract OperatorExecutorQATest is Test {
         vm.prank(bot);
         executor.executeProcessRedeemBatch(address(controller), ids);
 
-        bytes32 batchKey = keccak256(abi.encode(ids));
-        bool batchDone = controller.processingBatchDone(batchKey);
-        _step(string.concat("  processingBatchDone = ", vm.toString(batchDone)));
-        assertTrue(batchDone, "processRedeemBatch should work after upgrade");
+        // M-3: batch-level processingBatchDone mapping removed; check per-request status on Vault.
+        for (uint256 i = 0; i < ids.length; i++) {
+            (,,,,,,, IMantleYieldVault.RequestStatus s) = vault.requests(ids[i]);
+            _step(string.concat("  request[", vm.toString(ids[i]), "] status = ", vm.toString(uint8(s))));
+            assertEq(uint8(s), uint8(IMantleYieldVault.RequestStatus.PROCESSING), "processRedeemBatch should work after upgrade");
+        }
         _step("  PASS: executeProcessRedeemBatch routes correctly to downstream after upgrade");
 
         _step("[Step 5] Bot calls executeRebalance after upgrade (invest flow)");

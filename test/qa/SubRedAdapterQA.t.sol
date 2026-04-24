@@ -373,11 +373,11 @@ contract SubRedAdapterQATest is Test {
         }
         _step("  ManualPosTokenPriceUpdated emitted and verified");
 
-        _step("[Step 3] verify falls back to default 1e18");
+        _step("[Step 3] verify falls back to 0 (M-6: no oracle + no manual => 0)");
         uint256 fallbackPrice = adapter.getPosTokenPrice();
-        assertEq(fallbackPrice, 1e18);
-        _step(string.concat("  getPosTokenPrice = ", vm.toString(fallbackPrice), " (default fallback)"));
-        _step("  PASS: clearing manual price falls back to default 1e18");
+        assertEq(fallbackPrice, 0);
+        _step(string.concat("  getPosTokenPrice = ", vm.toString(fallbackPrice), " (M-6 fallback)"));
+        _step("  PASS: clearing manual price falls back to 0 per M-6");
 
         _logPass();
     }
@@ -536,6 +536,9 @@ contract SubRedAdapterQATest is Test {
         _logCase("Case-06", unicode"deposit-从vault取usdc");
 
         uint256 amount = 100e18;
+        // M-6 fallback: no oracle + no manual price => priceE18=0 => _scaleToStRaw path
+        // assetDec=18, stDec=6, so expectedShares = amount / 1e12 = 100e6
+        uint256 expectedShares = 100e6;
         _step("[Prepare] mint 500e18 USDC to vault and approve adapter");
         usdc.mint(address(vault), 500e18);
         vault.approveToAdapter(address(adapter), 500e18);
@@ -562,7 +565,7 @@ contract SubRedAdapterQATest is Test {
                     assertEq(address(uint160(uint256(logs[i].topics[3]))), receiver, "wrong receiver");
                     (uint256 amt, uint256 shares) = abi.decode(logs[i].data, (uint256, uint256));
                     assertEq(amt, amount, "wrong amount");
-                    assertEq(shares, amount, "wrong sharesOrPos");
+                    assertEq(shares, expectedShares, "wrong sharesOrPos");
                     found = true;
                     break;
                 }
@@ -708,19 +711,18 @@ contract SubRedAdapterQATest is Test {
     function test_Case11_RequestRedeemAsyncNormal() public {
         _logCase("Case-11", unicode"RequestRedeemAsync-从vault取ST");
 
-        uint256 amountAsset = 200e18;
-        uint256 expectedQty = 200e6;
+        // M-14: requestRedeemAsync takes posAmount directly (ST raw units).
+        uint256 posAmount = 200e6;
         _step("[Prepare] mint 1000e6 ST to vault and approve adapter");
         stToken6.mint(address(vault), 1_000e6);
         vault.approveTokenToAdapter(address(stToken6), address(adapter), 1_000e6);
         _step(string.concat("  vault ST balance = ", vm.toString(stToken6.balanceOf(address(vault)))));
-        _step(string.concat("  asset decimals = 18, ST decimals = 6, price = 1:1"));
-        _step(string.concat("  expected quantity = ", vm.toString(amountAsset), " / 1e12 = ", vm.toString(expectedQty)));
+        _step(string.concat("  ST decimals = 6, posAmount = ", vm.toString(posAmount)));
 
-        _step(string.concat("[Step 1] controller calls requestRedeemAsync(", vm.toString(amountAsset), ", receiver)"));
+        _step(string.concat("[Step 1] controller calls requestRedeemAsync(", vm.toString(posAmount), ", receiver)"));
         vm.recordLogs();
         vm.prank(controller);
-        adapter.requestRedeemAsync(amountAsset, receiver);
+        adapter.requestRedeemAsync(posAmount, receiver);
         {
             VmSafe.Log[] memory logs = vm.getRecordedLogs();
             bool found;
@@ -733,7 +735,7 @@ contract SubRedAdapterQATest is Test {
                     assertEq(address(uint160(uint256(logs[i].topics[1]))), address(adapter), "wrong adapter");
                     assertEq(address(uint160(uint256(logs[i].topics[2]))), controller, "wrong caller");
                     assertEq(address(uint160(uint256(logs[i].topics[3]))), receiver, "wrong receiver");
-                    assertEq(abi.decode(logs[i].data, (uint256)), amountAsset, "wrong amount");
+                    assertEq(abi.decode(logs[i].data, (uint256)), posAmount, "wrong amount");
                     found = true;
                     break;
                 }
@@ -747,10 +749,10 @@ contract SubRedAdapterQATest is Test {
         _step(string.concat("  subRed.redeemNonce = ", vm.toString(subRed.redeemNonce())));
         assertEq(subRed.redeemNonce(), 1);
         _step(string.concat("  subRed.lastRedeemQuantity = ", vm.toString(subRed.lastRedeemQuantity())));
-        assertEq(subRed.lastRedeemQuantity(), expectedQty);
+        assertEq(subRed.lastRedeemQuantity(), posAmount);
         uint256 adapterST = stToken6.balanceOf(address(adapter));
         _step(string.concat("  adapter ST balance = ", vm.toString(adapterST)));
-        assertEq(adapterST, expectedQty);
+        assertEq(adapterST, posAmount);
         _step("  PASS: requestRedeemAsync correctly transferred ST and called subRed.redeem");
 
         _logPass();
@@ -790,17 +792,18 @@ contract SubRedAdapterQATest is Test {
         stToken6.mint(address(vault), 1_000e6);
         vault.approveTokenToAdapter(address(stToken6), address(adapter), 1_000e6);
 
-        _step("[Step 1] controller calls requestRedeemAsync(100e18) -> qty=100e6");
+        // M-14: requestRedeemAsync accepts posAmount (ST raw units) directly.
+        _step("[Step 1] controller calls requestRedeemAsync(100e6)");
         vm.startPrank(controller);
-        adapter.requestRedeemAsync(100e18, receiver);
+        adapter.requestRedeemAsync(100e6, receiver);
         _step(string.concat("  redeemCount = ", vm.toString(subRed.redeemCount()), ", nonce = ", vm.toString(subRed.redeemNonce())));
 
-        _step("[Step 2] controller calls requestRedeemAsync(200e18) -> qty=200e6");
-        adapter.requestRedeemAsync(200e18, receiver);
+        _step("[Step 2] controller calls requestRedeemAsync(200e6)");
+        adapter.requestRedeemAsync(200e6, receiver);
         _step(string.concat("  redeemCount = ", vm.toString(subRed.redeemCount()), ", nonce = ", vm.toString(subRed.redeemNonce())));
 
-        _step("[Step 3] controller calls requestRedeemAsync(50e18) -> qty=50e6");
-        adapter.requestRedeemAsync(50e18, receiver);
+        _step("[Step 3] controller calls requestRedeemAsync(50e6)");
+        adapter.requestRedeemAsync(50e6, receiver);
         _step(string.concat("  redeemCount = ", vm.toString(subRed.redeemCount()), ", nonce = ", vm.toString(subRed.redeemNonce())));
         vm.stopPrank();
 
@@ -823,11 +826,11 @@ contract SubRedAdapterQATest is Test {
         stToken6.mint(address(vault), 100e6);
         vault.approveTokenToAdapter(address(stToken6), address(adapter), 100e6);
 
-        _step("[Step 1] controller calls requestRedeemAsync(100e18, address(0))");
+        _step("[Step 1] controller calls requestRedeemAsync(100e6, address(0))");
         _step("  receiver = address(0)");
         vm.prank(controller);
         vm.expectRevert(BaseAdapter.InvalidAddress.selector);
-        adapter.requestRedeemAsync(100e18, address(0));
+        adapter.requestRedeemAsync(100e6, address(0));
         _step("  reverted with InvalidAddress");
         _step("  PASS: zero receiver address correctly rejected");
 
@@ -845,9 +848,9 @@ contract SubRedAdapterQATest is Test {
         stToken6.mint(address(vault), 500e6);
         vault.approveTokenToAdapter(address(stToken6), address(adapter), 500e6);
 
-        _step("[Step 1] controller calls requestRedeemAsync(100e18, receiver)");
+        _step("[Step 1] controller calls requestRedeemAsync(100e6, receiver)");
         vm.prank(controller);
-        adapter.requestRedeemAsync(100e18, receiver);
+        adapter.requestRedeemAsync(100e6, receiver);
         _step("  requestRedeemAsync succeeded");
 
         _step("[Step 2] verify adapter -> SubRed ST allowance is reset to 0");
@@ -877,10 +880,10 @@ contract SubRedAdapterQATest is Test {
         _step(string.concat("  block.timestamp = ", vm.toString(block.timestamp)));
         _step("  deadline will be: block.timestamp + 0 = block.timestamp (expired)");
 
-        _step("[Step 2] controller calls requestRedeemAsync(100e18, receiver)");
+        _step("[Step 2] controller calls requestRedeemAsync(100e6, receiver)");
         vm.prank(controller);
         vm.expectRevert("REDEEM_EXPIRED");
-        adapter.requestRedeemAsync(100e18, receiver);
+        adapter.requestRedeemAsync(100e6, receiver);
         _step("  reverted with REDEEM_EXPIRED");
         _step("  PASS: expired deadline correctly rejected by SubRed");
 
@@ -1195,8 +1198,8 @@ contract SubRedAdapterQATest is Test {
         _step("[Step 2] call getPosTokenPrice()");
         uint256 price = adapter.getPosTokenPrice();
         _step(string.concat("  getPosTokenPrice = ", vm.toString(price)));
-        assertEq(price, 1e18);
-        _step("  PASS: default fallback price is 1e18");
+        assertEq(price, 0);
+        _step("  PASS: M-6 fallback price is 0 when no oracle and no manual price");
 
         _logPass();
     }

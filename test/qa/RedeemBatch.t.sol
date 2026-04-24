@@ -231,17 +231,37 @@ contract MockVaultRB {
         isAdapterRegistry[adapter] = false;
     }
 
-    // ---- updateRequestBatch: PENDING -> PROCESSING ----
+    // ---- updateRequestBatch: monotonic state machine (M-11/M-12) ----
+    //      Real Vault rejects transitions where new <= current or current == NONE with
+    //      Vault__InvalidState(id, currentStatus). Mock must enforce the same to catch
+    //      duplicate process / out-of-order calls in unit tests.
     function updateRequestBatch(uint256[] calldata ids, IMantleYieldVault.RequestStatus newStatus) external {
+        if (
+            newStatus == IMantleYieldVault.RequestStatus.NONE
+                || newStatus == IMantleYieldVault.RequestStatus.DONE
+        ) {
+            revert IMantleYieldVault.Vault__StatusTransitionForbidden(newStatus);
+        }
         for (uint256 i = 0; i < ids.length; i++) {
+            IMantleYieldVault.RequestStatus current = reqs[ids[i]].status;
+            if (
+                current == IMantleYieldVault.RequestStatus.NONE
+                    || uint8(newStatus) <= uint8(current)
+            ) {
+                revert IMantleYieldVault.Vault__InvalidState(ids[i], current);
+            }
             reqs[ids[i]].status = newStatus;
         }
     }
 
-    // ---- markRequestsDone: transfer USDC to owner, release locked shares ----
+    // ---- markRequestsDone: only PROCESSING can move to DONE (M-4) ----
     function markRequestsDone(uint256[] calldata ids, uint256[] calldata settledAssets) external {
+        require(ids.length == settledAssets.length, "LENGTH_MISMATCH");
         for (uint256 i = 0; i < ids.length; i++) {
             Req storage r = reqs[ids[i]];
+            if (r.status != IMantleYieldVault.RequestStatus.PROCESSING) {
+                revert IMantleYieldVault.Vault__InvalidState(ids[i], r.status);
+            }
             r.settledAssets = settledAssets[i];
             r.status = IMantleYieldVault.RequestStatus.DONE;
 
@@ -481,14 +501,17 @@ contract RedeemBatchQATest is Test {
         _step("  PASS: all requests are PENDING");
 
         _step("[Step 3] Bot calls executeProcessRedeemBatch via OperatorExecutor");
-        bytes32 batchKey = keccak256(abi.encode(ids));
-        assertFalse(controller.processingBatchDone(batchKey), "batch should not be processed yet");
+        // M-1: Controller no longer maintains processingBatchDone mapping; state lives on Vault request status.
+        // Pre-condition: each request is still PENDING.
+        for (uint256 i = 0; i < ids.length; i++) {
+            (,,,,,,, IMantleYieldVault.RequestStatus sPre) = vault.requests(ids[i]);
+            assertEq(uint8(sPre), uint8(IMantleYieldVault.RequestStatus.PENDING), "request should be PENDING before process");
+        }
 
         _processRedeemBatch(ids);
         _step("  PASS: processRedeemBatch executed via real OperatorExecutor");
 
-        _step("[Step 4] Verify processingBatchDone flag and request status = PROCESSING");
-        assertTrue(controller.processingBatchDone(batchKey), "batch should be marked processed");
+        _step("[Step 4] Verify request status = PROCESSING");
         for (uint256 i = 0; i < ids.length; i++) {
             (,,,,,,, IMantleYieldVault.RequestStatus s) = vault.requests(ids[i]);
             assertEq(uint8(s), uint8(IMantleYieldVault.RequestStatus.PROCESSING));
@@ -511,12 +534,18 @@ contract RedeemBatchQATest is Test {
         _step("  PASS: first processRedeemBatch succeeded");
 
         _step("[Step 2] Attempt to process the same batch again via OperatorExecutor");
-        bytes32 batchKey = keccak256(abi.encode(ids));
-        _step(string.concat("  batchKey = ", vm.toString(batchKey)));
+        // M-1: state transitions now enforced by Vault; updateRequestBatch rejects
+        // a target status <= current status with Vault__InvalidState(id, currentStatus).
         vm.prank(bot);
-        vm.expectRevert(abi.encodeWithSelector(StrategyController.BatchAlreadyProcessed.selector, batchKey));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IMantleYieldVault.Vault__InvalidState.selector,
+                ids[0],
+                IMantleYieldVault.RequestStatus.PROCESSING
+            )
+        );
         executor.executeProcessRedeemBatch(address(controller), ids);
-        _step("  PASS: reverted with BatchAlreadyProcessed");
+        _step("  PASS: reverted with Vault__InvalidState(PROCESSING)");
         _logPass();
     }
 
@@ -537,11 +566,18 @@ contract RedeemBatchQATest is Test {
         settled[2] = assetPerReq;
 
         _step("[Step 2] Attempt to finalize without prior processing via OperatorExecutor");
-        bytes32 batchKey = keccak256(abi.encode(ids));
+        // M-2: StrategyController._batchRequiredAssets early-checks per-request status on vault
+        //      and reverts with InvalidRequestState(id, status) when status != PROCESSING.
         vm.prank(bot);
-        vm.expectRevert(abi.encodeWithSelector(StrategyController.BatchNotProcessed.selector, batchKey));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                StrategyController.InvalidRequestState.selector,
+                ids[0],
+                IMantleYieldVault.RequestStatus.PENDING
+            )
+        );
         executor.executeFinalizeRedeemBatch(address(controller), ids, settled);
-        _step("  PASS: reverted with BatchNotProcessed");
+        _step("  PASS: reverted with InvalidRequestState(PENDING)");
         _logPass();
     }
 
@@ -569,16 +605,17 @@ contract RedeemBatchQATest is Test {
         settled[1] = assetPerReq;
         settled[2] = assetPerReq;
 
-        bytes32 batchKey = keccak256(abi.encode(ids));
-        assertFalse(controller.readyBatchDone(batchKey), "should not be ready yet");
+        // M-3: Controller.readyBatchDone mapping removed; rely on Vault request status instead.
+        // Pre-condition: requests should be PROCESSING (not yet DONE).
+        for (uint256 i = 0; i < ids.length; i++) {
+            (,,,,,,, IMantleYieldVault.RequestStatus sPre) = vault.requests(ids[i]);
+            assertEq(uint8(sPre), uint8(IMantleYieldVault.RequestStatus.PROCESSING), "should be PROCESSING before finalize");
+        }
 
         _finalizeRedeemBatch(ids, settled);
         _step("  PASS: finalizeRedeemBatch executed via OperatorExecutor");
 
-        _step("[Step 4] Verify readyBatchDone flag set");
-        assertTrue(controller.readyBatchDone(batchKey), "batch should be marked ready");
-
-        _step("[Step 5] Verify all requests are DONE with correct settledAssets");
+        _step("[Step 4] Verify all requests are DONE with correct settledAssets");
         for (uint256 i = 0; i < ids.length; i++) {
             (,,,,, uint256 sa,, IMantleYieldVault.RequestStatus s) = vault.requests(ids[i]);
             assertEq(uint8(s), uint8(IMantleYieldVault.RequestStatus.DONE));
@@ -586,7 +623,7 @@ contract RedeemBatchQATest is Test {
             _step(string.concat("  request[", vm.toString(ids[i]), "] DONE, settled=", vm.toString(sa)));
         }
 
-        _step("[Step 6] Verify USDC actually transferred to user");
+        _step("[Step 5] Verify USDC actually transferred to user");
         uint256 userBalanceAfter = asset.balanceOf(userA);
         uint256 totalReceived = userBalanceAfter - userBalanceBefore;
         _step(string.concat("  userA USDC after = ", vm.toString(userBalanceAfter)));
@@ -594,7 +631,7 @@ contract RedeemBatchQATest is Test {
         assertEq(totalReceived, assetPerReq * 3, "user should receive total settled USDC");
         _step("  PASS: user received USDC - real settlement confirmed");
 
-        _step("[Step 7] Verify totalLockedShares decreased");
+        _step("[Step 6] Verify totalLockedShares decreased");
         uint256 lockedAfter = vault.totalLockedSharesValue();
         _step(string.concat("  totalLockedShares after = ", vm.toString(lockedAfter)));
         assertEq(lockedAfter, 0, "all locked shares should be released");
@@ -826,11 +863,18 @@ contract RedeemBatchQATest is Test {
         _step("  PASS: first finalizeRedeemBatch succeeded");
 
         _step("[Step 2] Attempt to finalize the same batch again");
-        bytes32 batchKey = keccak256(abi.encode(ids));
+        // M-4: StrategyController._batchRequiredAssets early-checks status and reverts
+        //      with InvalidRequestState(id, DONE) before reaching Vault.markRequestsDone.
         vm.prank(bot);
-        vm.expectRevert(abi.encodeWithSelector(StrategyController.BatchAlreadyReady.selector, batchKey));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                StrategyController.InvalidRequestState.selector,
+                ids[0],
+                IMantleYieldVault.RequestStatus.DONE
+            )
+        );
         executor.executeFinalizeRedeemBatch(address(controller), ids, settled);
-        _step("  PASS: reverted with BatchAlreadyReady");
+        _step("  PASS: reverted with InvalidRequestState(DONE)");
         _logPass();
     }
 
@@ -881,8 +925,11 @@ contract RedeemBatchQATest is Test {
 
         _step("[Step 4] Process and verify batch processes at new rate");
         _processRedeemBatch(ids);
-        bytes32 batchKey = keccak256(abi.encode(ids));
-        assertTrue(controller.processingBatchDone(batchKey), "batch should be processed");
+        // M-1: verify via Vault request status instead of removed processingBatchDone mapping.
+        for (uint256 i = 0; i < ids.length; i++) {
+            (,,,,,,, IMantleYieldVault.RequestStatus s) = vault.requests(ids[i]);
+            assertEq(uint8(s), uint8(IMantleYieldVault.RequestStatus.PROCESSING), "batch should be processed");
+        }
         _step("  PASS: batch processed with rate-dependent batchTotalAsset (630e18 not 600e18)");
         _logPass();
     }
@@ -981,20 +1028,136 @@ contract RedeemBatchQATest is Test {
 
         _step("[Step 3] Process batch - should succeed with batchTotalAsset=0, no divest");
         _processRedeemBatch(ids);
-        bytes32 batchKey = keccak256(abi.encode(ids));
-        assertTrue(controller.processingBatchDone(batchKey));
+        // M-1: verify via Vault request status instead of removed processingBatchDone mapping.
+        for (uint256 i = 0; i < ids.length; i++) {
+            (,,,,,,, IMantleYieldVault.RequestStatus sProc) = vault.requests(ids[i]);
+            assertEq(uint8(sProc), uint8(IMantleYieldVault.RequestStatus.PROCESSING));
+        }
         _step("  PASS: batch processed with batchTotalAsset=0");
 
-        _step("[Step 4] Verify controller state after processing zero-total batch");
+        _step("[Step 4] Verify requests remain PROCESSING (finalize with 0 settledAssets would revert via Vault__ZeroAmount)");
         // Note: finalizeRedeemBatch with settledAssets=[0,0,0] would revert in real vault
         // (Vault__ZeroAmount). The spec tests processRedeemBatch boundary, not finalize.
-        assertTrue(controller.processingBatchDone(batchKey),
-            "zero-total batch should be processable");
 
-        _step("[Step 5] Verify requests are PROCESSING (not DONE, since finalize with 0 would revert in real vault)");
+        _step("[Step 5] Spot-check first request status");
         (,,,,,,, IMantleYieldVault.RequestStatus s1) = vault.requests(ids[0]);
         assertEq(uint8(s1), uint8(IMantleYieldVault.RequestStatus.PROCESSING));
         _step("  PASS: edge case handled - zero-total batch processes successfully");
+        _logPass();
+    }
+
+    // -----------------------------------------------------------------------
+    // 14. test_ProcessRedeemBatch_RejectProcessingToProcessing (N-16)
+    // -----------------------------------------------------------------------
+
+    function test_ProcessRedeemBatch_RejectProcessingToProcessing() public {
+        _logCase(
+            "test_ProcessRedeemBatch_RejectProcessingToProcessing",
+            unicode"[N-16] Vault rejects PROCESSING -> PROCESSING transition"
+        );
+
+        _step("[Step 1] Deposit and create 2 requests");
+        _depositToVault(userB, 400e18);
+        (uint256[] memory ids,) = _setupRedeemRequests(userA, 400e18, 2);
+        _step(string.concat("  ids = [", vm.toString(ids[0]), ", ", vm.toString(ids[1]), "]"));
+
+        _step("[Step 2] Process batch successfully -> PENDING to PROCESSING");
+        _processRedeemBatch(ids);
+        for (uint256 i = 0; i < ids.length; i++) {
+            (,,,,,,, IMantleYieldVault.RequestStatus s) = vault.requests(ids[i]);
+            assertEq(uint8(s), uint8(IMantleYieldVault.RequestStatus.PROCESSING));
+        }
+        _step("  PASS: all requests now PROCESSING");
+
+        _step("[Step 3] Attempt to process same batch again -> Vault rejects PROCESSING->PROCESSING");
+        vm.warp(block.timestamp + 2 hours);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IMantleYieldVault.Vault__InvalidState.selector,
+                ids[0],
+                IMantleYieldVault.RequestStatus.PROCESSING
+            )
+        );
+        _processRedeemBatch(ids);
+        _step("  PASS: Vault__InvalidState(id, PROCESSING) - state machine rejects duplicate process");
+        _logPass();
+    }
+
+    // -----------------------------------------------------------------------
+    // 15. test_FinalizeRedeemBatch_RejectDoneToDone (N-17)
+    // -----------------------------------------------------------------------
+
+    function test_FinalizeRedeemBatch_RejectDoneToDone() public {
+        _logCase(
+            "test_FinalizeRedeemBatch_RejectDoneToDone",
+            unicode"[N-17] Vault rejects DONE -> DONE (duplicate finalize)"
+        );
+
+        _step("[Step 1] Deposit, create requests, and process");
+        _depositToVault(userB, 400e18);
+        (uint256[] memory ids, uint256 sharesPerReq) = _setupRedeemRequests(userA, 400e18, 2);
+        _processRedeemBatch(ids);
+
+        _step("[Step 2] Finalize successfully -> PROCESSING to DONE");
+        uint256 assetPerReq = (sharesPerReq * vault.exchangeRate()) / 1e18;
+        uint256[] memory settled = new uint256[](2);
+        settled[0] = assetPerReq;
+        settled[1] = assetPerReq;
+        _finalizeRedeemBatch(ids, settled);
+
+        for (uint256 i = 0; i < ids.length; i++) {
+            (,,,,,,, IMantleYieldVault.RequestStatus s) = vault.requests(ids[i]);
+            assertEq(uint8(s), uint8(IMantleYieldVault.RequestStatus.DONE));
+        }
+        _step("  PASS: all requests now DONE");
+
+        _step("[Step 3] Attempt duplicate finalize -> Controller rejects DONE requests");
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                StrategyController.InvalidRequestState.selector,
+                ids[0],
+                IMantleYieldVault.RequestStatus.DONE
+            )
+        );
+        _finalizeRedeemBatch(ids, settled);
+        _step("  PASS: InvalidRequestState(id, DONE) - cannot finalize already-DONE requests");
+        _logPass();
+    }
+
+    // -----------------------------------------------------------------------
+    // 16. test_MarkRequestsDone_RejectPendingDirect (N-18)
+    // -----------------------------------------------------------------------
+
+    function test_MarkRequestsDone_RejectPendingDirect() public {
+        _logCase(
+            "test_MarkRequestsDone_RejectPendingDirect",
+            unicode"[N-18] Vault rejects PENDING -> DONE (skip PROCESSING)"
+        );
+
+        _step("[Step 1] Deposit and create requests (remain PENDING)");
+        _depositToVault(userB, 400e18);
+        (uint256[] memory ids, uint256 sharesPerReq) = _setupRedeemRequests(userA, 400e18, 2);
+
+        for (uint256 i = 0; i < ids.length; i++) {
+            (,,,,,,, IMantleYieldVault.RequestStatus s) = vault.requests(ids[i]);
+            assertEq(uint8(s), uint8(IMantleYieldVault.RequestStatus.PENDING));
+        }
+        _step("  All requests are PENDING");
+
+        _step("[Step 2] Attempt finalize directly (skip process) -> Controller rejects PENDING requests");
+        uint256 assetPerReq = (sharesPerReq * vault.exchangeRate()) / 1e18;
+        uint256[] memory settled = new uint256[](2);
+        settled[0] = assetPerReq;
+        settled[1] = assetPerReq;
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                StrategyController.InvalidRequestState.selector,
+                ids[0],
+                IMantleYieldVault.RequestStatus.PENDING
+            )
+        );
+        _finalizeRedeemBatch(ids, settled);
+        _step("  PASS: InvalidRequestState(id, PENDING) - cannot skip PROCESSING step");
         _logPass();
     }
 }

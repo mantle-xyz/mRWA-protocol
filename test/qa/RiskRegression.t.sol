@@ -174,6 +174,7 @@ contract MockControllerVault {
     uint256 public investInFlightTotal;
     uint256 public redeemInFlightTotal;
     uint256 public inFlightIdCursor;
+    uint256 public nextRequestId = 1;
     mapping(address => uint256) public investInFlightByAdapter;
     mapping(address => uint256) public redeemInFlightByAdapter;
     mapping(address => bool) public isAdapterRegistry;
@@ -207,6 +208,9 @@ contract MockControllerVault {
     function asset() external view returns (address) {
         return address(token);
     }
+
+    function share() external view returns (address) { return address(this); }
+    function totalLockedShares() external view returns (uint256) { return locked; }
 
     function setLocked(uint256 v) external {
         locked = v;
@@ -257,6 +261,17 @@ contract MockControllerVault {
     function getFreeCash() external view returns (uint256) {
         uint256 totalCash = token.balanceOf(address(this));
         return totalCash > locked ? totalCash - locked : 0;
+    }
+
+    function getCashDeficit() external view returns (uint256) {
+        uint256 totalCash = token.balanceOf(address(this));
+        return locked > totalCash ? locked - totalCash : 0;
+    }
+
+    /// @dev Simplified mirror of MantleYieldVault.totalAssets().
+    function totalAssets() external view returns (uint256) {
+        uint256 total = token.balanceOf(address(this)) + investInFlightTotal + redeemInFlightTotal;
+        return total > locked ? total - locked : 0;
     }
 
     function approveToAdapter(address adapter, address approveToken, uint256 amount) external {
@@ -1222,6 +1237,57 @@ contract RiskRegressionTest is Test {
         _step("  PASS: reverted as expected (replay protection)");
         _logPass();
     }
+
+    // =========================================================================
+    // N-13: getPosTokenPrice()=0 -> divest skips adapter (totalValue=0)
+    // =========================================================================
+
+    function test_PriceZero_DivestSkipsAdapter() public {
+        _logCase(
+            "test_PriceZero_DivestSkipsAdapter",
+            unicode"[N-13] getPosTokenPrice()=0 -> adapter.totalValue()=0 -> divest skips adapter"
+        );
+
+        _step("[Step 1] Register adapter whose getPosTokenPrice()=0 and totalValue=0");
+        // MockStrategyAdapter.getPosTokenPrice() returns 0 by default
+        assertEq(asyncAdapter.getPosTokenPrice(), 0, "price should be 0");
+        _registerSingleAsyncStrategy();
+
+        _step("[Step 2] Fund vault so rebalance can invest (set adapter totalValue > 0 via invest)");
+        // Put 10000 in vault for rebalance
+        asset.mint(address(vault), 10_000e18);
+
+        _step("[Step 3] First rebalance -> invest (adapter receives funds)");
+        vm.warp(block.timestamp + 2 hours);
+        vm.prank(address(executorGateway));
+        controller.rebalance();
+        uint256 adapterVal = asyncAdapter.mockedTotalValue();
+        _step(string.concat("  adapter totalValue after invest: ", vm.toString(adapterVal)));
+
+        _step("[Step 4] Set adapter totalValue=0 to simulate price=0 -> totalValue=0");
+        // In real adapter: totalValue = posTokenBalance * getPosTokenPrice / 1e18
+        // When price=0, totalValue=0. We simulate this with mock.
+        asyncAdapter.setTotalValue(0);
+        assertEq(asyncAdapter.totalValue(), 0, "totalValue should be 0 when price=0");
+
+        _step("[Step 5] Trigger divest by raising buffer to 100%");
+        vm.prank(manager);
+        controller.setRiskParams(10_000, 0, 0);
+        uint256 redeemIFBefore = vault.redeemInFlightTotal();
+
+        vm.warp(block.timestamp + 2 hours);
+        vm.prank(address(executorGateway));
+        controller.rebalance();
+
+        uint256 redeemIFAfter = vault.redeemInFlightTotal();
+        _step(string.concat("  totalRedeemInFlight: ", vm.toString(redeemIFBefore), " -> ", vm.toString(redeemIFAfter)));
+
+        _step("[Step 6] Verify no divest occurred (adapter skipped because totalValue=0)");
+        // _readDivestCoverage returns requestAsset=0 when totalValue=0 -> adapter skipped
+        assertEq(redeemIFAfter, redeemIFBefore, "no divest in-flight should be created when adapter totalValue=0");
+        _step("  PASS: adapter skipped in divest path, no redeem in-flight created");
+        _logPass();
+    }
 }
 
 // =============================================================
@@ -1797,7 +1863,7 @@ contract RiskRegressionAdapterTest is Test {
         assertEq(price2, 1.05e18, "should use manual price: 1.05e18");
         _step("  PASS: manual price used (1.05e18)");
 
-        _step("[Step 3] No oracle AND manual price = 0: should fallback to 1e18 default");
+        _step("[Step 3] No oracle AND manual price = 0: should return 0 (M-6: fallback changed from 1e18 to 0)");
         // Deploy a fresh adapter without oracle and no manual price set
         SubRedManagementAdapter freshAdapter = new SubRedManagementAdapter(
             address(adapterVault),
@@ -1810,8 +1876,8 @@ contract RiskRegressionAdapterTest is Test {
         );
         uint256 price3 = freshAdapter.getPosTokenPrice();
         _step(string.concat("  getPosTokenPrice() = ", vm.toString(price3)));
-        assertEq(price3, 1e18, "should fallback to default 1e18");
-        _step("  PASS: default 1e18 used");
+        assertEq(price3, 0, "should fallback to 0 when no oracle and no manual price (M-6)");
+        _step("  PASS: fallback returned 0");
         _logPass();
     }
 
@@ -1867,6 +1933,63 @@ contract RiskRegressionAdapterTest is Test {
         _step("  PASS: sweep(otherToken) succeeded");
         assertEq(otherToken.balanceOf(address(adapterWithOracle)), 0, "adapter should have 0 otherToken left");
         _step("  PASS: adapter otherToken balance == 0");
+        _logPass();
+    }
+
+    // =========================================================================
+    // N-12: getPosTokenPrice()=0 fallback behavior in totalValue()
+    // =========================================================================
+
+    function test_PriceZero_TotalValueFallback() public {
+        _logCase(
+            "test_PriceZero_TotalValueFallback",
+            unicode"[N-12] getPosTokenPrice()=0 -> totalValue() falls back to raw decimal scaling (not zero)"
+        );
+
+        _step("[Step 1] Deploy fresh adapter without oracle and no manual price");
+        SubRedManagementAdapter freshAdapter = new SubRedManagementAdapter(
+            address(adapterVault),
+            address(subRed),
+            address(stToken),
+            adminAddr,
+            controllerAddr,
+            accountantExecutorAddr,
+            address(0) // no oracle
+        );
+        uint256 price = freshAdapter.getPosTokenPrice();
+        assertEq(price, 0, "price should be 0 (no oracle, no manual) - M-6 regression");
+        _step(string.concat("  getPosTokenPrice() = ", vm.toString(price)));
+
+        _step("[Step 2] Mint posTokens to vault (both USDC and stToken are 6 decimals)");
+        stToken.mint(address(adapterVault), 1000e6);
+        uint256 stBalance = stToken.balanceOf(address(adapterVault));
+        _step(string.concat("  stToken balance on vault: ", vm.toString(stBalance)));
+
+        _step("[Step 3] Verify totalValue() uses raw decimal scaling as fallback (priceE18=0)");
+        // When price=0, _estimateAssetAmount falls back to _scaleToAssetRaw
+        // For same-decimal tokens (both 6 dec): raw scaling is identity
+        uint256 tv = freshAdapter.totalValue();
+        _step(string.concat("  totalValue() = ", vm.toString(tv)));
+        // With same decimals, fallback returns stBalance * 10^(6-6) = stBalance
+        assertEq(tv, stBalance, "totalValue = raw decimal scaling when price=0");
+        _step("  PASS: price=0 -> totalValue uses raw scaling fallback");
+
+        _step("[Step 4] With no posTokens on vault, totalValue=0 regardless of price");
+        // Deploy another adapter pointing to a vault with no stTokens
+        MockVaultForAdapterSweep emptyVault = new MockVaultForAdapterSweep(address(usdc));
+        SubRedManagementAdapter emptyAdapter = new SubRedManagementAdapter(
+            address(emptyVault),
+            address(subRed),
+            address(stToken),
+            adminAddr,
+            controllerAddr,
+            accountantExecutorAddr,
+            address(0)
+        );
+        uint256 tvEmpty = emptyAdapter.totalValue();
+        assertEq(tvEmpty, 0, "totalValue=0 when no posTokens on vault");
+        _step(string.concat("  totalValue() with empty vault = ", vm.toString(tvEmpty)));
+        _step("  PASS: no posTokens -> totalValue=0");
         _logPass();
     }
 }

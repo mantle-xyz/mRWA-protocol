@@ -951,6 +951,50 @@ contract RetryRedeemInFlightQATest is Test {
         _logPass();
     }
 
+    // ============================================================
+    // N-38: retryRedeemAsync emits posAmount, NOT assetAmount
+    // ============================================================
+    function test_RetryRedeemInFlight_EmitsPosAmount_NotAssetAmount() public {
+        _logCase(
+            "test_RetryRedeemInFlight_EmitsPosAmount_NotAssetAmount",
+            unicode"[N-38] retryRedeemAsync emit posAmount 而非 assetAmount"
+        );
+
+        _step("[Step 1] Create PENDING redeem in-flight via real flow");
+        uint256 depositAmt = 2000e6;
+        (uint256 redeemId, ) = _createRedeemInFlight(depositAmt);
+        (,, address token, uint256 tokenAmount, uint256 usdcAmount,,,, IMantleYieldVault.InFlightStatus statusBefore) =
+            vault.inFlightRecords(redeemId);
+        assertEq(uint8(statusBefore), uint8(IMantleYieldVault.InFlightStatus.PENDING));
+        _step(string.concat("  redeemId=", vm.toString(redeemId),
+            " tokenAmount=", vm.toString(tokenAmount),
+            " usdcAmount=", vm.toString(usdcAmount)));
+
+        _step("[Step 2] Simulate DiGiFT rejection: posToken returned to adapter");
+        uint256 retryPosAmount = tokenAmount;
+        posToken.mint(address(asyncAdapter), retryPosAmount);
+        _step(string.concat("  retryPosAmount (posToken units) = ", vm.toString(retryPosAmount)));
+
+        _step("[Step 3] Verify event emits retryPosAmount directly (not asset-converted)");
+        // The controller emits RedeemInFlightRetryRequested with the raw retryPosAmount
+        // OLD behavior (removed): would convert posAmount -> assetAmount via _estimateAssetAmount
+        // NEW behavior: emits retryPosAmount directly as the third parameter
+        vm.expectEmit(true, true, false, true, address(controller));
+        emit StrategyController.RedeemInFlightRetryRequested(
+            address(asyncAdapter), redeemId, retryPosAmount
+        );
+
+        vm.prank(manager);
+        controller.retryRedeemInFlight(address(asyncAdapter), redeemId, retryPosAmount);
+
+        _step("[Step 4] Verify adapter received posAmount (not asset-converted amount)");
+        assertEq(asyncAdapter.lastRetryPosAmount(), retryPosAmount,
+            "adapter.retryRedeemAsync called with retryPosAmount directly");
+        _step(string.concat("  adapter.lastRetryPosAmount() = ", vm.toString(asyncAdapter.lastRetryPosAmount())));
+        _step(string.concat("  PASS: event and adapter both use posAmount (", vm.toString(retryPosAmount), "), not assetAmount"));
+        _logPass();
+    }
+
     /// @dev Hash all 9 fields of an in-flight record for before/after comparison
     function _hashInFlightRecord(uint256 id) internal view returns (bytes32) {
         (
