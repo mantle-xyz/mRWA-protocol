@@ -62,6 +62,15 @@ envs:
   ADAPTER_REDEEM_STEP_POS: "10000000000000000"  # 1e16 = 0.01 stToken (DigiFt's 2-decimal granularity)
   ADAPTER_MIN_SUBSCRIBE_ASSET: "0"          # USDC 6 decimals; update once DigiFt min known
   ADAPTER_MIN_REDEEM_POS: "0"               # stToken 18 decimals; update once DigiFt min known
+
+  # ── ReplaceStrategyAdapter params ───────────────────────────
+  # Set these just before running `task ReplaceStrategyAdapter`.
+  REPLACE_OLD_ADAPTER: ""                   # adapter to retire (must have 0 in-flight)
+  REPLACE_NEW_ADAPTER: ""                   # new adapter (already deployed via DeploySubRedManagementAdapter)
+  # Optional overrides — leave unset to inherit OLD's config:
+  # REPLACE_WEIGHT_BPS: ""
+  # REPLACE_PRIORITY: ""
+  # REPLACE_IS_ASYNC: ""
   F_USDC_ADDRESS: "0xcb89f5acc8f21a115192a0649fdf6b5d75880289"
 
   F_STRATEGY_CONTROLLER_FACTORY: "0xcc9d85bfc8757362caa513c7684489b2effc23f3"
