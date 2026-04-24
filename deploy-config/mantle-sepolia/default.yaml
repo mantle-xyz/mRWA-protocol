@@ -49,24 +49,26 @@ envs:
   F_SET_ORDER: "true" # update strategyOrder after registration
 
   # ── DeploySubRedManagementAdapter params ─────────────────────
-  ADAPTER_VAULT: "0xBea92b4557bC79E99549849f6f00D8B476ec3B08"
+  ADAPTER_VAULT: "0xEE8fFeA598a20713B3d6024f129eE8bB9c398F31"
   ADAPTER_SUBRED_MANAGEMENT: "0xee8fd912a7635b76ecd3a8c76912b8f449035e9b"
   ADAPTER_ST_TOKEN: "0x2633d46912428c8ad02a130ac7d47a31771d9858"
   ADAPTER_ADMIN: "0x65Cf61678Cf120a8F40c2F3aEDCb50BBA0e85c78"
-  ADAPTER_CONTROLLER: "0xaa01C640d69a81738B4C938f358B7AD4d2C30a11"
-  ADAPTER_ACCOUNTANT: "0xC6389294721650F47B2CD732B3820EB3022582ff"
+  ADAPTER_CONTROLLER: "0x2B2b6731f56027eBEbfC7cc068Cf0159e63c7066"
+  ADAPTER_ACCOUNTANT: "0xC0881502A29a0015Dd62F789E8Ce8C79C74FCEef"
   ADAPTER_PRICE_ORACLE: "0xC0D6c66610783a72b4bf88E0d8474cCcD64856F8" # optional, default: address(0)
   # Venue step sizes & minimums (raw units). 0 = "no constraint".
   # DigiFt stToken has 2-decimal granularity on their side: step = 0.01 stToken = 1e16 raw units
-  ADAPTER_SUBSCRIBE_STEP_ASSET: "0"         # USDC 6 decimals; 0 = no step alignment
-  ADAPTER_REDEEM_STEP_POS: "10000000000000000"  # 1e16 = 0.01 stToken (DigiFt's 2-decimal granularity)
-  ADAPTER_MIN_SUBSCRIBE_ASSET: "0"          # USDC 6 decimals; update once DigiFt min known
-  ADAPTER_MIN_REDEEM_POS: "0"               # stToken 18 decimals; update once DigiFt min known
+  ADAPTER_SUBSCRIBE_STEP_ASSET: "100000" # USDC 6 decimals; 0 = no step alignment
+  ADAPTER_REDEEM_STEP_POS: "10000000000000000" # 1e16 = 0.01 stToken (DigiFt's 2-decimal granularity)
+  ADAPTER_MIN_SUBSCRIBE_ASSET: "1000000" # USDC 6 decimals; update once DigiFt min known
+  ADAPTER_MIN_REDEEM_POS: "100000000000000000" # stToken 18 decimals; update once DigiFt min known
 
   # ── ReplaceStrategyAdapter params ───────────────────────────
   # Set these just before running `task ReplaceStrategyAdapter`.
-  REPLACE_OLD_ADAPTER: ""                   # adapter to retire (must have 0 in-flight)
-  REPLACE_NEW_ADAPTER: ""                   # new adapter (already deployed via DeploySubRedManagementAdapter)
+  TARGET_CONTROLLER_ADDRESS: "0xaa01C640d69a81738B4C938f358B7AD4d2C30a11"
+  REPLACE_OLD_ADAPTER: "0x357c09B751C3f82291ceb0E351e6F847F8e4B8a8" # adapter to retire (must have 0 in-flight)
+  REPLACE_NEW_ADAPTER: "0x2c997a19d4a9d9E6aDCe5Fd7503bba9087ec5071" # new adapter (already deployed via DeploySubRedManagementAdapter)
+  REPLACE_SETTLE_MS: "5000" # ms to sleep between steps for Mantle Sepolia RPC state sync (0 = disable)
   # Optional overrides — leave unset to inherit OLD's config:
   # REPLACE_WEIGHT_BPS: ""
   # REPLACE_PRIORITY: ""
