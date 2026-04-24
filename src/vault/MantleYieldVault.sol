@@ -50,6 +50,7 @@ contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultA
 
         uint256 netShares = shares - treasuryShare;
         totalLockedShares += netShares;
+        pendingRequestCount++;
         _pendingShares[owner] += netShares;
 
         requestId = nextRequestId++;

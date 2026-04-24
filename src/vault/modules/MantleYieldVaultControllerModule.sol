@@ -61,6 +61,10 @@ abstract contract MantleYieldVaultControllerModule is MantleYieldVaultStorage {
             if (current == RequestStatus.NONE || uint8(newStatus) <= uint8(current)) {
                 revert Vault__InvalidState(id, current);
             }
+            // Keep global pending count in sync for O(1) pending-request checks.
+            if (current == RequestStatus.PENDING && pendingRequestCount > 0) {
+                pendingRequestCount--;
+            }
             requests[id].status = newStatus;
         }
         emit RequestBatchUpdated(ids, newStatus);
