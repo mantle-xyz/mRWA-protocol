@@ -628,6 +628,28 @@ contract AsyncRedeemTest is VaultTestBase {
 // =============================================================
 
 contract UpdateRequestBatchTest is VaultTestBase {
+    function test_pendingRequestCount_IncrementsOnRequest() public {
+        assertEq(vault.pendingRequestCount(), 0);
+        vm.prank(alice);
+        gateway.requestRedeem(500e6);
+        assertEq(vault.pendingRequestCount(), 1);
+    }
+
+    function test_pendingRequestCount_DecrementsWhenMovedToProcessing() public {
+        vm.prank(alice);
+        uint256 id = gateway.requestRedeem(500e6);
+
+        assertEq(vault.pendingRequestCount(), 1);
+
+        uint256[] memory ids = new uint256[](1);
+        ids[0] = id;
+
+        vm.prank(controllerAddr);
+        vault.updateRequestBatch(ids, IMantleYieldVault.RequestStatus.PROCESSING);
+
+        assertEq(vault.pendingRequestCount(), 0);
+    }
+
     function test_canTransitionPendingToProcessing() public {
         vm.prank(alice);
         uint256 id = gateway.requestRedeem(500e6);

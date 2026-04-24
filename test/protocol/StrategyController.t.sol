@@ -186,6 +186,8 @@ contract MockControllerVault {
     uint256 public investInFlightTotal;
     uint256 public redeemInFlightTotal;
     uint256 public inFlightIdCursor;
+    uint256 public requestIdCursor;
+    uint256 public pendingRequestCount;
     mapping(address => uint256) public investInFlightByAdapter;
     mapping(address => uint256) public redeemInFlightByAdapter;
     mapping(address => bool) public isAdapterRegistry;
@@ -230,9 +232,19 @@ contract MockControllerVault {
         uint256 settledAssets,
         IMantleYieldVault.RequestStatus status
     ) external {
+        IMantleYieldVault.RequestStatus prev = reqs[id].status;
+        if (prev == IMantleYieldVault.RequestStatus.PENDING && pendingRequestCount > 0) {
+            pendingRequestCount--;
+        }
+        if (status == IMantleYieldVault.RequestStatus.PENDING) {
+            pendingRequestCount++;
+        }
         reqs[id] = Req({
             shares: estimatedAssets, estimatedAssets: estimatedAssets, settledAssets: settledAssets, status: status
         });
+        if (id >= requestIdCursor) {
+            requestIdCursor = id + 1;
+        }
     }
 
     function setExchangeRate(uint256 rate) external {
@@ -312,6 +324,9 @@ contract MockControllerVault {
                 current != IMantleYieldVault.RequestStatus.NONE && uint8(newStatus) > uint8(current),
                 "INVALID_STATUS_TRANSITION"
             );
+            if (current == IMantleYieldVault.RequestStatus.PENDING && pendingRequestCount > 0) {
+                pendingRequestCount--;
+            }
             reqs[ids[i]].status = newStatus;
         }
     }
@@ -375,8 +390,8 @@ contract MockControllerVault {
         return (requestId, address(0), r.shares, 0, r.estimatedAssets, r.settledAssets, 0, r.status);
     }
 
-    function nextRequestId() external pure returns (uint256) {
-        return 1; // no requests
+    function nextRequestId() external view returns (uint256) {
+        return requestIdCursor == 0 ? 1 : requestIdCursor;
     }
 
     function inFlightRecords(uint256 inFlightId)
@@ -935,6 +950,26 @@ contract StrategyControllerUnitTest is Test {
         assertEq(action, controller.REBALANCE_ACTION_DIVEST());
         // netAssets=0, targetCash=0+deficit(50)=50, idealCash=0, divest=50
         assertEq(amount, 50e18);
+    }
+
+    function test_PreviewRebalance_BlocksDivestWhenOlderPendingRequestExists() public {
+        _registerSingleSyncStrategy();
+
+        vm.prank(manager);
+        controller.setRiskParams(1000, 0, 1 hours);
+
+        // Older request still pending, latest request already moved to processing.
+        // latest-only pending checks will miss this case.
+        vault.setRequest(10, 100e18, 0, IMantleYieldVault.RequestStatus.PENDING);
+        vault.setRequest(11, 100e18, 0, IMantleYieldVault.RequestStatus.PROCESSING);
+        vault.setMockedTotalAssets(1_000e18);
+
+        vm.warp(2 hours);
+        (bool shouldRebalance, uint8 action, uint256 amount) = controller.previewRebalance();
+
+        assertFalse(shouldRebalance);
+        assertEq(action, controller.REBALANCE_ACTION_NONE());
+        assertEq(amount, 0);
     }
 
     function test_PreviewRebalance_IgnoresDivestWhenRedeemInFlightAlreadyCoversCashDeficit() public {

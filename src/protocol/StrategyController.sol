@@ -653,9 +653,9 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         targetCash += vault.getCashDeficit();
         // threshold defines the no-op band around targetCash to avoid rebalance churn.
         threshold = (netAssets * rebalanceThresholdBps) / BPS_DENOMINATOR;
-        // hasPendingRequest: whether latest redeem request is still PENDING.
-        // Used to block rebalance divest until operator processes it.
-        hasPendingRequest = _hasPendingLatestRequest();
+        // hasPendingRequest: whether there are unprocessed redeem requests.
+        // Used to block rebalance divest until operator processes them.
+        hasPendingRequest = vault.pendingRequestCount() > 0;
     }
 
     function _freeCash() internal view returns (uint256) {
@@ -688,15 +688,6 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
                 // If preview call fails, conservative handling, continue to exclude from total.
             }
         }
-    }
-
-    /// @dev Check if the most recent redemption request is still PENDING.
-    /// @dev Used to prevent rebalance divest from pre-empting user redemption handling.
-    function _hasPendingLatestRequest() internal view returns (bool) {
-        uint256 nextId = vault.nextRequestId();
-        if (nextId <= 1) return false; // no requests ever
-        (,,,,,,, IMantleYieldVault.RequestStatus status) = vault.requests(nextId - 1);
-        return status == IMantleYieldVault.RequestStatus.PENDING;
     }
 
     function _computeRebalanceDecision(

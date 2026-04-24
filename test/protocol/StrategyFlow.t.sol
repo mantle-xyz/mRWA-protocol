@@ -50,6 +50,7 @@ contract MockVaultFlow {
     uint256 public redeemInFlightTotal;
     uint256 public requestIdCursor;
     uint256 public inFlightIdCursor;
+    uint256 public pendingRequestCount;
     mapping(address => uint256) public investInFlightByAdapter;
     mapping(address => uint256) public redeemInFlightByAdapter;
     mapping(address => bool) public isAdapterRegistry;
@@ -87,6 +88,10 @@ contract MockVaultFlow {
         liabilities[id] = amount;
         if (requestStatus[id] == IMantleYieldVault.RequestStatus.NONE) {
             requestStatus[id] = IMantleYieldVault.RequestStatus.PENDING;
+            pendingRequestCount++;
+            if (id >= requestIdCursor) {
+                requestIdCursor = id + 1;
+            }
         }
     }
 
@@ -159,6 +164,17 @@ contract MockVaultFlow {
 
     function updateRequestBatch(uint256[] calldata ids, IMantleYieldVault.RequestStatus status) external {
         for (uint256 i = 0; i < ids.length; i++) {
+            if (
+                requestStatus[ids[i]] == IMantleYieldVault.RequestStatus.PENDING
+                    && status != IMantleYieldVault.RequestStatus.PENDING
+            ) {
+                pendingRequestCount--;
+            } else if (
+                requestStatus[ids[i]] != IMantleYieldVault.RequestStatus.PENDING
+                    && status == IMantleYieldVault.RequestStatus.PENDING
+            ) {
+                pendingRequestCount++;
+            }
             requestStatus[ids[i]] = status;
         }
     }
@@ -233,8 +249,8 @@ contract MockVaultFlow {
         );
     }
 
-    function nextRequestId() external pure returns (uint256) {
-        return 1;
+    function nextRequestId() external view returns (uint256) {
+        return requestIdCursor == 0 ? 1 : requestIdCursor;
     }
 
     function inFlightRecords(uint256 inFlightId)
