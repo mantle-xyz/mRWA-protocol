@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import {IStrategyAdapter} from "../interfaces/adapters/IStrategyAdapter.sol";
 import {IMantleVaultGateway} from "../interfaces/vault/IMantleVaultGateway.sol";
+import {IMantleYieldVault} from "../interfaces/vault/IMantleYieldVault.sol";
 import {MantleYieldVaultAdminModule} from "./modules/MantleYieldVaultAdminModule.sol";
 import {MantleYieldVaultControllerModule} from "./modules/MantleYieldVaultControllerModule.sol";
 import {
@@ -24,8 +25,13 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultAdminModule {
     using Math for uint256;
 
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
+
     function initialize(InitParams calldata params) external override initializer {
-        _initializeStorage(params);
+        __MantleYieldVaultStorage_init(params);
     }
 
     // =============================================================
@@ -35,20 +41,18 @@ contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultA
     function _requestRedeem(address owner, uint256 shares) internal returns (uint256 requestId) {
         if (shares == 0) revert Vault__ZeroAmount();
 
-        uint256 grossAssets = _convertToAssets(shares, Math.Rounding.Floor);
-        uint256 fee = grossAssets.mulDiv(redemptionFeeBps, FEE_BASIS, Math.Rounding.Ceil);
         uint256 treasuryShare = shares.mulDiv(redemptionFeeBps, FEE_BASIS, Math.Rounding.Ceil);
-        uint256 estimatedAssets = grossAssets - fee;
+        uint256 netShares = shares - treasuryShare;
+        uint256 estimatedAssets = _convertToAssets(netShares, Math.Rounding.Floor);
 
-        if (estimatedAssets < minRedeemAmount) revert Vault__BelowMinRedeem(estimatedAssets, minRedeemAmount);
+        if (shares < minRedeemAmount) revert Vault__BelowMinRedeem(shares, minRedeemAmount);
 
         if (treasuryShare > 0) {
-            super._update(owner, treasury, treasuryShare);
+            _update(owner, treasury, treasuryShare);
             emit FeeSharesReceived(treasury, treasuryShare, FeeType.Redemption);
         }
-        _burn(owner, shares - treasuryShare);
+        _burn(owner, netShares);
 
-        uint256 netShares = shares - treasuryShare;
         totalLockedShares += netShares;
         pendingRequestCount++;
         _pendingShares[owner] += netShares;
@@ -68,7 +72,7 @@ contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultA
         emit RedeemRequest(owner, requestId, netShares, estimatedAssets, treasuryShare);
     }
 
-    function requestRedeemFor(address, address owner, uint256 shares)
+    function requestRedeem(address owner, uint256 shares)
         external
         onlyGateway
         nonReentrant
@@ -78,17 +82,11 @@ contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultA
         return _requestRedeem(owner, shares);
     }
 
-    function routeSanctionedShares(address caller, address owner, uint256 shares)
-        external
-        onlyGateway
-        nonReentrant
-        whenNotPaused
-    {
+    function routeSanctionedShares(address owner, uint256 shares) external onlyGateway nonReentrant whenNotPaused {
         if (shares == 0) revert Vault__ZeroAmount();
-        if (caller != owner) _spendAllowance(owner, caller, shares);
         address safe = IMantleVaultGateway(gateway).sanctionSafe();
         if (safe == address(0)) revert Vault__ZeroAddress();
-        super._update(owner, safe, shares);
+        _update(owner, safe, shares);
         emit SanctionSafeIn(owner, address(this), shares);
     }
 
@@ -105,16 +103,9 @@ contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultA
     // ERC-4626 Synchronous Redemption (atomic when FreeCash sufficient, reverts otherwise)
     // =============================================================
 
-    function redeem(uint256, address, address) public pure override(ERC4626Upgradeable, IERC4626) returns (uint256) {
-        revert Vault__NotAuthorized();
-    }
-
-    function withdraw(uint256, address, address) public pure override(ERC4626Upgradeable, IERC4626) returns (uint256) {
-        revert Vault__NotAuthorized();
-    }
-
-    function redeemFor(address caller, uint256 shares, address receiver, address owner)
-        external
+    function redeem(uint256 shares, address receiver, address owner)
+        public
+        override(ERC4626Upgradeable, IERC4626)
         onlyGateway
         nonReentrant
         whenNotPaused
@@ -126,12 +117,17 @@ contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultA
             revert ERC4626ExceededMaxRedeem(owner, shares, maxShares);
         }
         uint256 treasuryShare = shares.mulDiv(redemptionFeeBps, FEE_BASIS, Math.Rounding.Ceil);
-        assets = previewRedeem(shares);
+        uint256 netShares = shares - treasuryShare;
+        assets = _convertToAssets(netShares, Math.Rounding.Floor);
         if (treasuryShare > 0) {
-            super._update(owner, treasury, treasuryShare);
+            _update(owner, treasury, treasuryShare);
             emit FeeSharesReceived(treasury, treasuryShare, FeeType.Redemption);
         }
-        _withdraw(caller, receiver, owner, assets, shares - treasuryShare);
+        _withdraw(owner, receiver, owner, assets, netShares);
+    }
+
+    function withdraw(uint256, address, address) public pure override(ERC4626Upgradeable, IERC4626) returns (uint256) {
+        revert Vault__NotAuthorized();
     }
 
     function previewRedeem(uint256 shares) public view override(ERC4626Upgradeable, IERC4626) returns (uint256) {
@@ -181,12 +177,10 @@ contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultA
     function getFreeCash() public view returns (uint256) {
         uint256 physicalBalance = IERC20(asset()).balanceOf(address(this));
         uint256 floatingLocked = _convertToAssets(totalLockedShares, Math.Rounding.Ceil);
-        if (physicalBalance <= floatingLocked) return 0;
-        return physicalBalance - floatingLocked;
+        return physicalBalance > floatingLocked ? physicalBalance - floatingLocked : 0;
     }
 
     function getCashDeficit() public view returns (uint256) {
-        if (getFreeCash() > 0) return 0;
         uint256 physicalBalance = IERC20(asset()).balanceOf(address(this));
         uint256 floatingLocked = _convertToAssets(totalLockedShares, Math.Rounding.Ceil);
         return floatingLocked > physicalBalance ? floatingLocked - physicalBalance : 0;
@@ -228,16 +222,9 @@ contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultA
     // ERC-4626 Deposits (with pause guard)
     // =============================================================
 
-    function deposit(uint256, address) public pure override(ERC4626Upgradeable, IERC4626) returns (uint256) {
-        revert Vault__NotAuthorized();
-    }
-
-    function mint(uint256, address) public pure override(ERC4626Upgradeable, IERC4626) returns (uint256) {
-        revert Vault__NotAuthorized();
-    }
-
-    function depositFor(address caller, uint256 assets, address receiver)
-        external
+    function deposit(uint256 assets, address receiver)
+        public
+        override(ERC4626Upgradeable, IERC4626)
         onlyGateway
         nonReentrant
         whenNotPaused
@@ -245,7 +232,11 @@ contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultA
     {
         if (assets < minDepositAmount) revert Vault__BelowMinDeposit(assets, minDepositAmount);
         shares = previewDeposit(assets);
-        _deposit(caller, receiver, assets, shares);
+        _deposit(receiver, receiver, assets, shares);
+    }
+
+    function mint(uint256, address) public pure override(ERC4626Upgradeable, IERC4626) returns (uint256) {
+        revert Vault__NotAuthorized();
     }
 
     // =============================================================

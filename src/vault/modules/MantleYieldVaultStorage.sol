@@ -122,26 +122,26 @@ abstract contract MantleYieldVaultStorage is
     }
 
     // =============================================================
-    // Constructor & Initialization
+    // Initialization (OZ upgradeable pattern: _init runs parent inits + unchained,
+    // _init_unchained sets only this contract's own state. Constructor with
+    // `_disableInitializers()` lives on the deployable leaf contract.)
     // =============================================================
 
-    /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor() {
-        _disableInitializers();
+    function __MantleYieldVaultStorage_init(InitParams calldata p) internal onlyInitializing {
+        __ERC20_init(p.name, p.symbol);
+        __ERC4626_init(p.asset);
+        __AccessControlDefaultAdminRules_init(3 days, p.admin);
+        __Pausable_init();
+        __MantleYieldVaultStorage_init_unchained(p);
     }
 
-    function _initializeStorage(InitParams calldata p) internal onlyInitializing {
+    function __MantleYieldVaultStorage_init_unchained(InitParams calldata p) internal onlyInitializing {
         if (
             address(p.asset) == address(0) || p.admin == address(0) || p.controller == address(0)
                 || p.accountant == address(0) || p.treasury == address(0) || p.gateway == address(0)
         ) {
             revert Vault__ZeroAddress();
         }
-
-        __ERC20_init(p.name, p.symbol);
-        __ERC4626_init(p.asset);
-        __AccessControlDefaultAdminRules_init(3 days, p.admin);
-        __Pausable_init();
 
         if (p.maxRedemptionFeeBps > FEE_BASIS) revert Vault__FeeTooHigh(p.maxRedemptionFeeBps, FEE_BASIS);
         if (p.redemptionFeeBps > p.maxRedemptionFeeBps) {

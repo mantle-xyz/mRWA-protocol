@@ -36,33 +36,33 @@ envs:
   F_MANAGEMENT_FEE_BPS: "50" # 0.5%
 
   # ── StrategyController params ────────────────────────────────
-  F_BUFFER_TARGET_BPS: "0" # 0%
+  F_BUFFER_TARGET_BPS: "1" # 0%
   F_REBALANCE_THRESHOLD_BPS: "10" # 0.1%
   F_REBALANCE_COOLDOWN: "3600" # 1 hour
 
   # ── RegisterStrategy params ──────────────────────────────────
-  F_CONTROLLER_ADDRESS: "0xaa01C640d69a81738B4C938f358B7AD4d2C30a11" # StrategyController proxy
-  F_STRATEGY_ADAPTER_ADDRESS: "0x357c09B751C3f82291ceb0E351e6F847F8e4B8a8"
+  F_CONTROLLER_ADDRESS: "0x9235E6f6E78ad8FB28996FE027F72d0c91cC6188" # StrategyController proxy
+  F_STRATEGY_ADAPTER_ADDRESS: "0x51F876793cc39e5F0Dc6b696d53085F7FFD9D4F3"
   F_TARGET_WEIGHT_BPS: "10000" # 100%
   F_PRIORITY: "0" # execution priority (lower = higher)
   F_IS_ASYNC: "true" # true for ERC-7540, false for ERC-4626
   F_SET_ORDER: "true" # update strategyOrder after registration
 
   # ── DeploySubRedManagementAdapter params ─────────────────────
-  ADAPTER_VAULT: "0xEE8fFeA598a20713B3d6024f129eE8bB9c398F31"
+  ADAPTER_VAULT: "0xCAEaf89990190153EA4F24B43022266966A039c8"
   ADAPTER_SUBRED_MANAGEMENT: "0xee8fd912a7635b76ecd3a8c76912b8f449035e9b"
   ADAPTER_ST_TOKEN: "0x2633d46912428c8ad02a130ac7d47a31771d9858"
   ADAPTER_ADMIN: "0x65Cf61678Cf120a8F40c2F3aEDCb50BBA0e85c78"
-  ADAPTER_CONTROLLER: "0x2B2b6731f56027eBEbfC7cc068Cf0159e63c7066"
-  ADAPTER_ACCOUNTANT: "0xC0881502A29a0015Dd62F789E8Ce8C79C74FCEef"
+  ADAPTER_CONTROLLER: "0x9235E6f6E78ad8FB28996FE027F72d0c91cC6188"
+  ADAPTER_ACCOUNTANT: "0xF637f98e4ee72e5F4a0F466c99556121a851D487"
   ADAPTER_PRICE_ORACLE: "0xC0D6c66610783a72b4bf88E0d8474cCcD64856F8" # optional, default: address(0)
   ADAPTER_MANUAL_POS_TOKEN_PRICE: "0" # optional, default: 0; only set non-zero when ADAPTER_PRICE_ORACLE is address(0)
   # Venue step sizes & minimums (raw units). 0 = "no constraint".
   # DigiFt stToken has 2-decimal granularity on their side: step = 0.01 stToken = 1e16 raw units
-  ADAPTER_SUBSCRIBE_STEP_ASSET: "100000" # USDC 6 decimals; 0 = no step alignment
-  ADAPTER_REDEEM_STEP_POS: "10000000000000000" # 1e16 = 0.01 stToken (DigiFt's 2-decimal granularity)
-  ADAPTER_MIN_SUBSCRIBE_ASSET: "1000000" # USDC 6 decimals; update once DigiFt min known
-  ADAPTER_MIN_REDEEM_POS: "100000000000000000" # stToken 18 decimals; update once DigiFt min known
+  ADAPTER_SUBSCRIBE_STEP_ASSET: "10000" # USDC 6 decimals; 0 = no step alignment
+  ADAPTER_REDEEM_STEP_POS: "1000000000000000000" # 1e16 = 0.01 stToken (DigiFt's 2-decimal granularity)
+  ADAPTER_MIN_SUBSCRIBE_ASSET: "20000000000" # USDC 6 decimals; update once DigiFt min known
+  ADAPTER_MIN_REDEEM_POS: "1500000000000000000000" # stToken 18 decimals; update once DigiFt min known
 
   # ── ReplaceStrategyAdapter params ───────────────────────────
   # Set these just before running `task ReplaceStrategyAdapter`.
