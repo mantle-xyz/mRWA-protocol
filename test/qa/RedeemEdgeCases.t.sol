@@ -92,6 +92,8 @@ contract MockAsyncAdapter_REC is IStrategyAdapter {
         uint8 pDec = IERC20Metadata(POS_TOKEN).decimals();
         return assetAmount.mulDiv(1e18 * (10 ** pDec), posTokenPrice * (10 ** aDec), Math.Rounding.Floor);
     }
+    function minSubscribeAsset() external pure returns (uint256) { return 0; }
+    function minRedeemPos() external pure returns (uint256) { return 0; }
 
     function previewDeposit(uint256 assetAmount)
         external
@@ -173,7 +175,7 @@ contract RedeemEdgeCasesQATest is Test {
     // Logging
     // -----------------------------------------------------------------------
 
-    string constant MODULE = "Redeem Edge Cases & Idempotency";
+    string constant MODULE = unicode"赎回边界与幂等场景";
 
     function _logCase(string memory id, string memory name_) internal view {
         console2.log(string.concat("testcase module: ", MODULE));

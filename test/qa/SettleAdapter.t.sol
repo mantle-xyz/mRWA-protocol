@@ -74,6 +74,8 @@ contract MockAdapterSA is IStrategyAdapter {
     function estimatePosAmount(uint256 assetAmount) external pure returns (uint256 positionAmount) {
         return assetAmount;
     }
+    function minSubscribeAsset() external pure returns (uint256) { return 0; }
+    function minRedeemPos() external pure returns (uint256) { return 0; }
 
     function previewDeposit(uint256 assetAmount)
         external

@@ -111,6 +111,8 @@ contract MockAdapterFee is IStrategyAdapter {
     function priceOracle() external pure returns (address) { return address(0); }
     function getPosTokenPrice() external pure returns (uint256) { return 0; }
     function estimatePosAmount(uint256 a) external pure returns (uint256) { return a; }
+    function minSubscribeAsset() external pure returns (uint256) { return 0; }
+    function minRedeemPos() external pure returns (uint256) { return 0; }
     function previewDeposit(uint256 assetAmount)
         external
         pure

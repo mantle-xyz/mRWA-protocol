@@ -45,6 +45,8 @@ contract MockAdapterRB is IStrategyAdapter {
     function priceOracle() external pure returns (address) { return address(0); }
     function getPosTokenPrice() external pure returns (uint256) { return 0; }
     function estimatePosAmount(uint256 assetAmount) external pure returns (uint256) { return assetAmount; }
+    function minSubscribeAsset() external pure returns (uint256) { return 0; }
+    function minRedeemPos() external pure returns (uint256) { return 0; }
     function previewDeposit(uint256 assetAmount)
         external
         pure
@@ -116,6 +118,7 @@ contract MockVaultRB {
     uint256 public redeemInFlightTotal;
     uint256 public nextInFlightId = 1;
     uint256 public nextRequestId = 1;
+    uint256 public pendingRequestCount;
 
     mapping(address => uint256) public investInFlightByAdapter;
     mapping(address => uint256) public redeemInFlightByAdapter;
@@ -172,6 +175,7 @@ contract MockVaultRB {
         totalLockedSharesValue += shares;
 
         requestId = nextRequestId++;
+        pendingRequestCount++;
         uint256 estimatedAssets = (shares * mockedExchangeRate) / 1e18;
         reqs[requestId] = Req({
             id: requestId,
@@ -251,6 +255,9 @@ contract MockVaultRB {
                 revert IMantleYieldVault.Vault__InvalidState(ids[i], current);
             }
             reqs[ids[i]].status = newStatus;
+            if (current == IMantleYieldVault.RequestStatus.PENDING && pendingRequestCount > 0) {
+                pendingRequestCount--;
+            }
         }
     }
 

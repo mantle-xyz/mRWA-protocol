@@ -104,6 +104,9 @@ contract MockStrategyAdapter is IStrategyAdapter {
         return assetAmount;
     }
 
+    function minSubscribeAsset() external pure returns (uint256) { return 0; }
+    function minRedeemPos() external pure returns (uint256) { return 0; }
+
     function previewDeposit(uint256 assetAmount)
         external
         pure
@@ -175,6 +178,7 @@ contract MockControllerVault {
     uint256 public redeemInFlightTotal;
     uint256 public inFlightIdCursor;
     uint256 public nextRequestId = 1;
+    uint256 public pendingRequestCount;
     mapping(address => uint256) public investInFlightByAdapter;
     mapping(address => uint256) public redeemInFlightByAdapter;
     mapping(address => bool) public isAdapterRegistry;
@@ -222,12 +226,20 @@ contract MockControllerVault {
         uint256 settledAssets,
         IMantleYieldVault.RequestStatus status
     ) external {
+        // If old status was PENDING, decrement counter
+        if (reqs[id].status == IMantleYieldVault.RequestStatus.PENDING && pendingRequestCount > 0) {
+            pendingRequestCount--;
+        }
         reqs[id] = Req({
             shares: estimatedAssets,
             estimatedAssets: estimatedAssets,
             settledAssets: settledAssets,
             status: status
         });
+        // If new status is PENDING, increment counter
+        if (status == IMantleYieldVault.RequestStatus.PENDING) {
+            pendingRequestCount++;
+        }
     }
 
     function setExchangeRate(uint256 rate) external {
@@ -293,12 +305,18 @@ contract MockControllerVault {
 
     function updateRequestBatch(uint256[] calldata ids, IMantleYieldVault.RequestStatus newStatus) external {
         for (uint256 i = 0; i < ids.length; i++) {
+            if (reqs[ids[i]].status == IMantleYieldVault.RequestStatus.PENDING && pendingRequestCount > 0) {
+                pendingRequestCount--;
+            }
             reqs[ids[i]].status = newStatus;
         }
     }
 
     function markRequestsDone(uint256[] calldata ids, uint256[] calldata settledAssets) external {
         for (uint256 i = 0; i < ids.length; i++) {
+            if (reqs[ids[i]].status == IMantleYieldVault.RequestStatus.PENDING && pendingRequestCount > 0) {
+                pendingRequestCount--;
+            }
             reqs[ids[i]].settledAssets = settledAssets[i];
             reqs[ids[i]].status = IMantleYieldVault.RequestStatus.DONE;
         }
@@ -1713,6 +1731,9 @@ contract MockStrategyAdapterForVault is IStrategyAdapter {
     function estimatePosAmount(uint256 assetAmount) external pure returns (uint256) {
         return assetAmount;
     }
+
+    function minSubscribeAsset() external pure returns (uint256) { return 0; }
+    function minRedeemPos() external pure returns (uint256) { return 0; }
 
     function previewDeposit(uint256 assetAmount)
         external
