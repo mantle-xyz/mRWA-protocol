@@ -87,16 +87,16 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
     //                       CUSTOM ERRORS
     // =============================================================
 
-    error DeviationExceeded(uint256 deviationBps, uint256 maxAllowed);
-    error CooldownNotElapsed(uint256 timeRemaining);
-    error ZeroAddress();
-    error InvalidRate();
-    error InvalidFeeRate(uint256 rate);
-    error InvalidDeviation(uint256 deviation);
-    error StaleComputeTimestamp(uint256 provided, uint256 lastCompute);
-    error FutureComputeTimestamp(uint256 provided, uint256 blockTimestamp);
-    error ComputeTimestampTooOld(uint256 provided, uint256 blockTimestamp, uint256 maxAge);
-    error InvalidComputeAge(uint256 age);
+    error Accountant__DeviationExceeded(uint256 deviationBps, uint256 maxAllowed);
+    error Accountant__CooldownNotElapsed(uint256 timeRemaining);
+    error Accountant__ZeroAddress();
+    error Accountant__InvalidRate();
+    error Accountant__InvalidFeeRate(uint256 rate);
+    error Accountant__InvalidDeviation(uint256 deviation);
+    error Accountant__StaleComputeTimestamp(uint256 provided, uint256 lastCompute);
+    error Accountant__FutureComputeTimestamp(uint256 provided, uint256 blockTimestamp);
+    error Accountant__ComputeTimestampTooOld(uint256 provided, uint256 blockTimestamp, uint256 maxAge);
+    error Accountant__InvalidComputeAge(uint256 age);
 
     // =============================================================
     //                    CONSTRUCTOR / INITIALIZER
@@ -112,10 +112,10 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
         initializer
     {
         if (vault_ == address(0) || admin == address(0)) {
-            revert ZeroAddress();
+            revert Accountant__ZeroAddress();
         }
-        if (initialRate == 0) revert InvalidRate();
-        if (managementFeeRate_ > MAX_MANAGEMENT_FEE_BPS) revert InvalidFeeRate(managementFeeRate_);
+        if (initialRate == 0) revert Accountant__InvalidRate();
+        if (managementFeeRate_ > MAX_MANAGEMENT_FEE_BPS) revert Accountant__InvalidFeeRate(managementFeeRate_);
 
         __AccessControl_init();
         __Pausable_init();
@@ -206,7 +206,7 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
         whenNotPaused
         nonReentrant
     {
-        if (newRate == 0) revert InvalidRate();
+        if (newRate == 0) revert Accountant__InvalidRate();
 
         AccountantStorage storage s = _getAccountantStorage();
         _checkComputeTimestamp(s, computeTimestamp);
@@ -220,7 +220,7 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
 
         uint256 cooldownEnd = uint256(s.lastUpdateTimestamp) + s.minUpdateInterval;
         if (block.timestamp < cooldownEnd) {
-            revert CooldownNotElapsed(cooldownEnd - block.timestamp);
+            revert Accountant__CooldownNotElapsed(cooldownEnd - block.timestamp);
         }
 
         uint256 oldRate = s.lastExchangeRate;
@@ -248,7 +248,7 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
     ///      for the vault-side pause to succeed automatically.
     /// @param newRate The corrected exchange rate (18-decimal precision)
     function emergencyRateUpdate(uint64 newRate) external onlyRole(DEFAULT_ADMIN_ROLE) nonReentrant {
-        if (newRate == 0) revert InvalidRate();
+        if (newRate == 0) revert Accountant__InvalidRate();
 
         AccountantStorage storage s = _getAccountantStorage();
         uint256 oldRate = s.lastExchangeRate;
@@ -269,7 +269,7 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
     // =============================================================
 
     function setVault(address newVault) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        if (newVault == address(0)) revert ZeroAddress();
+        if (newVault == address(0)) revert Accountant__ZeroAddress();
         AccountantStorage storage s = _getAccountantStorage();
         address oldVault = address(s.vault);
         s.vault = IMantleYieldVault(newVault);
@@ -278,7 +278,7 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
 
     function setRiskParams(uint32 newMaxDeviation, uint32 newMinInterval) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (newMaxDeviation == 0 || newMaxDeviation > MAX_DEVIATION_CEILING) {
-            revert InvalidDeviation(newMaxDeviation);
+            revert Accountant__InvalidDeviation(newMaxDeviation);
         }
         AccountantStorage storage s = _getAccountantStorage();
         s.maxAllowedDeviation = newMaxDeviation;
@@ -287,7 +287,7 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
     }
 
     function setMaxComputeAge(uint32 newAge) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        if (newAge == 0 || newAge > MAX_COMPUTE_AGE_CEILING) revert InvalidComputeAge(newAge);
+        if (newAge == 0 || newAge > MAX_COMPUTE_AGE_CEILING) revert Accountant__InvalidComputeAge(newAge);
         AccountantStorage storage s = _getAccountantStorage();
         uint256 oldAge = s.maxComputeAge;
         s.maxComputeAge = newAge;
@@ -295,7 +295,7 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
     }
 
     function setManagementFeeRate(uint32 newRate) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        if (newRate > MAX_MANAGEMENT_FEE_BPS) revert InvalidFeeRate(newRate);
+        if (newRate > MAX_MANAGEMENT_FEE_BPS) revert Accountant__InvalidFeeRate(newRate);
         AccountantStorage storage s = _getAccountantStorage();
         uint256 oldRate = s.managementFeeRate;
         s.managementFeeRate = newRate;
@@ -317,13 +317,13 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
     /// @dev Reverts if computeTimestamp is stale, in the future, or too old.
     function _checkComputeTimestamp(AccountantStorage storage s, uint64 computeTimestamp) internal view {
         if (computeTimestamp <= s.lastComputeTimestamp) {
-            revert StaleComputeTimestamp(computeTimestamp, s.lastComputeTimestamp);
+            revert Accountant__StaleComputeTimestamp(computeTimestamp, s.lastComputeTimestamp);
         }
         if (computeTimestamp > block.timestamp) {
-            revert FutureComputeTimestamp(computeTimestamp, block.timestamp);
+            revert Accountant__FutureComputeTimestamp(computeTimestamp, block.timestamp);
         }
         if (block.timestamp - computeTimestamp > s.maxComputeAge) {
-            revert ComputeTimestampTooOld(computeTimestamp, block.timestamp, s.maxComputeAge);
+            revert Accountant__ComputeTimestampTooOld(computeTimestamp, block.timestamp, s.maxComputeAge);
         }
     }
 

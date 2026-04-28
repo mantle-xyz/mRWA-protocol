@@ -94,37 +94,37 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     );
     event RedeemInFlightRetryRequested(address indexed adapter, uint256 indexed inFlightId, uint256 retryPosAmount);
 
-    error InvalidAddress();
-    error InvalidBps();
-    error InvalidExecutorContract(address executor);
-    error CooldownNotElapsed();
-    error InvalidStrategy(address adapter);
-    error InvalidPriorityOrder(address adapter);
-    error StrategyInactive(address adapter);
-    error WeightsMustBe10000(uint256 actualTotalWeight);
-    error DuplicateStrategyInOrder(address adapter);
-    error IdsNotSorted();
-    error InvalidRedeemInFlight(uint256 inFlightId);
-    error InvalidInvestInFlight(uint256 inFlightId);
-    error InvestInFlightIdsRequired(address adapter);
-    error RedeemInFlightIdsRequired(address adapter);
-    error SettleAmountsLengthMismatch();
-    error InvestSweepAmountMismatch(address adapter, uint256 expected, uint256 claimed);
-    error InvestRefundSweepAmountMismatch(address adapter, uint256 expected, uint256 claimed);
-    error RedeemSweepAmountMismatch(address adapter, uint256 expected, uint256 claimed);
-    error ClaimInputsLengthMismatch();
-    error UpdateStrategiesLengthMismatch();
-    error DuplicateStrategyUpdate(address adapter);
-    error InvestPosAmountUnavailable(address adapter, uint256 assetAmount);
+    error Controller__InvalidAddress();
+    error Controller__InvalidBps();
+    error Controller__InvalidExecutorContract(address executor);
+    error Controller__CooldownNotElapsed();
+    error Controller__InvalidStrategy(address adapter);
+    error Controller__InvalidPriorityOrder(address adapter);
+    error Controller__StrategyInactive(address adapter);
+    error Controller__WeightsMustBe10000(uint256 actualTotalWeight);
+    error Controller__DuplicateController__StrategyInOrder(address adapter);
+    error Controller__IdsNotSorted();
+    error Controller__InvalidRedeemInFlight(uint256 inFlightId);
+    error Controller__InvalidInvestInFlight(uint256 inFlightId);
+    error Controller__InvestInFlightIdsRequired(address adapter);
+    error Controller__RedeemInFlightIdsRequired(address adapter);
+    error Controller__SettleAmountsLengthMismatch();
+    error Controller__InvestSweepAmountMismatch(address adapter, uint256 expected, uint256 claimed);
+    error Controller__InvestRefundSweepAmountMismatch(address adapter, uint256 expected, uint256 claimed);
+    error Controller__RedeemSweepAmountMismatch(address adapter, uint256 expected, uint256 claimed);
+    error Controller__ClaimInputsLengthMismatch();
+    error Controller__UpdateStrategiesLengthMismatch();
+    error Controller__DuplicateStrategyUpdate(address adapter);
+    error Controller__InvestPosAmountUnavailable(address adapter, uint256 assetAmount);
     /// @notice Adapter pool (step-aligned total value) is strictly less than the required shortfall.
     ///         Request stays PENDING and can be retried once adapter value grows.
-    error DivestInsufficient(uint256 required, uint256 remaining);
-    error StrategyAlreadyActive(address adapter);
-    error StrategyAlreadyInactive(address adapter);
-    error StrategyInOrder(address adapter);
-    error StrategyHasInFlight(address adapter, uint256 pendingInvestTokens, uint256 pendingRedeemUsdc);
-    error RetryOnlyAsyncStrategy(address adapter);
-    error InvalidRetryAmount();
+    error Controller__DivestInsufficient(uint256 required, uint256 remaining);
+    error Controller__StrategyAlreadyActive(address adapter);
+    error Controller__StrategyAlreadyInactive(address adapter);
+    error Controller__StrategyInOrder(address adapter);
+    error Controller__StrategyHasInFlight(address adapter, uint256 pendingInvestTokens, uint256 pendingRedeemUsdc);
+    error Controller__RetryOnlyAsyncStrategy(address adapter);
+    error Controller__InvalidRetryAmount();
 
     constructor() {
         _disableInitializers();
@@ -154,13 +154,13 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         uint64 rebalanceCooldown_
     ) external initializer {
         if (vault_ == address(0) || admin_ == address(0) || operatorExecutor_ == address(0) || pauser_ == address(0)) {
-            revert InvalidAddress();
+            revert Controller__InvalidAddress();
         }
         if (operatorExecutor_.code.length == 0) {
-            revert InvalidExecutorContract(operatorExecutor_);
+            revert Controller__InvalidExecutorContract(operatorExecutor_);
         }
         if (bufferTargetBps_ > BPS_DENOMINATOR || rebalanceThresholdBps_ > BPS_DENOMINATOR) {
-            revert InvalidBps();
+            revert Controller__InvalidBps();
         }
 
         __AccessControl_init();
@@ -168,7 +168,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         vault = IMantleYieldVault(vault_);
         asset = IERC20(vault.asset());
         if (address(asset) == address(0)) {
-            revert InvalidAddress();
+            revert Controller__InvalidAddress();
         }
         bufferTargetBps = bufferTargetBps_;
         rebalanceThresholdBps = rebalanceThresholdBps_;
@@ -242,7 +242,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         onlyAdmin
     {
         if (bufferTargetBps_ > BPS_DENOMINATOR || rebalanceThresholdBps_ > BPS_DENOMINATOR) {
-            revert InvalidBps();
+            revert Controller__InvalidBps();
         }
         bufferTargetBps = bufferTargetBps_;
         rebalanceThresholdBps = rebalanceThresholdBps_;
@@ -262,16 +262,16 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         onlyAdmin
     {
         if (adapter == address(0)) {
-            revert InvalidAddress();
+            revert Controller__InvalidAddress();
         }
         if (adapter.code.length == 0) {
-            revert InvalidStrategy(adapter);
+            revert Controller__InvalidStrategy(adapter);
         }
         if (targetWeightBps > BPS_DENOMINATOR) {
-            revert InvalidBps();
+            revert Controller__InvalidBps();
         }
         if (strategyInfo[adapter].exists) {
-            revert InvalidStrategy(adapter);
+            revert Controller__InvalidStrategy(adapter);
         }
 
         _ensureVaultAdapterRegistered(adapter);
@@ -287,10 +287,10 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     function activateStrategy(address adapter) external onlyAdmin {
         StrategyInfo storage info = strategyInfo[adapter];
         if (!info.exists) {
-            revert InvalidStrategy(adapter);
+            revert Controller__InvalidStrategy(adapter);
         }
         if (info.isActive) {
-            revert StrategyAlreadyActive(adapter);
+            revert Controller__StrategyAlreadyActive(adapter);
         }
 
         _ensureVaultAdapterRegistered(adapter);
@@ -308,19 +308,19 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     function deactivateStrategy(address adapter) external onlyAdmin {
         StrategyInfo storage info = strategyInfo[adapter];
         if (!info.exists) {
-            revert InvalidStrategy(adapter);
+            revert Controller__InvalidStrategy(adapter);
         }
         if (!info.isActive) {
-            revert StrategyAlreadyInactive(adapter);
+            revert Controller__StrategyAlreadyInactive(adapter);
         }
         if (_isAdapterInOrder(adapter)) {
-            revert StrategyInOrder(adapter);
+            revert Controller__StrategyInOrder(adapter);
         }
 
         uint256 pendingInvest = vault.adapterInvestInFlightTokens(adapter);
         uint256 pendingRedeem = vault.adapterRedeemInFlightUsdc(adapter);
         if (pendingInvest > 0 || pendingRedeem > 0) {
-            revert StrategyHasInFlight(adapter, pendingInvest, pendingRedeem);
+            revert Controller__StrategyHasInFlight(adapter, pendingInvest, pendingRedeem);
         }
 
         if (vault.isAdapter(adapter)) {
@@ -402,19 +402,19 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
             address adapter = orderedStrategies[i];
             StrategyInfo memory info = strategyInfo[adapter];
             if (!info.exists) {
-                revert InvalidStrategy(adapter);
+                revert Controller__InvalidStrategy(adapter);
             }
             if (!info.isActive) {
-                revert StrategyInactive(adapter);
+                revert Controller__StrategyInactive(adapter);
             }
             for (uint256 j = 0; j < i; j++) {
                 if (orderedStrategies[j] == adapter) {
-                    revert DuplicateStrategyInOrder(adapter);
+                    revert Controller__DuplicateController__StrategyInOrder(adapter);
                 }
             }
 
             if (i > 0 && info.priority < lastPriority) {
-                revert InvalidPriorityOrder(adapter);
+                revert Controller__InvalidPriorityOrder(adapter);
             }
             lastPriority = info.priority;
 
@@ -423,7 +423,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         }
 
         if (totalActiveWeight != BPS_DENOMINATOR) {
-            revert WeightsMustBe10000(totalActiveWeight);
+            revert Controller__WeightsMustBe10000(totalActiveWeight);
         }
         emit StrategyOrderUpdated(orderedStrategies);
     }
@@ -436,7 +436,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     ) internal pure {
         uint256 len = adapters.length;
         if (len != targetWeightBpsList.length || len != priorities.length || len != isAsyncList.length) {
-            revert UpdateStrategiesLengthMismatch();
+            revert Controller__UpdateStrategiesLengthMismatch();
         }
     }
 
@@ -453,29 +453,29 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
             address adapter = strategyOrder[i];
             StrategyInfo memory info = strategyInfo[adapter];
             if (!info.exists) {
-                revert InvalidStrategy(adapter);
+                revert Controller__InvalidStrategy(adapter);
             }
             if (!info.isActive) {
-                revert StrategyInactive(adapter);
+                revert Controller__StrategyInactive(adapter);
             }
             if (i > 0 && info.priority < lastPriority) {
-                revert InvalidPriorityOrder(adapter);
+                revert Controller__InvalidPriorityOrder(adapter);
             }
             lastPriority = info.priority;
             totalActiveWeight += info.targetWeightBps;
         }
 
         if (totalActiveWeight != BPS_DENOMINATOR) {
-            revert WeightsMustBe10000(totalActiveWeight);
+            revert Controller__WeightsMustBe10000(totalActiveWeight);
         }
     }
 
     function _applyStrategyUpdate(address adapter, uint16 targetWeightBps, uint16 priority, bool isAsync) internal {
         if (targetWeightBps > BPS_DENOMINATOR) {
-            revert InvalidBps();
+            revert Controller__InvalidBps();
         }
         if (!strategyInfo[adapter].exists) {
-            revert InvalidStrategy(adapter);
+            revert Controller__InvalidStrategy(adapter);
         }
 
         StrategyInfo storage info = strategyInfo[adapter];
@@ -492,7 +492,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
             address adapter = adapters[i];
             for (uint256 j = 0; j < i; j++) {
                 if (adapters[j] == adapter) {
-                    revert DuplicateStrategyUpdate(adapter);
+                    revert Controller__DuplicateStrategyUpdate(adapter);
                 }
             }
         }
@@ -522,7 +522,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     /// @dev Controller must hold PAUSER_ROLE on the target adapter.
     function setAdapterPaused(address adapter, bool paused_) external onlyPauser nonReentrant {
         if (!strategyInfo[adapter].exists) {
-            revert InvalidStrategy(adapter);
+            revert Controller__InvalidStrategy(adapter);
         }
         IStrategyAdapter(adapter).setPaused(paused_);
         emit AdapterPauseUpdated(adapter, paused_);
@@ -535,7 +535,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         for (uint256 i = 0; i < len; i++) {
             address adapter = adapters[i];
             if (!strategyInfo[adapter].exists) {
-                revert InvalidStrategy(adapter);
+                revert Controller__InvalidStrategy(adapter);
             }
             IStrategyAdapter(adapter).setPaused(paused_);
             emit AdapterPauseUpdated(adapter, paused_);
@@ -553,7 +553,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
      */
     function rebalance() external onlyOperatorExecutor nonReentrant {
         if (block.timestamp < uint256(lastRebalance) + uint256(rebalanceCooldown)) {
-            revert CooldownNotElapsed();
+            revert Controller__CooldownNotElapsed();
         }
 
         (
@@ -601,7 +601,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
             if (divestRemaining > 0 && adapterPoolBefore < shortfall) {
                 // Only revert on true insufficiency (pool strictly below demand). Requests stay
                 // PENDING so they can retry when adapter value grows.
-                revert DivestInsufficient(shortfall, divestRemaining);
+                revert Controller__DivestInsufficient(shortfall, divestRemaining);
             }
             // Otherwise (partial fill / every adapter below min / step residual): allow through.
             // Request enters PROCESSING; finalize waits until physical cash arrives via
@@ -654,22 +654,22 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     {
         StrategyInfo memory info = strategyInfo[adapter];
         if (!info.exists) {
-            revert InvalidStrategy(adapter);
+            revert Controller__InvalidStrategy(adapter);
         }
         if (!info.isAsync) {
-            revert RetryOnlyAsyncStrategy(adapter);
+            revert Controller__RetryOnlyAsyncStrategy(adapter);
         }
         if (retryPosAmount == 0) {
-            revert InvalidRetryAmount();
+            revert Controller__InvalidRetryAmount();
         }
 
         (, address recordAdapter,, uint256 tokenAmount,,, bool isInvest,, IMantleYieldVault.InFlightStatus status) =
             vault.inFlightRecords(inFlightId);
         if (recordAdapter != adapter || isInvest || status != IMantleYieldVault.InFlightStatus.PENDING) {
-            revert InvalidRedeemInFlight(inFlightId);
+            revert Controller__InvalidRedeemInFlight(inFlightId);
         }
         if (retryPosAmount > tokenAmount) {
-            revert InvalidRetryAmount();
+            revert Controller__InvalidRetryAmount();
         }
 
         IStrategyAdapter(adapter).retryRedeemAsync(retryPosAmount, adapter);
@@ -704,7 +704,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         IStrategyControllerExecutor.RedeemSettlementInput[] calldata redeemBatch
     ) external onlyOperatorExecutor nonReentrant {
         if (adapters.length != investBatch.length || adapters.length != redeemBatch.length) {
-            revert SettleAmountsLengthMismatch();
+            revert Controller__SettleAmountsLengthMismatch();
         }
 
         uint256 len = adapters.length;
@@ -875,7 +875,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
             try IStrategyAdapter(adapter).deposit(executableAsset, adapter) returns (uint256 sharesOrPos) {
                 uint256 posAmount = sharesOrPos;
                 if (posAmount == 0) posAmount = expectedPos;
-                if (posAmount == 0) revert InvestPosAmountUnavailable(adapter, executableAsset);
+                if (posAmount == 0) revert Controller__InvestPosAmountUnavailable(adapter, executableAsset);
                 _recordInvestInFlight(adapter, executableAsset, posAmount);
                 emit InvestExecuted(adapter, executableAsset, posAmount);
                 remaining -= executableAsset;
@@ -977,7 +977,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     {
         StrategyInfo memory info = strategyInfo[adapter];
         if (!info.exists) {
-            revert InvalidStrategy(adapter);
+            revert Controller__InvalidStrategy(adapter);
         }
 
         address token = _posToken(adapter);
@@ -1001,7 +1001,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     }
 
     function _markBatchReady(uint256[] calldata ids, uint256[] calldata settledAssets) internal {
-        if (ids.length != settledAssets.length) revert ClaimInputsLengthMismatch();
+        if (ids.length != settledAssets.length) revert Controller__ClaimInputsLengthMismatch();
         uint256 required;
         for (uint256 i = 0; i < ids.length; i++) {
             required += settledAssets[i];
@@ -1025,7 +1025,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     function _confirmSingleRedeemInFlight(address expectedAdapter, uint256 inFlightId, uint256 settledAmount) internal {
         (, address recordAdapter,,,,, bool isInvest,,) = vault.inFlightRecords(inFlightId);
         if (recordAdapter != expectedAdapter || isInvest) {
-            revert InvalidRedeemInFlight(inFlightId);
+            revert Controller__InvalidRedeemInFlight(inFlightId);
         }
         vault.confirmInFlight(inFlightId, settledAmount, settledAmount == 0);
     }
@@ -1038,7 +1038,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     ) internal {
         (, address recordAdapter,,,,, bool isInvest,,) = vault.inFlightRecords(inFlightId);
         if (recordAdapter != adapter || !isInvest) {
-            revert InvalidInvestInFlight(inFlightId);
+            revert Controller__InvalidInvestInFlight(inFlightId);
         }
         vault.confirmInFlight(inFlightId, settledPosAmount, settledPosAmount == 0);
         emit InvestSettlementRecorded(inFlightId, adapter, settledPosAmount, refundAssetAmount);
@@ -1069,10 +1069,10 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         (uint256 posClaimed, uint256 refundAssetClaimed) =
             _sweepAdapterAssetsToVaultInternal(adapter, investPosToSweep, investRefundToSweep);
         if (posClaimed != investPosToSweep) {
-            revert InvestSweepAmountMismatch(adapter, investPosToSweep, posClaimed);
+            revert Controller__InvestSweepAmountMismatch(adapter, investPosToSweep, posClaimed);
         }
         if (refundAssetClaimed != investRefundToSweep) {
-            revert InvestRefundSweepAmountMismatch(adapter, investRefundToSweep, refundAssetClaimed);
+            revert Controller__InvestRefundSweepAmountMismatch(adapter, investRefundToSweep, refundAssetClaimed);
         }
     }
 
@@ -1083,7 +1083,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
 
         (, uint256 redeemAssetClaimed) = _sweepAdapterAssetsToVaultInternal(adapter, 0, redeemAssetToSweep);
         if (redeemAssetClaimed != redeemAssetToSweep) {
-            revert RedeemSweepAmountMismatch(adapter, redeemAssetToSweep, redeemAssetClaimed);
+            revert Controller__RedeemSweepAmountMismatch(adapter, redeemAssetToSweep, redeemAssetClaimed);
         }
     }
 
@@ -1097,7 +1097,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
                 || invest.inFlightIds.length != invest.refundAssetAmounts.length
                 || redeem.inFlightIds.length != redeem.settledAssetAmounts.length
         ) {
-            revert SettleAmountsLengthMismatch();
+            revert Controller__SettleAmountsLengthMismatch();
         }
 
         _sweepInvestSettlement(adapter, invest);
@@ -1207,7 +1207,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     function _validateSortedIds(uint256[] calldata ids) internal pure {
         for (uint256 i = 1; i < ids.length; i++) {
             if (ids[i] <= ids[i - 1]) {
-                revert IdsNotSorted();
+                revert Controller__IdsNotSorted();
             }
         }
     }

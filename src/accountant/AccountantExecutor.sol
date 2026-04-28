@@ -26,7 +26,7 @@ contract AccountantExecutor is AccessControlUpgradeable, UUPSUpgradeable {
     //                       CUSTOM ERRORS
     // =============================================================
 
-    error ZeroAddress();
+    error AccountantExecutor__ZeroAddress();
 
     // =============================================================
     //                    CONSTRUCTOR / INITIALIZER
@@ -38,7 +38,7 @@ contract AccountantExecutor is AccessControlUpgradeable, UUPSUpgradeable {
     }
 
     function initialize(address admin) external initializer {
-        if (admin == address(0)) revert ZeroAddress();
+        if (admin == address(0)) revert AccountantExecutor__ZeroAddress();
 
         __AccessControl_init();
 
@@ -58,7 +58,7 @@ contract AccountantExecutor is AccessControlUpgradeable, UUPSUpgradeable {
         external
         onlyRole(BOT_ROLE)
     {
-        if (accountant_ == address(0)) revert ZeroAddress();
+        if (accountant_ == address(0)) revert AccountantExecutor__ZeroAddress();
         IAccountant(accountant_).updateExchangeRate(newRate, computeTimestamp);
         emit RateUpdateExecuted(msg.sender, newRate, computeTimestamp);
     }

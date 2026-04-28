@@ -54,7 +54,7 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
         address priceOracle_
     ) BaseAsync7540Adapter(vault_, admin, controller, accountant, priceOracle_) {
         if (subRedManagement == address(0) || stToken == address(0)) {
-            revert InvalidAddress();
+            revert Adapter__InvalidAddress();
         }
         SUB_RED = ISubRedManagement(subRedManagement);
         ST_TOKEN = stToken;
@@ -267,7 +267,7 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
     {
         (bool ok, uint256 executableAssetAmount, uint256 previewPosAmount) = _previewDeposit(amountAsset);
         if (!ok || amountAsset != executableAssetAmount) {
-            revert InvalidAmount();
+            revert Adapter__InvalidAmount();
         }
         // Controller already validated via previewDeposit(); no redundant checks here.
         ASSET.safeTransferFrom(VAULT, address(this), amountAsset);
@@ -297,10 +297,10 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
      */
     function retryRedeemAsync(uint256 retryPosAmount, address receiver) external override onlyController whenNotPaused {
         if (retryPosAmount == 0) {
-            revert InvalidAmount();
+            revert Adapter__InvalidAmount();
         }
         if (IERC20(ST_TOKEN).balanceOf(address(this)) < retryPosAmount) {
-            revert InvalidAmount();
+            revert Adapter__InvalidAmount();
         }
 
         _redeem(retryPosAmount, uint64(block.timestamp + redeemDeadlineWindow));
@@ -313,7 +313,7 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
 
     function _subscribe(uint256 amountAsset, uint64 deadline) internal {
         if (amountAsset == 0) {
-            revert InvalidAmount();
+            revert Adapter__InvalidAmount();
         }
         // Minimum-privilege approval: approve exact amount then reset.
         ASSET.forceApprove(address(SUB_RED), amountAsset);
@@ -330,7 +330,7 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
 
     function _redeem(uint256 quantity, uint64 deadline) internal {
         if (quantity == 0) {
-            revert InvalidAmount();
+            revert Adapter__InvalidAmount();
         }
         // Minimum-privilege approval: approve exact amount then reset.
         IERC20(ST_TOKEN).forceApprove(address(SUB_RED), quantity);

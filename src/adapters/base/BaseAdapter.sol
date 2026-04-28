@@ -24,12 +24,12 @@ abstract contract BaseAdapter is IStrategyAdapter, AccessControl, ReentrancyGuar
     uint256 public manualPosTokenPrice;
     bool public paused;
 
-    error PausedError();
-    error InvalidAmount();
-    error InvalidAddress();
-    error Unsupported();
-    error SweepProtectedToken(address token);
-    error InvalidToken(address token);
+    error Adapter__Paused();
+    error Adapter__InvalidAmount();
+    error Adapter__InvalidAddress();
+    error Adapter__Unsupported();
+    error Adapter__SweepProtectedToken(address token);
+    error Adapter__InvalidToken(address token);
 
     event ManualPosTokenPriceUpdated(uint256 oldPriceE18, uint256 newPriceE18, address indexed updater);
     event PriceOracleUpdated(address indexed oldOracle, address indexed newOracle, address indexed updater);
@@ -56,7 +56,7 @@ abstract contract BaseAdapter is IStrategyAdapter, AccessControl, ReentrancyGuar
 
     modifier whenNotPaused() {
         if (paused) {
-            revert PausedError();
+            revert Adapter__Paused();
         }
         _;
     }
@@ -72,13 +72,13 @@ abstract contract BaseAdapter is IStrategyAdapter, AccessControl, ReentrancyGuar
             vault_ == address(0) || admin_ == address(0) || controller_ == address(0)
                 || accountantExecutor_ == address(0)
         ) {
-            revert InvalidAddress();
+            revert Adapter__InvalidAddress();
         }
         VAULT = vault_;
         ASSET = IERC20(IMantleYieldVault(vault_).asset());
         priceOracle = priceOracle_;
         if (address(ASSET) == address(0)) {
-            revert InvalidAddress();
+            revert Adapter__InvalidAddress();
         }
         _grantRole(DEFAULT_ADMIN_ROLE, admin_);
         _grantRole(ACCOUNTANT_EXECUTOR_ROLE, accountantExecutor_);
@@ -164,7 +164,7 @@ abstract contract BaseAdapter is IStrategyAdapter, AccessControl, ReentrancyGuar
         returns (uint256 claimed)
     {
         if (token == address(0)) {
-            revert InvalidToken(token);
+            revert Adapter__InvalidToken(token);
         }
         uint256 bal = IERC20(token).balanceOf(address(this));
         claimed = amount > bal ? bal : amount;
@@ -185,7 +185,7 @@ abstract contract BaseAdapter is IStrategyAdapter, AccessControl, ReentrancyGuar
     /// @notice Set manual position-token price (1e18 precision). Set to 0 to clear manual override.
     function setManualPosTokenPrice(uint256 priceE18) external virtual onlyAccountantExecutor {
         if (priceOracle != address(0)) {
-            revert Unsupported();
+            revert Adapter__Unsupported();
         }
         uint256 oldPrice = manualPosTokenPrice;
         manualPosTokenPrice = priceE18;
@@ -202,13 +202,13 @@ abstract contract BaseAdapter is IStrategyAdapter, AccessControl, ReentrancyGuar
     /// @notice Emergency sweep: transfer all of a token to receiver (admin only)
     function sweep(address token, address receiver) external onlyAdmin {
         if (token == address(0)) {
-            revert InvalidToken(token);
+            revert Adapter__InvalidToken(token);
         }
         if (receiver == address(0)) {
-            revert InvalidAddress();
+            revert Adapter__InvalidAddress();
         }
         if (token == address(ASSET)) {
-            revert SweepProtectedToken(token);
+            revert Adapter__SweepProtectedToken(token);
         }
         address pToken;
         try this.posToken() returns (address t) {
@@ -217,7 +217,7 @@ abstract contract BaseAdapter is IStrategyAdapter, AccessControl, ReentrancyGuar
             pToken = address(0);
         }
         if (pToken != address(0) && token == pToken) {
-            revert SweepProtectedToken(token);
+            revert Adapter__SweepProtectedToken(token);
         }
         uint256 bal = IERC20(token).balanceOf(address(this));
         IERC20(token).safeTransfer(receiver, bal);

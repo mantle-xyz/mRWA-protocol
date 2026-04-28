@@ -131,7 +131,7 @@ contract AccountantTest is Test {
     }
 
     function test_initialize_revertsWhenVaultIsZero() public {
-        vm.expectRevert(Accountant.ZeroAddress.selector);
+        vm.expectRevert(Accountant.Accountant__ZeroAddress.selector);
         new BeaconProxy(
             address(beacon),
             abi.encodeCall(Accountant.initialize, (address(0), INITIAL_RATE, MANAGEMENT_FEE_BPS, admin))
@@ -139,7 +139,7 @@ contract AccountantTest is Test {
     }
 
     function test_initialize_revertsWhenAdminIsZero() public {
-        vm.expectRevert(Accountant.ZeroAddress.selector);
+        vm.expectRevert(Accountant.Accountant__ZeroAddress.selector);
         new BeaconProxy(
             address(beacon),
             abi.encodeCall(Accountant.initialize, (address(vault), INITIAL_RATE, MANAGEMENT_FEE_BPS, address(0)))
@@ -147,7 +147,7 @@ contract AccountantTest is Test {
     }
 
     function test_initialize_revertsWhenRateIsZero() public {
-        vm.expectRevert(Accountant.InvalidRate.selector);
+        vm.expectRevert(Accountant.Accountant__InvalidRate.selector);
         new BeaconProxy(
             address(beacon), abi.encodeCall(Accountant.initialize, (address(vault), 0, MANAGEMENT_FEE_BPS, admin))
         );
@@ -155,7 +155,7 @@ contract AccountantTest is Test {
 
     function test_initialize_revertsWhenFeeExceedsCap() public {
         uint32 tooHigh = accountant.MAX_MANAGEMENT_FEE_BPS() + 1;
-        vm.expectRevert(abi.encodeWithSelector(Accountant.InvalidFeeRate.selector, tooHigh));
+        vm.expectRevert(abi.encodeWithSelector(Accountant.Accountant__InvalidFeeRate.selector, tooHigh));
         new BeaconProxy(
             address(beacon), abi.encodeCall(Accountant.initialize, (address(vault), INITIAL_RATE, tooHigh, admin))
         );
@@ -271,7 +271,7 @@ contract AccountantTest is Test {
     function test_updateExchangeRate_revertsWhenRateIsZero() public {
         _skipCooldown();
 
-        vm.expectRevert(Accountant.InvalidRate.selector);
+        vm.expectRevert(Accountant.Accountant__InvalidRate.selector);
         _doUpdate(0);
     }
 
@@ -290,7 +290,7 @@ contract AccountantTest is Test {
         uint256 cooldownEnd = 1000 + accountant.minUpdateInterval();
         uint256 remaining = cooldownEnd - block.timestamp;
 
-        vm.expectRevert(abi.encodeWithSelector(Accountant.CooldownNotElapsed.selector, remaining));
+        vm.expectRevert(abi.encodeWithSelector(Accountant.Accountant__CooldownNotElapsed.selector, remaining));
         _doUpdate(1.005e18);
     }
 
@@ -370,7 +370,9 @@ contract AccountantTest is Test {
 
         _skipCooldown();
 
-        vm.expectRevert(abi.encodeWithSelector(Accountant.StaleComputeTimestamp.selector, computeTs1, computeTs1));
+        vm.expectRevert(
+            abi.encodeWithSelector(Accountant.Accountant__StaleComputeTimestamp.selector, computeTs1, computeTs1)
+        );
         vm.prank(executor);
         accountant.updateExchangeRate(1.006e18, computeTs1);
     }
@@ -384,7 +386,9 @@ contract AccountantTest is Test {
 
         _skipCooldown();
 
-        vm.expectRevert(abi.encodeWithSelector(Accountant.StaleComputeTimestamp.selector, computeTs, computeTs));
+        vm.expectRevert(
+            abi.encodeWithSelector(Accountant.Accountant__StaleComputeTimestamp.selector, computeTs, computeTs)
+        );
         vm.prank(executor);
         accountant.updateExchangeRate(1.006e18, computeTs);
     }
@@ -394,7 +398,9 @@ contract AccountantTest is Test {
 
         uint64 futureTs = uint64(block.timestamp + 1);
 
-        vm.expectRevert(abi.encodeWithSelector(Accountant.FutureComputeTimestamp.selector, futureTs, block.timestamp));
+        vm.expectRevert(
+            abi.encodeWithSelector(Accountant.Accountant__FutureComputeTimestamp.selector, futureTs, block.timestamp)
+        );
         vm.prank(executor);
         accountant.updateExchangeRate(1.005e18, futureTs);
     }
@@ -406,7 +412,9 @@ contract AccountantTest is Test {
         uint64 staleTs = uint64(block.timestamp - maxAge - 1);
 
         vm.expectRevert(
-            abi.encodeWithSelector(Accountant.ComputeTimestampTooOld.selector, staleTs, block.timestamp, maxAge)
+            abi.encodeWithSelector(
+                Accountant.Accountant__ComputeTimestampTooOld.selector, staleTs, block.timestamp, maxAge
+            )
         );
         vm.prank(executor);
         accountant.updateExchangeRate(1.005e18, staleTs);
@@ -628,7 +636,7 @@ contract AccountantTest is Test {
     }
 
     function test_emergencyRateUpdate_revertsWhenRateIsZero() public {
-        vm.expectRevert(Accountant.InvalidRate.selector);
+        vm.expectRevert(Accountant.Accountant__InvalidRate.selector);
         vm.prank(admin);
         accountant.emergencyRateUpdate(0);
     }
@@ -741,7 +749,7 @@ contract AccountantTest is Test {
     }
 
     function test_setVault_revertsWhenZero() public {
-        vm.expectRevert(Accountant.ZeroAddress.selector);
+        vm.expectRevert(Accountant.Accountant__ZeroAddress.selector);
         vm.prank(admin);
         accountant.setVault(address(0));
     }
@@ -783,7 +791,7 @@ contract AccountantTest is Test {
     }
 
     function test_setRiskParams_revertsWhenDeviationZero() public {
-        vm.expectRevert(abi.encodeWithSelector(Accountant.InvalidDeviation.selector, 0));
+        vm.expectRevert(abi.encodeWithSelector(Accountant.Accountant__InvalidDeviation.selector, 0));
         vm.prank(admin);
         accountant.setRiskParams(0, 12 hours);
     }
@@ -791,7 +799,7 @@ contract AccountantTest is Test {
     function test_setRiskParams_revertsWhenDeviationExceedsCeiling() public {
         uint32 tooHigh = accountant.MAX_DEVIATION_CEILING() + 1;
 
-        vm.expectRevert(abi.encodeWithSelector(Accountant.InvalidDeviation.selector, tooHigh));
+        vm.expectRevert(abi.encodeWithSelector(Accountant.Accountant__InvalidDeviation.selector, tooHigh));
         vm.prank(admin);
         accountant.setRiskParams(tooHigh, 12 hours);
     }
@@ -853,7 +861,7 @@ contract AccountantTest is Test {
     }
 
     function test_setMaxComputeAge_revertsWhenZero() public {
-        vm.expectRevert(abi.encodeWithSelector(Accountant.InvalidComputeAge.selector, 0));
+        vm.expectRevert(abi.encodeWithSelector(Accountant.Accountant__InvalidComputeAge.selector, 0));
         vm.prank(admin);
         accountant.setMaxComputeAge(0);
     }
@@ -861,7 +869,7 @@ contract AccountantTest is Test {
     function test_setMaxComputeAge_revertsWhenExceedsCeiling() public {
         uint32 tooOld = accountant.MAX_COMPUTE_AGE_CEILING() + 1;
 
-        vm.expectRevert(abi.encodeWithSelector(Accountant.InvalidComputeAge.selector, tooOld));
+        vm.expectRevert(abi.encodeWithSelector(Accountant.Accountant__InvalidComputeAge.selector, tooOld));
         vm.prank(admin);
         accountant.setMaxComputeAge(tooOld);
     }
@@ -912,7 +920,7 @@ contract AccountantTest is Test {
     function test_setManagementFeeRate_revertsWhenExceedsCap() public {
         uint32 tooHigh = accountant.MAX_MANAGEMENT_FEE_BPS() + 1;
 
-        vm.expectRevert(abi.encodeWithSelector(Accountant.InvalidFeeRate.selector, tooHigh));
+        vm.expectRevert(abi.encodeWithSelector(Accountant.Accountant__InvalidFeeRate.selector, tooHigh));
         vm.prank(admin);
         accountant.setManagementFeeRate(tooHigh);
     }
@@ -1139,7 +1147,7 @@ contract AccountantExecutorTest is Test {
     }
 
     function test_initialize_revertsWhenAdminIsZero() public {
-        vm.expectRevert(AccountantExecutor.ZeroAddress.selector);
+        vm.expectRevert(AccountantExecutor.AccountantExecutor__ZeroAddress.selector);
         new BeaconProxy(address(beacon), abi.encodeCall(AccountantExecutor.initialize, (address(0))));
     }
 
@@ -1225,7 +1233,7 @@ contract AccountantExecutorTest is Test {
     }
 
     function test_executeUpdateRate_revertsWhenAccountantIsZero() public {
-        vm.expectRevert(AccountantExecutor.ZeroAddress.selector);
+        vm.expectRevert(AccountantExecutor.AccountantExecutor__ZeroAddress.selector);
         vm.prank(bot);
         executor.executeUpdateRate(address(0), 1e18, uint64(block.timestamp));
     }
@@ -1479,7 +1487,9 @@ contract AccountantExecutorIntegrationTest is Test {
         _skipCooldown();
 
         // Use same timestamp as before → stale
-        vm.expectRevert(abi.encodeWithSelector(Accountant.StaleComputeTimestamp.selector, computeTs1, computeTs1));
+        vm.expectRevert(
+            abi.encodeWithSelector(Accountant.Accountant__StaleComputeTimestamp.selector, computeTs1, computeTs1)
+        );
         vm.prank(bot);
         executor.executeUpdateRate(address(accountant), 1.006e18, computeTs1);
     }
@@ -1489,7 +1499,9 @@ contract AccountantExecutorIntegrationTest is Test {
 
         uint64 futureTs = uint64(block.timestamp + 1);
 
-        vm.expectRevert(abi.encodeWithSelector(Accountant.FutureComputeTimestamp.selector, futureTs, block.timestamp));
+        vm.expectRevert(
+            abi.encodeWithSelector(Accountant.Accountant__FutureComputeTimestamp.selector, futureTs, block.timestamp)
+        );
         vm.prank(bot);
         executor.executeUpdateRate(address(accountant), 1.005e18, futureTs);
     }
@@ -1501,7 +1513,9 @@ contract AccountantExecutorIntegrationTest is Test {
         uint64 staleTs = uint64(block.timestamp - maxAge - 1);
         // staleTs must be > lastComputeTimestamp (0), which is true since block.timestamp is large
         vm.expectRevert(
-            abi.encodeWithSelector(Accountant.ComputeTimestampTooOld.selector, staleTs, block.timestamp, maxAge)
+            abi.encodeWithSelector(
+                Accountant.Accountant__ComputeTimestampTooOld.selector, staleTs, block.timestamp, maxAge
+            )
         );
         vm.prank(bot);
         executor.executeUpdateRate(address(accountant), 1.005e18, staleTs);
@@ -1514,7 +1528,7 @@ contract AccountantExecutorIntegrationTest is Test {
     function test_integration_revertsWhenRateIsZero() public {
         _skipCooldown();
 
-        vm.expectRevert(Accountant.InvalidRate.selector);
+        vm.expectRevert(Accountant.Accountant__InvalidRate.selector);
         _executeUpdate(0);
     }
 
@@ -1722,14 +1736,14 @@ contract AccountantExecutorIntegrationTest is Test {
     }
 
     function test_integration_setRiskParams_revertsWhenDeviationZero() public {
-        vm.expectRevert(abi.encodeWithSelector(Accountant.InvalidDeviation.selector, 0));
+        vm.expectRevert(abi.encodeWithSelector(Accountant.Accountant__InvalidDeviation.selector, 0));
         vm.prank(admin);
         accountant.setRiskParams(0, 12 hours);
     }
 
     function test_integration_setRiskParams_revertsWhenDeviationExceedsCeiling() public {
         uint32 tooHigh = accountant.MAX_DEVIATION_CEILING() + 1;
-        vm.expectRevert(abi.encodeWithSelector(Accountant.InvalidDeviation.selector, tooHigh));
+        vm.expectRevert(abi.encodeWithSelector(Accountant.Accountant__InvalidDeviation.selector, tooHigh));
         vm.prank(admin);
         accountant.setRiskParams(tooHigh, 12 hours);
     }
@@ -1746,7 +1760,7 @@ contract AccountantExecutorIntegrationTest is Test {
 
     function test_integration_setManagementFeeRate_revertsWhenExceedsCap() public {
         uint32 tooHigh = accountant.MAX_MANAGEMENT_FEE_BPS() + 1;
-        vm.expectRevert(abi.encodeWithSelector(Accountant.InvalidFeeRate.selector, tooHigh));
+        vm.expectRevert(abi.encodeWithSelector(Accountant.Accountant__InvalidFeeRate.selector, tooHigh));
         vm.prank(admin);
         accountant.setManagementFeeRate(tooHigh);
     }
@@ -1764,7 +1778,7 @@ contract AccountantExecutorIntegrationTest is Test {
     }
 
     function test_integration_setVault_revertsWhenZero() public {
-        vm.expectRevert(Accountant.ZeroAddress.selector);
+        vm.expectRevert(Accountant.Accountant__ZeroAddress.selector);
         vm.prank(admin);
         accountant.setVault(address(0));
     }
@@ -1782,14 +1796,14 @@ contract AccountantExecutorIntegrationTest is Test {
     }
 
     function test_integration_setMaxComputeAge_revertsWhenZero() public {
-        vm.expectRevert(abi.encodeWithSelector(Accountant.InvalidComputeAge.selector, 0));
+        vm.expectRevert(abi.encodeWithSelector(Accountant.Accountant__InvalidComputeAge.selector, 0));
         vm.prank(admin);
         accountant.setMaxComputeAge(0);
     }
 
     function test_integration_setMaxComputeAge_revertsWhenExceedsCeiling() public {
         uint32 tooOld = accountant.MAX_COMPUTE_AGE_CEILING() + 1;
-        vm.expectRevert(abi.encodeWithSelector(Accountant.InvalidComputeAge.selector, tooOld));
+        vm.expectRevert(abi.encodeWithSelector(Accountant.Accountant__InvalidComputeAge.selector, tooOld));
         vm.prank(admin);
         accountant.setMaxComputeAge(tooOld);
     }

@@ -12,12 +12,12 @@ abstract contract BaseAsync7540Adapter is BaseAdapter {
 
     /// @notice Async strategies generally do not support atomic withdraw.
     function withdrawSync(uint256, address) external pure virtual override returns (uint256) {
-        revert Unsupported();
+        revert Adapter__Unsupported();
     }
 
     /// @notice Retry path is adapter-specific and must be explicitly implemented by concrete async adapters.
     function retryRedeemAsync(uint256, address) external virtual override {
-        revert Unsupported();
+        revert Adapter__Unsupported();
     }
 
     /**
@@ -29,10 +29,10 @@ abstract contract BaseAsync7540Adapter is BaseAdapter {
      */
     function _registerAsyncRedeem(uint256 posAmount, address receiver) internal {
         if (posAmount == 0) {
-            revert InvalidAmount();
+            revert Adapter__InvalidAmount();
         }
         if (receiver == address(0)) {
-            revert InvalidAddress();
+            revert Adapter__InvalidAddress();
         }
 
         _emitAdapterRedeemRequested(posAmount, receiver);

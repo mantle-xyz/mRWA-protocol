@@ -34,8 +34,8 @@ contract OperatorExecutor is AccessControlUpgradeable, UUPSUpgradeable {
     //                       CUSTOM ERRORS
     // =============================================================
 
-    error InvalidAddress();
-    error InvalidController(address controller);
+    error OperatorExecutor__InvalidAddress();
+    error OperatorExecutor__InvalidController(address controller);
 
     // =============================================================
     //                    CONSTRUCTOR / INITIALIZER
@@ -48,7 +48,7 @@ contract OperatorExecutor is AccessControlUpgradeable, UUPSUpgradeable {
 
     function initialize(address admin, address initialBot) external initializer {
         if (admin == address(0) || initialBot == address(0)) {
-            revert InvalidAddress();
+            revert OperatorExecutor__InvalidAddress();
         }
 
         __AccessControl_init();
@@ -112,10 +112,10 @@ contract OperatorExecutor is AccessControlUpgradeable, UUPSUpgradeable {
 
     function _controllerOf(address controller_) internal view returns (IStrategyControllerExecutor targetController) {
         if (controller_ == address(0)) {
-            revert InvalidAddress();
+            revert OperatorExecutor__InvalidAddress();
         }
         if (controller_.code.length == 0) {
-            revert InvalidController(controller_);
+            revert OperatorExecutor__InvalidController(controller_);
         }
         targetController = IStrategyControllerExecutor(controller_);
     }
