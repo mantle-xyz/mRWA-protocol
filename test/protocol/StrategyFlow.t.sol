@@ -329,6 +329,8 @@ contract StrategyFlowTest is Test {
             address(this),
             address(0)
         );
+        adapterISNR.setManualPosTokenPrice(1e18);
+        adapterUMINT.setManualPosTokenPrice(1e18);
 
         controller.registerStrategy(address(adapterISNR), 5000, 1, true);
         controller.registerStrategy(address(adapterUMINT), 5000, 2, true);

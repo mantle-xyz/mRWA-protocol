@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {IStrategyAdapterCore} from "../../interfaces/adapters/IStrategyAdapterCore.sol";
 import {ISubRedManagement} from "../../interfaces/adapters/digift/ISubRedManagement.sol";
 import {BaseAsync7540Adapter} from "../base/capabilities/BaseAsync7540Adapter.sol";
 
@@ -17,19 +16,21 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
     ISubRedManagement public immutable SUB_RED;
     address public immutable ST_TOKEN;
 
-    uint256 public subscribeStepAsset;
-    uint256 public redeemStepPos;
+    struct ExecutionConstraints {
+        uint256 minSubscribeAsset;
+        uint256 subscribeStepAsset;
+        uint256 minRedeemPos;
+        uint256 redeemStepPos;
+    }
 
-    /// @inheritdoc IStrategyAdapterCore
-    uint256 public override minSubscribeAsset;
-    /// @inheritdoc IStrategyAdapterCore
-    uint256 public override minRedeemPos;
+    ExecutionConstraints public executionConstraints;
 
     uint64 public subscribeDeadlineWindow = 6 hours;
     uint64 public redeemDeadlineWindow = 6 hours;
 
-    event ExecutionStepsUpdated(uint256 subscribeStepAsset, uint256 redeemStepPos);
-    event MinAmountsUpdated(uint256 minSubscribeAsset, uint256 minRedeemPos);
+    event ExecutionConstraintsUpdated(
+        uint256 minSubscribeAsset, uint256 subscribeStepAsset, uint256 minRedeemPos, uint256 redeemStepPos
+    );
     event SubscribeDeadlineWindowUpdated(uint64 newWindow);
     event RedeemDeadlineWindowUpdated(uint64 newWindow);
 
@@ -41,7 +42,7 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
      * @param admin Adapter admin role address.
      * @param controller StrategyController role address.
      * @param accountant Accountant role address for manual price updates.
-     * @param priceOracle_ Optional DFeedPriceOracle for the ST token. Pass address(0) for 1:1 estimate.
+     * @param priceOracle_ Optional DFeedPriceOracle for the ST token. Pass address(0) to use manual pricing.
      */
     constructor(
         address vault_,
@@ -63,9 +64,6 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
     // Adapter Views
     // =============================================================
 
-    /**
-     * @notice Strategy display name.
-     */
     function name() external pure override returns (string memory) {
         return "SubRedManagementAdapter";
     }
@@ -76,15 +74,15 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
 
     /**
      * @notice Estimate ST token amount (in ST raw units) for a given asset amount.
-     * @dev Uses getPosTokenPrice() in 1e18 precision. Falls back to 1:1 human scaling when price source is invalid.
+     * @dev Uses getPosTokenPrice() in 1e18 precision. Returns 0 when price is unavailable.
      */
     function estimatePosAmount(uint256 amountAsset) external view override returns (uint256 positionAmount) {
         uint8 assetDecimals = IERC20Metadata(address(ASSET)).decimals();
         uint8 stDecimals = IERC20Metadata(ST_TOKEN).decimals();
-        return _estimatePosAmountInternal(amountAsset, assetDecimals, stDecimals);
+        return _estimatePosAmount(amountAsset, assetDecimals, stDecimals);
     }
 
-    function _estimatePosAmountInternal(uint256 amountAsset, uint8 assetDecimals, uint8 stDecimals)
+    function _estimatePosAmount(uint256 amountAsset, uint8 assetDecimals, uint8 stDecimals)
         internal
         view
         returns (uint256)
@@ -94,52 +92,12 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
         }
         uint256 priceE18 = getPosTokenPrice();
         if (priceE18 == 0) {
-            return _scaleToStRaw(amountAsset, assetDecimals, stDecimals);
+            return 0;
         }
         if (stDecimals >= assetDecimals) {
             return Math.mulDiv(amountAsset, 1e18 * (10 ** (stDecimals - assetDecimals)), priceE18, Math.Rounding.Floor);
         }
         return Math.mulDiv(amountAsset, 1e18, priceE18 * (10 ** (assetDecimals - stDecimals)), Math.Rounding.Floor);
-    }
-
-    function _scaleToStRaw(uint256 amountAssetRaw, uint8 assetDecimals, uint8 stDecimals)
-        internal
-        pure
-        returns (uint256)
-    {
-        if (stDecimals >= assetDecimals) {
-            return amountAssetRaw * (10 ** (stDecimals - assetDecimals));
-        }
-        return amountAssetRaw / (10 ** (assetDecimals - stDecimals));
-    }
-
-    function _scaleToAssetRaw(uint256 amountStRaw, uint8 stDecimals, uint8 assetDecimals)
-        internal
-        pure
-        returns (uint256)
-    {
-        if (assetDecimals >= stDecimals) {
-            return amountStRaw * (10 ** (assetDecimals - stDecimals));
-        }
-        return amountStRaw / (10 ** (stDecimals - assetDecimals));
-    }
-
-    function _estimateAssetAmount(uint256 amountPosRaw, uint8 assetDecimals, uint8 stDecimals)
-        internal
-        view
-        returns (uint256)
-    {
-        if (amountPosRaw == 0) {
-            return _scaleToAssetRaw(amountPosRaw, stDecimals, assetDecimals);
-        }
-        uint256 priceE18 = getPosTokenPrice();
-        if (priceE18 == 0) {
-            return _scaleToAssetRaw(amountPosRaw, stDecimals, assetDecimals);
-        }
-        if (assetDecimals >= stDecimals) {
-            return Math.mulDiv(amountPosRaw, priceE18 * (10 ** (assetDecimals - stDecimals)), 1e18, Math.Rounding.Floor);
-        }
-        return Math.mulDiv(amountPosRaw, priceE18, 1e18 * (10 ** (stDecimals - assetDecimals)), Math.Rounding.Floor);
     }
 
     function _estimateAssetAmount(uint256 amountPosRaw, uint8 assetDecimals, uint8 stDecimals, Math.Rounding rounding)
@@ -148,11 +106,11 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
         returns (uint256)
     {
         if (amountPosRaw == 0) {
-            return _scaleToAssetRaw(amountPosRaw, stDecimals, assetDecimals, rounding);
+            return 0;
         }
         uint256 priceE18 = getPosTokenPrice();
         if (priceE18 == 0) {
-            return _scaleToAssetRaw(amountPosRaw, stDecimals, assetDecimals, rounding);
+            return 0;
         }
         if (assetDecimals >= stDecimals) {
             return Math.mulDiv(amountPosRaw, priceE18 * (10 ** (assetDecimals - stDecimals)), 1e18, rounding);
@@ -169,9 +127,16 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
         uint8 assetDecimals = IERC20Metadata(address(ASSET)).decimals();
         uint8 stDecimals = IERC20Metadata(ST_TOKEN).decimals();
         uint256 settledVaultPosBalance = IERC20(ST_TOKEN).balanceOf(VAULT);
-        return _estimateAssetAmount(settledVaultPosBalance, assetDecimals, stDecimals);
+        return _estimateAssetAmount(settledVaultPosBalance, assetDecimals, stDecimals, Math.Rounding.Floor);
     }
 
+    /**
+     * @notice Preview a deposit aligned to subscribe step and minimum.
+     * @param amountAsset Requested asset amount (vault asset raw units).
+     * @return ok True when aligned amount is non-zero and meets minSubscribeAsset.
+     * @return executableAssetAmount Step-aligned asset amount actually executable. Zero when ok is false.
+     * @return expectedPosAmount Estimated position-token amount (ST raw units) for executableAssetAmount.
+     */
     function previewDeposit(uint256 amountAsset)
         external
         view
@@ -186,17 +151,26 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
         view
         returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
     {
-        executableAssetAmount = _floorToStep(amountAsset, subscribeStepAsset);
-        if (executableAssetAmount == 0 || executableAssetAmount < minSubscribeAsset) {
+        ExecutionConstraints memory constraints = executionConstraints;
+        executableAssetAmount = _floorToStep(amountAsset, constraints.subscribeStepAsset);
+        if (executableAssetAmount == 0 || executableAssetAmount < constraints.minSubscribeAsset) {
             return (false, 0, 0);
         }
 
         uint8 assetDecimals = IERC20Metadata(address(ASSET)).decimals();
         uint8 stDecimals = IERC20Metadata(ST_TOKEN).decimals();
-        expectedPosAmount = _estimatePosAmountInternal(executableAssetAmount, assetDecimals, stDecimals);
+        expectedPosAmount = _estimatePosAmount(executableAssetAmount, assetDecimals, stDecimals);
         ok = executableAssetAmount > 0;
     }
 
+    /**
+     * @notice Preview a redeem aligned to redeem step and minimum.
+     * @param amountAsset Requested asset amount the caller wants to receive.
+     * @return ok True when aligned position-token amount is non-zero and meets minRedeemPos.
+     * @return executableAssetAmount Asset amount corresponding to the step-aligned position-token amount.
+     *         Equals amountAsset when no rounding is applied; otherwise reflects the rounded-up asset cost.
+     * @return expectedPosAmount Step-aligned position-token amount (ST raw units) to redeem. Zero when ok is false.
+     */
     function previewRedeem(uint256 amountAsset)
         external
         view
@@ -206,13 +180,14 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
         uint8 assetDecimals = IERC20Metadata(address(ASSET)).decimals();
         uint8 stDecimals = IERC20Metadata(ST_TOKEN).decimals();
 
-        uint256 originalPosAmount = _estimatePosAmountInternal(amountAsset, assetDecimals, stDecimals);
+        uint256 originalPosAmount = _estimatePosAmount(amountAsset, assetDecimals, stDecimals);
         if (originalPosAmount == 0) {
             return (false, 0, 0);
         }
 
-        expectedPosAmount = _floorToStep(originalPosAmount, redeemStepPos);
-        if (expectedPosAmount == 0 || expectedPosAmount < minRedeemPos) {
+        ExecutionConstraints memory constraints = executionConstraints;
+        expectedPosAmount = _floorToStep(originalPosAmount, constraints.redeemStepPos);
+        if (expectedPosAmount == 0 || expectedPosAmount < constraints.minRedeemPos) {
             return (false, 0, 0);
         }
 
@@ -248,27 +223,28 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
         emit RedeemDeadlineWindowUpdated(newWindow);
     }
 
-    function setExecutionSteps(uint256 subscribeStepAsset_, uint256 redeemStepPos_)
-        external
-        onlyRole(DEFAULT_ADMIN_ROLE)
-    {
-        subscribeStepAsset = subscribeStepAsset_;
-        redeemStepPos = redeemStepPos_;
+    /**
+     * @notice Set the subscribe/redeem minimums and increments enforced by the underlying DigiFt venue.
+     * @param minSubscribeAsset_ Min asset amount for subscribe. Zero disables the check.
+     * @param subscribeStepAsset_ Subscribe increment in asset raw units. Zero disables step normalization.
+     * @param minRedeemPos_ Min position-token amount for redeem. Zero disables the check.
+     * @param redeemStepPos_ Redeem increment in position-token raw units. Zero disables step normalization.
+     * @dev preview* returns (false, 0, 0) when the aligned amount is below configured minimums.
+     */
+    function setExecutionConstraints(
+        uint256 minSubscribeAsset_,
+        uint256 subscribeStepAsset_,
+        uint256 minRedeemPos_,
+        uint256 redeemStepPos_
+    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        executionConstraints = ExecutionConstraints({
+            minSubscribeAsset: minSubscribeAsset_,
+            subscribeStepAsset: subscribeStepAsset_,
+            minRedeemPos: minRedeemPos_,
+            redeemStepPos: redeemStepPos_
+        });
 
-        emit ExecutionStepsUpdated(subscribeStepAsset_, redeemStepPos_);
-    }
-
-    /// @notice Set the minimum subscribe/redeem amounts enforced by the underlying DigiFt venue.
-    /// @param minSubscribeAsset_ Min asset amount (USDC) for subscribe. Zero disables the check.
-    /// @param minRedeemPos_ Min position-token amount for redeem. Zero disables the check.
-    /// @dev Values here should mirror DigiFt's own minimums. preview* will return (false, 0, 0)
-    ///      when the aligned amount is below these thresholds, so controller paths can skip
-    ///      gracefully instead of reverting inside DigiFt.
-    function setMinAmounts(uint256 minSubscribeAsset_, uint256 minRedeemPos_) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        minSubscribeAsset = minSubscribeAsset_;
-        minRedeemPos = minRedeemPos_;
-
-        emit MinAmountsUpdated(minSubscribeAsset_, minRedeemPos_);
+        emit ExecutionConstraintsUpdated(minSubscribeAsset_, subscribeStepAsset_, minRedeemPos_, redeemStepPos_);
     }
 
     // =============================================================
@@ -335,12 +311,6 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
     // Internal Protocol Calls
     // =============================================================
 
-    /**
-     * @notice Internal helper to call SubRed subscribe.
-     * @param amountAsset Amount to subscribe (asset raw units).
-     * @param deadline Digift subscribe deadline.
-     * @dev This function only sends subscribe request.
-     */
     function _subscribe(uint256 amountAsset, uint64 deadline) internal {
         if (amountAsset == 0) {
             revert InvalidAmount();
@@ -358,12 +328,6 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
         return amount - (amount % step);
     }
 
-    /**
-     * @notice Internal helper to call SubRed redeem.
-     * @param quantity Amount of ST token (shares) to redeem.
-     * @param deadline Digift redeem deadline.
-     * @dev Approves ST_TOKEN to SubRed then calls redeem.
-     */
     function _redeem(uint256 quantity, uint64 deadline) internal {
         if (quantity == 0) {
             revert InvalidAmount();
@@ -372,20 +336,5 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
         IERC20(ST_TOKEN).forceApprove(address(SUB_RED), quantity);
         SUB_RED.redeem(ST_TOKEN, address(ASSET), quantity, deadline);
         IERC20(ST_TOKEN).forceApprove(address(SUB_RED), 0);
-    }
-
-    function _scaleToAssetRaw(uint256 amountStRaw, uint8 stDecimals, uint8 assetDecimals, Math.Rounding rounding)
-        internal
-        pure
-        returns (uint256)
-    {
-        if (assetDecimals >= stDecimals) {
-            return amountStRaw * (10 ** (assetDecimals - stDecimals));
-        }
-        uint256 divisor = 10 ** (stDecimals - assetDecimals);
-        if (rounding == Math.Rounding.Ceil) {
-            return Math.ceilDiv(amountStRaw, divisor);
-        }
-        return amountStRaw / divisor;
     }
 }
