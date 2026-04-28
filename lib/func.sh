@@ -89,11 +89,16 @@ forge_script() {
       FORGE_OPTS="${FORGE_OPTS} --private-key ${F_PRIVATE_KEY}"
     elif [[ "$F_WALLET_TYPE" == "LEDGER" ]]; then
       log_info "Use $F_WALLET_TYPE wallet"
-      if [[ -z "$F_MNEMONIC_INDEX" ]]; then
-        log_error "MNEMONIC_INDEX must be set for LEDGER wallet, exit."
-        exit 1
+      FORGE_OPTS="${FORGE_OPTS} --ledger --mnemonic-indexes ${F_MNEMONIC_INDEX:-0}"
+      if [[ -n "$F_HARDWARE_DERIVATION_PATH" ]]; then
+        FORGE_OPTS="${FORGE_OPTS} --mnemonic-derivation-paths ${F_HARDWARE_DERIVATION_PATH}"
       fi
-      FORGE_OPTS="${FORGE_OPTS} --ledger --mnemonic-indexes ${F_MNEMONIC_INDEX}"
+    elif [[ "$F_WALLET_TYPE" == "TREZOR" ]]; then
+      log_info "Use $F_WALLET_TYPE wallet"
+      FORGE_OPTS="${FORGE_OPTS} --trezor --mnemonic-indexes ${F_MNEMONIC_INDEX:-0}"
+      if [[ -n "$F_HARDWARE_DERIVATION_PATH" ]]; then
+        FORGE_OPTS="${FORGE_OPTS} --mnemonic-derivation-paths ${F_HARDWARE_DERIVATION_PATH}"
+      fi
     elif [[ "$F_WALLET_TYPE" == "MNEMONIC" ]]; then
       log_info "Use $F_WALLET_TYPE wallet"
       if [[ -z "$F_MNEMONIC_INDEX" ]]; then
@@ -103,13 +108,14 @@ forge_script() {
       FORGE_OPTS="${FORGE_OPTS} --mnemonics ${F_MNEMONIC} --mnemonic-indexes ${F_MNEMONIC_INDEX}"
     elif [[ "$F_WALLET_TYPE" == "AWS_KMS" ]]; then
       log_info "Use $F_WALLET_TYPE wallet"
-      if [[ -z "$AWS_KMS_KEY_ID" ]]; then
-        log_error "AWS_KMS_KEY_ID must be set for AWS_KMS wallet, exit."
+      if [[ -z "$AWS_KMS_KEY_ID" && -z "$F_AWS_KMS_KEY_ID" ]]; then
+        log_error "AWS_KMS_KEY_ID or F_AWS_KMS_KEY_ID must be set for AWS_KMS wallet, exit."
         exit 1
       fi
+      export AWS_KMS_KEY_ID="${AWS_KMS_KEY_ID:-$F_AWS_KMS_KEY_ID}"
       FORGE_OPTS="${FORGE_OPTS} --aws"
     else
-      log_error "Unknown wallet type. Options: AWS_KMS, PRIVATE_KEY, LEDGER, MNEMONIC"
+      log_error "Unknown wallet type. Options: AWS_KMS, PRIVATE_KEY, LEDGER, TREZOR, MNEMONIC"
     fi
   fi
 
