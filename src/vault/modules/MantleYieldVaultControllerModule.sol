@@ -46,7 +46,6 @@ abstract contract MantleYieldVaultControllerModule is MantleYieldVaultStorage {
     function approveToAdapter(address adapter, address token, uint256 amount) external onlyController {
         if (!isAdapter[adapter]) revert Vault__AdapterNotRegistered(adapter);
         IERC20(token).forceApprove(adapter, amount);
-        emit AdapterApproved(adapter, token, amount);
     }
 
     function updateRequestBatch(uint256[] calldata ids, RequestStatus newStatus) external onlyController {
@@ -175,12 +174,10 @@ abstract contract MantleYieldVaultControllerModule is MantleYieldVaultStorage {
 
         if (r.isInvest) {
             // Invest confirmed: tokens arrived, clear USDC in-flight
-            if (totalInvestInFlight < r.usdcAmount) revert Vault__Underflow(totalInvestInFlight, r.usdcAmount);
             totalInvestInFlight -= r.usdcAmount;
             adapterInvestInFlightTokens[r.adapter] -= r.tokenAmount;
         } else {
             // Redeem confirmed: USDC arrived, clear USDC in-flight
-            if (totalRedeemInFlight < r.usdcAmount) revert Vault__Underflow(totalRedeemInFlight, r.usdcAmount);
             totalRedeemInFlight -= r.usdcAmount;
             adapterRedeemInFlightUsdc[r.adapter] -= r.usdcAmount;
         }
