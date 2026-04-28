@@ -710,7 +710,7 @@ contract StrategyControllerUnitTest is Test {
         asyncFlags[1] = true;
 
         vm.prank(manager);
-        vm.expectRevert(StrategyController.UpdateStrategiesLengthMismatch.selector);
+        vm.expectRevert(StrategyController.Controller__UpdateStrategiesLengthMismatch.selector);
         controller.updateStrategies(adapters, weights, priorities, asyncFlags);
     }
 
@@ -735,7 +735,9 @@ contract StrategyControllerUnitTest is Test {
 
         vm.prank(manager);
         vm.expectRevert(
-            abi.encodeWithSelector(StrategyController.DuplicateStrategyUpdate.selector, address(syncAdapter))
+            abi.encodeWithSelector(
+                StrategyController.Controller__DuplicateStrategyUpdate.selector, address(syncAdapter)
+            )
         );
         controller.updateStrategies(adapters, weights, priorities, asyncFlags);
     }
@@ -760,7 +762,9 @@ contract StrategyControllerUnitTest is Test {
         asyncFlags[1] = true;
 
         vm.prank(manager);
-        vm.expectRevert(abi.encodeWithSelector(StrategyController.InvalidPriorityOrder.selector, address(asyncAdapter)));
+        vm.expectRevert(
+            abi.encodeWithSelector(StrategyController.Controller__InvalidPriorityOrder.selector, address(asyncAdapter))
+        );
         controller.updateStrategies(adapters, weights, priorities, asyncFlags);
 
         address[] memory ordered = new address[](2);
@@ -802,7 +806,7 @@ contract StrategyControllerUnitTest is Test {
         ordered[1] = address(asyncAdapter);
 
         vm.prank(manager);
-        vm.expectRevert(StrategyController.UpdateStrategiesLengthMismatch.selector);
+        vm.expectRevert(StrategyController.Controller__UpdateStrategiesLengthMismatch.selector);
         controller.updateStrategiesAndOrder(adapters, weights, priorities, asyncFlags, ordered);
     }
 
@@ -815,7 +819,7 @@ contract StrategyControllerUnitTest is Test {
         controller.rebalance();
 
         vm.prank(address(executorGateway));
-        vm.expectRevert(StrategyController.CooldownNotElapsed.selector);
+        vm.expectRevert(StrategyController.Controller__CooldownNotElapsed.selector);
         controller.rebalance();
     }
 
@@ -1201,7 +1205,9 @@ contract StrategyControllerUnitTest is Test {
         vault.setLocked(100e18);
 
         vm.prank(address(executorGateway));
-        vm.expectRevert(abi.encodeWithSelector(StrategyController.DivestInsufficient.selector, 100e18, 50e18));
+        vm.expectRevert(
+            abi.encodeWithSelector(StrategyController.Controller__DivestInsufficient.selector, 100e18, 50e18)
+        );
         controller.processRedeemBatch(ids);
     }
 
@@ -1212,7 +1218,7 @@ contract StrategyControllerUnitTest is Test {
         ids[1] = 1;
 
         vm.prank(address(executorGateway));
-        vm.expectRevert(StrategyController.IdsNotSorted.selector);
+        vm.expectRevert(StrategyController.Controller__IdsNotSorted.selector);
         controller.processRedeemBatch(ids);
     }
 
@@ -1316,7 +1322,7 @@ contract StrategyControllerUnitTest is Test {
         settledAssets[1] = 1;
 
         vm.prank(address(executorGateway));
-        vm.expectRevert(StrategyController.IdsNotSorted.selector);
+        vm.expectRevert(StrategyController.Controller__IdsNotSorted.selector);
         controller.finalizeRedeemBatch(ids, settledAssets);
     }
 
@@ -1429,7 +1435,9 @@ contract StrategyControllerUnitTest is Test {
         investRefundAssetAmounts[0] = 0;
 
         vm.prank(address(executorGateway));
-        vm.expectRevert(abi.encodeWithSelector(StrategyController.InvalidInvestInFlight.selector, inFlightId));
+        vm.expectRevert(
+            abi.encodeWithSelector(StrategyController.Controller__InvalidInvestInFlight.selector, inFlightId)
+        );
         controller.settleAdapter(
             address(asyncAdapter),
             _investSettlement(investInFlightIds, investSettledPosAmounts, investRefundAssetAmounts),
@@ -1439,7 +1447,9 @@ contract StrategyControllerUnitTest is Test {
 
     function test_RevertWhen_SettleAdapterInvalidStrategy() public {
         vm.prank(address(executorGateway));
-        vm.expectRevert(abi.encodeWithSelector(StrategyController.InvalidStrategy.selector, address(syncAdapter)));
+        vm.expectRevert(
+            abi.encodeWithSelector(StrategyController.Controller__InvalidStrategy.selector, address(syncAdapter))
+        );
         controller.settleAdapter(
             address(syncAdapter),
             _investSettlement(new uint256[](0), new uint256[](0), new uint256[](0)),
@@ -1456,7 +1466,7 @@ contract StrategyControllerUnitTest is Test {
         investRefundAssetAmounts[0] = 0;
 
         vm.prank(address(executorGateway));
-        vm.expectRevert(StrategyController.SettleAmountsLengthMismatch.selector);
+        vm.expectRevert(StrategyController.Controller__SettleAmountsLengthMismatch.selector);
         controller.settleAdapter(
             address(asyncAdapter),
             _investSettlement(new uint256[](0), investSettledPosAmounts, investRefundAssetAmounts),
@@ -1478,7 +1488,7 @@ contract StrategyControllerUnitTest is Test {
         vm.prank(address(executorGateway));
         vm.expectRevert(
             abi.encodeWithSelector(
-                StrategyController.InvestSweepAmountMismatch.selector, address(asyncAdapter), 10e18, 0
+                StrategyController.Controller__InvestSweepAmountMismatch.selector, address(asyncAdapter), 10e18, 0
             )
         );
         controller.settleAdapter(
@@ -1564,7 +1574,7 @@ contract StrategyControllerUnitTest is Test {
         vm.prank(address(executorGateway));
         vm.expectRevert(
             abi.encodeWithSelector(
-                StrategyController.InvestPosAmountUnavailable.selector, address(asyncAdapter), 900e18
+                StrategyController.Controller__InvestPosAmountUnavailable.selector, address(asyncAdapter), 900e18
             )
         );
         controller.rebalance();
@@ -1579,7 +1589,7 @@ contract StrategyControllerUnitTest is Test {
         vm.prank(address(executorGateway));
         vm.expectRevert(
             abi.encodeWithSelector(
-                StrategyController.InvestPosAmountUnavailable.selector, address(asyncAdapter), 900e18
+                StrategyController.Controller__InvestPosAmountUnavailable.selector, address(asyncAdapter), 900e18
             )
         );
         controller.rebalance();
@@ -1887,7 +1897,7 @@ contract StrategyControllerUnitTest is Test {
         redeemBatch[0] = _redeemSettlement(new uint256[](0), new uint256[](0));
 
         vm.prank(address(executorGateway));
-        vm.expectRevert(StrategyController.SettleAmountsLengthMismatch.selector);
+        vm.expectRevert(StrategyController.Controller__SettleAmountsLengthMismatch.selector);
         controller.settleAdapters(adapters, investBatchLengthMismatch, redeemBatch);
     }
 
@@ -1906,7 +1916,9 @@ contract StrategyControllerUnitTest is Test {
         redeemBatch[0] = _redeemSettlement(new uint256[](0), new uint256[](0));
 
         vm.prank(address(executorGateway));
-        vm.expectRevert(abi.encodeWithSelector(StrategyController.InvalidInvestInFlight.selector, badInFlightId));
+        vm.expectRevert(
+            abi.encodeWithSelector(StrategyController.Controller__InvalidInvestInFlight.selector, badInFlightId)
+        );
         controller.settleAdapters(adapters, investBatch, redeemBatch);
     }
 
@@ -1917,7 +1929,7 @@ contract StrategyControllerUnitTest is Test {
         redeemSettledAmounts[0] = 1;
 
         vm.prank(address(executorGateway));
-        vm.expectRevert(StrategyController.SettleAmountsLengthMismatch.selector);
+        vm.expectRevert(StrategyController.Controller__SettleAmountsLengthMismatch.selector);
         controller.settleAdapter(
             address(asyncAdapter),
             _investSettlement(new uint256[](0), new uint256[](0), new uint256[](0)),
@@ -1937,7 +1949,7 @@ contract StrategyControllerUnitTest is Test {
         vm.prank(address(executorGateway));
         vm.expectRevert(
             abi.encodeWithSelector(
-                StrategyController.RedeemSweepAmountMismatch.selector, address(asyncAdapter), 100e18, 0
+                StrategyController.Controller__RedeemSweepAmountMismatch.selector, address(asyncAdapter), 100e18, 0
             )
         );
         controller.settleAdapter(
@@ -2026,7 +2038,7 @@ contract StrategyControllerUnitTest is Test {
         uint256 inFlightId = vault.createInFlight(address(asyncAdapter), address(posToken), 50e18, 100e18, false);
 
         vm.prank(manager);
-        vm.expectRevert(abi.encodeWithSelector(StrategyController.InvalidRetryAmount.selector));
+        vm.expectRevert(abi.encodeWithSelector(StrategyController.Controller__InvalidRetryAmount.selector));
         controller.retryRedeemInFlight(address(asyncAdapter), inFlightId, 60e18);
     }
 

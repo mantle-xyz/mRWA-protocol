@@ -222,7 +222,7 @@ contract OperatorExecutorTest is Test {
 
     function test_RevertWhen_ZeroController() public {
         vm.prank(bot);
-        vm.expectRevert(OperatorExecutor.InvalidAddress.selector);
+        vm.expectRevert(OperatorExecutor.OperatorExecutor__InvalidAddress.selector);
         executor.executeRebalance(address(0));
     }
 
@@ -230,7 +230,9 @@ contract OperatorExecutorTest is Test {
         address eoaController = makeAddr("eoaController");
 
         vm.prank(bot);
-        vm.expectRevert(abi.encodeWithSelector(OperatorExecutor.InvalidController.selector, eoaController));
+        vm.expectRevert(
+            abi.encodeWithSelector(OperatorExecutor.OperatorExecutor__InvalidController.selector, eoaController)
+        );
         executor.executeRebalance(eoaController);
     }
 }

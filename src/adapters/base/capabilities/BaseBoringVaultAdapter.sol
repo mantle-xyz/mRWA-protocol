@@ -7,7 +7,7 @@ import {BaseAdapter} from "../BaseAdapter.sol";
 abstract contract BaseBoringVaultAdapter is BaseAdapter {
     address public immutable BORING_VAULT;
 
-    error BoringVaultCallFailed(bytes data);
+    error Adapter__BoringVaultCallFailed(bytes data);
 
     constructor(address vault_, address boringVault, address admin, address controller, address accountant)
         BaseAdapter(vault_, admin, controller, accountant, address(0))
@@ -18,7 +18,7 @@ abstract contract BaseBoringVaultAdapter is BaseAdapter {
     function _callBoringVault(bytes memory data) internal returns (bytes memory result) {
         (bool ok, bytes memory ret) = BORING_VAULT.call(data);
         if (!ok) {
-            revert BoringVaultCallFailed(ret);
+            revert Adapter__BoringVaultCallFailed(ret);
         }
         result = ret;
     }

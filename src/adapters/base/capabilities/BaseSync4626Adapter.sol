@@ -20,12 +20,12 @@ abstract contract BaseSync4626Adapter is BaseAdapter {
 
     /// @notice Sync-only strategies generally do not implement async request flow.
     function requestRedeemAsync(uint256, address) external pure virtual override {
-        revert Unsupported();
+        revert Adapter__Unsupported();
     }
 
     /// @notice Sync-only strategies do not support retrying async redeem requests.
     function retryRedeemAsync(uint256, address) external pure virtual override {
-        revert Unsupported();
+        revert Adapter__Unsupported();
     }
 
     function _erc4626Deposit(uint256 amount, address receiver) internal returns (uint256 sharesOrPos) {
