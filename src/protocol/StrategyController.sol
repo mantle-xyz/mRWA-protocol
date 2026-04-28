@@ -102,10 +102,8 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     error InvalidPriorityOrder(address adapter);
     error StrategyInactive(address adapter);
     error WeightsMustBe10000(uint256 actualTotalWeight);
-    error InsufficientCashForReady(uint256 required, uint256 available);
     error DuplicateStrategyInOrder(address adapter);
     error IdsNotSorted();
-    error InvalidRequestState(uint256 id, IMantleYieldVault.RequestStatus status);
     error InvalidRedeemInFlight(uint256 inFlightId);
     error InvalidInvestInFlight(uint256 inFlightId);
     error InvestInFlightIdsRequired(address adapter);
@@ -136,6 +134,16 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     // Initialization
     // =============================================================
 
+    /**
+     * @notice Initialize controller with vault, roles, and risk parameters.
+     * @param vault_ Vault address. Must be non-zero.
+     * @param admin_ Address granted DEFAULT_ADMIN_ROLE.
+     * @param operatorExecutor_ Contract address granted OPERATOR_EXECUTOR_ROLE. Must be a contract.
+     * @param pauser_ Address granted PAUSER_ROLE.
+     * @param bufferTargetBps_ Target free-cash buffer as bps of net assets. <= 10000.
+     * @param rebalanceThresholdBps_ No-op band around buffer target in bps. <= 10000.
+     * @param rebalanceCooldown_ Minimum seconds between rebalance executions.
+     */
     function initialize(
         address vault_,
         address admin_,
@@ -179,7 +187,16 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         return strategyOrder.length;
     }
 
-    /// @notice Read current rebalance accounting state with the same formula used by rebalance().
+    /**
+     * @notice Read current rebalance accounting state with the same formula used by rebalance().
+     * @return totalCash Vault asset balance.
+     * @return freeCash Cash available after deducting locked liabilities.
+     * @return idealCash freeCash plus redeem in-flight (treated as future cash for invest sizing).
+     * @return netAssets vault.totalAssets() — net of floating-locked liabilities.
+     * @return targetCash Desired buffer cash (netAssets * bufferTargetBps / 1e4) plus current cash deficit.
+     * @return threshold No-op band around targetCash (netAssets * rebalanceThresholdBps / 1e4).
+     * @return hasPendingRequest True if there are unprocessed redeem requests blocking divest.
+     */
     function getRebalanceState()
         external
         view
@@ -196,8 +213,13 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         return _readRebalanceState();
     }
 
-    /// @notice Preview whether rebalance should run at current block and what action is expected.
-    /// @dev action: 0 = NONE, 1 = INVEST, 2 = DIVEST.
+    /**
+     * @notice Preview whether rebalance should run at current block and what action is expected.
+     * @return shouldRebalance True if rebalance() would perform an action at current block.
+     * @return action 0 = NONE, 1 = INVEST, 2 = DIVEST.
+     * @return amount Expected asset amount to invest or divest. Zero when action is NONE.
+     * @dev Returns NONE during cooldown without further computation.
+     */
     function previewRebalance() external view returns (bool shouldRebalance, uint8 action, uint256 amount) {
         if (block.timestamp < uint256(lastRebalance) + uint256(rebalanceCooldown)) {
             return (false, REBALANCE_ACTION_NONE, 0);
@@ -209,6 +231,12 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         shouldRebalance = action != REBALANCE_ACTION_NONE;
     }
 
+    /**
+     * @notice Update buffer target, threshold, and cooldown.
+     * @param bufferTargetBps_ Target free-cash buffer in bps. <= 10000.
+     * @param rebalanceThresholdBps_ No-op band in bps. <= 10000.
+     * @param rebalanceCooldown_ Minimum seconds between rebalance executions.
+     */
     function setRiskParams(uint16 bufferTargetBps_, uint16 rebalanceThresholdBps_, uint64 rebalanceCooldown_)
         external
         onlyAdmin
@@ -222,6 +250,13 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         emit RiskParamsUpdated(bufferTargetBps_, rebalanceThresholdBps_, rebalanceCooldown_);
     }
 
+    /**
+     * @notice Register a new strategy adapter (initially inactive).
+     * @param adapter Adapter contract address. Must be a contract.
+     * @param targetWeightBps Target capital weight in bps. <= 10000.
+     * @param priority Execution priority for ordering. Order is monotonic non-decreasing.
+     * @param isAsync True if adapter uses async redeem flow.
+     */
     function registerStrategy(address adapter, uint16 targetWeightBps, uint16 priority, bool isAsync)
         external
         onlyAdmin
@@ -265,6 +300,11 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         emit StrategyUpdated(adapter, info.targetWeightBps, info.priority, info.isAsync, true);
     }
 
+    /**
+     * @notice Deactivate a strategy and remove it from the vault adapter registry.
+     * @param adapter Adapter address.
+     * @dev Reverts if adapter is in current strategyOrder, or has any pending invest/redeem in-flight.
+     */
     function deactivateStrategy(address adapter) external onlyAdmin {
         StrategyInfo storage info = strategyInfo[adapter];
         if (!info.exists) {
@@ -292,6 +332,14 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         emit StrategyUpdated(adapter, info.targetWeightBps, info.priority, info.isAsync, false);
     }
 
+    /**
+     * @notice Update target weight, priority, and isAsync for multiple strategies atomically.
+     * @param adapters Strategies to update.
+     * @param targetWeightBpsList New target weights in bps, aligned with adapters.
+     * @param priorities New priorities aligned with adapters.
+     * @param isAsyncList New isAsync flags aligned with adapters.
+     * @dev Validates current order invariant after the update.
+     */
     function updateStrategies(
         address[] calldata adapters,
         uint16[] calldata targetWeightBpsList,
@@ -310,6 +358,14 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         _validateCurrentOrderInvariant();
     }
 
+    /**
+     * @notice Update strategies and reset execution order in a single transaction.
+     * @param adapters Strategies to update.
+     * @param targetWeightBpsList New target weights in bps, aligned with adapters.
+     * @param priorities New priorities aligned with adapters.
+     * @param isAsyncList New isAsync flags aligned with adapters.
+     * @param orderedStrategies New execution order; weights of listed strategies must sum to 10000.
+     */
     function updateStrategiesAndOrder(
         address[] calldata adapters,
         uint16[] calldata targetWeightBpsList,
@@ -328,6 +384,10 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         _setStrategyOrder(orderedStrategies);
     }
 
+    /**
+     * @notice Set the execution order for active strategies.
+     * @param orderedStrategies Adapters in priority-monotonic order; weights must sum to 10000.
+     */
     function setStrategyOrder(address[] calldata orderedStrategies) external onlyAdmin {
         _setStrategyOrder(orderedStrategies);
     }
@@ -459,7 +519,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     // =============================================================
 
     /// @notice Set adapter pause state via controller.
-    /// @dev Controller must hold PAUSER_ROLE on target adapter.
+    /// @dev Controller must hold PAUSER_ROLE on the target adapter.
     function setAdapterPaused(address adapter, bool paused_) external onlyPauser nonReentrant {
         if (!strategyInfo[adapter].exists) {
             revert InvalidStrategy(adapter);
@@ -486,8 +546,11 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     // Business Entry Points
     // =============================================================
 
-    /// @notice Execute buffer-based rebalance.
-    /// @dev Invests when free cash is above target+threshold, divests when below target-threshold.
+    /**
+     * @notice Execute buffer-based rebalance.
+     * @dev Invests when idealCash > targetCash + threshold; divests when idealCash + threshold < targetCash.
+     *      Reverts if cooldown has not elapsed. Divest is blocked while pending redeem requests exist.
+     */
     function rebalance() external onlyOperatorExecutor nonReentrant {
         if (block.timestamp < uint256(lastRebalance) + uint256(rebalanceCooldown)) {
             revert CooldownNotElapsed();
@@ -515,9 +578,14 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         lastRebalance = uint64(block.timestamp);
     }
 
-    /// @notice Move redemption requests into PROCESSING and divest when free cash is below batch demand.
-    /// @dev Batch demand is derived on-chain from `ids` using current `exchangeRate`:
-    ///      sum(request.shares * exchangeRate / 1e18).
+    /**
+     * @notice Move redemption requests into PROCESSING and divest when free cash is below batch demand.
+     * @param ids Request ids to process; must be sorted ascending and unique.
+     * @dev Batch demand is derived on-chain from `ids` using current `exchangeRate`:
+     *      sum(request.shares * exchangeRate / 1e18). Divest amount is capped by global cash deficit.
+     *      Reverts with DivestInsufficient only when adapter pool (step-aligned) is strictly below
+     *      shortfall; partial fills due to step residual or below-min are tolerated.
+     */
     function processRedeemBatch(uint256[] calldata ids) external onlyOperatorExecutor nonReentrant {
         _validateSortedIds(ids);
 
@@ -551,14 +619,18 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     // Business - Settlement & Redemption
     // =============================================================
 
-    /// @notice Finalize a processed redeem batch with operator-provided per-request settled assets.
-    /// @dev Preconditions:
-    ///      - `processRedeemBatch(ids)` has already been executed for the same sorted `ids`.
-    ///      - Vault has enough underlying balance to cover `sum(settledAssets)`.
-    ///      - Requests are still in PROCESSING state and not finalized yet.
-    ///      Settlement actions (adapter sweep / in-flight confirmation) are not performed here;
-    ///      run settleAdapter/settleAdapters before this function when needed.
-    ///      On success, the vault marks requests DONE and transfers settled assets to receivers.
+    /**
+     * @notice Finalize a processed redeem batch with operator-provided per-request settled assets.
+     * @param ids Sorted ascending request ids previously processed.
+     * @param settledAssets Per-request actual asset amount aligned with ids.
+     * @dev Preconditions:
+     *      - processRedeemBatch(ids) has already executed for the same sorted ids.
+     *      - Vault has enough underlying balance to cover sum(settledAssets).
+     *      - Requests are still in PROCESSING state and not finalized yet.
+     *      Settlement actions (adapter sweep / in-flight confirmation) are not performed here;
+     *      run settleAdapter/settleAdapters before this function when needed.
+     *      On success, the vault marks requests DONE and transfers settled assets to receivers.
+     */
     function finalizeRedeemBatch(uint256[] calldata ids, uint256[] calldata settledAssets)
         external
         onlyOperatorExecutor
@@ -568,8 +640,13 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         _markBatchReady(ids, settledAssets);
     }
 
-    /// @notice Manual retry path for async redeem in-flight requests after off-chain alerting.
-    /// @dev Does not mutate vault in-flight/request status; it only submits a new adapter-level redeem request.
+    /**
+     * @notice Manual retry path for async redeem in-flight requests after off-chain alerting.
+     * @param adapter Async adapter holding the in-flight record.
+     * @param inFlightId Existing PENDING redeem in-flight id on the adapter.
+     * @param retryPosAmount Position-token amount to retry. Must be in (0, recorded tokenAmount].
+     * @dev Does not mutate vault in-flight/request status; only submits a new adapter-level redeem request.
+     */
     function retryRedeemInFlight(address adapter, uint256 inFlightId, uint256 retryPosAmount)
         external
         onlyAdmin
@@ -599,8 +676,13 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         emit RedeemInFlightRetryRequested(adapter, inFlightId, retryPosAmount);
     }
 
-    /// @notice Settle one adapter by sweeping assets back to vault and confirming in-flight records.
-    /// @dev Invest settlement supports both delivered position tokens and refunded underlying assets.
+    /**
+     * @notice Settle one adapter by sweeping assets back to vault and confirming in-flight records.
+     * @param adapter Target adapter.
+     * @param invest Invest in-flight ids and per-id settled position / refund amounts.
+     * @param redeem Redeem in-flight ids and per-id settled asset amounts.
+     * @dev Invest settlement supports both delivered position tokens and refunded underlying assets.
+     */
     function settleAdapter(
         address adapter,
         IStrategyControllerExecutor.InvestSettlementInput calldata invest,
@@ -609,8 +691,13 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         _settleAdapterInternal(adapter, invest, redeem);
     }
 
-    /// @notice Settle multiple adapters in a single transaction.
-    /// @dev Inputs are grouped per adapter index.
+    /**
+     * @notice Settle multiple adapters in a single transaction.
+     * @param adapters Target adapters.
+     * @param investBatch Invest settlement input per adapter index.
+     * @param redeemBatch Redeem settlement input per adapter index.
+     * @dev All three arrays must have the same length.
+     */
     function settleAdapters(
         address[] calldata adapters,
         IStrategyControllerExecutor.InvestSettlementInput[] calldata investBatch,
@@ -752,12 +839,11 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
 
             uint256 shortfall = targetBalance - currentBalance;
             uint256 alloc = shortfall < remaining ? shortfall : remaining;
-            if (alloc == 0) {
-                continue;
-            }
+
             // Pending invest (sync/async) already covers part of target gap; only invest uncovered delta.
             uint256 originalAlloc = alloc;
             uint256 pendingInvestPos = vault.adapterInvestInFlightTokens(adapter);
+
             if (pendingInvestPos > 0) {
                 // Compare pending coverage against the adapter's full shortfall, not this round's capped alloc.
                 // If estimation fails (returns 0 via fallback), skip deduction to avoid asset/pos unit mismatch.
@@ -915,12 +1001,11 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     }
 
     function _markBatchReady(uint256[] calldata ids, uint256[] calldata settledAssets) internal {
-        uint256 required = _batchRequiredAssets(ids, settledAssets);
-        uint256 available = asset.balanceOf(address(vault));
-        if (available < required) {
-            revert InsufficientCashForReady(required, available);
+        if (ids.length != settledAssets.length) revert ClaimInputsLengthMismatch();
+        uint256 required;
+        for (uint256 i = 0; i < ids.length; i++) {
+            required += settledAssets[i];
         }
-
         vault.markRequestsDone(ids, settledAssets);
         emit RedeemBatchReady(ids.length, required);
     }
@@ -938,12 +1023,8 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     }
 
     function _confirmSingleRedeemInFlight(address expectedAdapter, uint256 inFlightId, uint256 settledAmount) internal {
-        (, address recordAdapter,,, uint256 usdcAmount,, bool isInvest,, IMantleYieldVault.InFlightStatus status) =
-            vault.inFlightRecords(inFlightId);
-        if (
-            recordAdapter != expectedAdapter || isInvest || status != IMantleYieldVault.InFlightStatus.PENDING
-                || usdcAmount == 0
-        ) {
+        (, address recordAdapter,,,,, bool isInvest,,) = vault.inFlightRecords(inFlightId);
+        if (recordAdapter != expectedAdapter || isInvest) {
             revert InvalidRedeemInFlight(inFlightId);
         }
         vault.confirmInFlight(inFlightId, settledAmount, settledAmount == 0);
@@ -955,12 +1036,8 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         uint256 settledPosAmount,
         uint256 refundAssetAmount
     ) internal {
-        (, address recordAdapter,, uint256 tokenAmount,,, bool isInvest,, IMantleYieldVault.InFlightStatus status) =
-            vault.inFlightRecords(inFlightId);
-        if (
-            recordAdapter != adapter || !isInvest || status != IMantleYieldVault.InFlightStatus.PENDING
-                || tokenAmount == 0
-        ) {
+        (, address recordAdapter,,,,, bool isInvest,,) = vault.inFlightRecords(inFlightId);
+        if (recordAdapter != adapter || !isInvest) {
             revert InvalidInvestInFlight(inFlightId);
         }
         vault.confirmInFlight(inFlightId, settledPosAmount, settledPosAmount == 0);
@@ -1117,23 +1194,6 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     // =============================================================
     // Batch Validation Helpers
     // =============================================================
-
-    function _batchRequiredAssets(uint256[] calldata ids, uint256[] calldata settledAssets)
-        internal
-        view
-        returns (uint256 required)
-    {
-        if (ids.length != settledAssets.length) {
-            revert ClaimInputsLengthMismatch();
-        }
-        for (uint256 i = 0; i < ids.length; i++) {
-            (,,,,,,, IMantleYieldVault.RequestStatus status) = vault.requests(ids[i]);
-            if (status != IMantleYieldVault.RequestStatus.PROCESSING) {
-                revert InvalidRequestState(ids[i], status);
-            }
-            required += settledAssets[i];
-        }
-    }
 
     /// @dev Process stage uses current exchange rate to estimate batch settlement amount from request shares.
     function _batchTotalBySharesAndRate(uint256[] calldata ids) internal view returns (uint256 totalAssets) {

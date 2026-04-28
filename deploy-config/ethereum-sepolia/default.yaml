@@ -53,6 +53,7 @@ envs:
   ADAPTER_CONTROLLER: "0xa68d8b8886c35c2f37dee48d0b56f399a5d88208"
   ADAPTER_ACCOUNTANT: "0x93a44c2c92c9ec8a290bcf6a5efb8459c3ee184d"
   ADAPTER_PRICE_ORACLE: "0x0000000000000000000000000000000000000000"  # optional, default: address(0)
+  ADAPTER_MANUAL_POS_TOKEN_PRICE: "0" # optional, default: 0; only set non-zero when ADAPTER_PRICE_ORACLE is address(0)
   F_USDC_ADDRESS: "0xc40fa5d8cf408baa63019137033d2698377fb243"
 
   # ── UpgradeStrategyController params ─────────────────────
