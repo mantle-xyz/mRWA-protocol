@@ -382,8 +382,12 @@ contract MockVaultForController {
         return total > locked ? total - locked : 0;
     }
 
-    /// @dev M-8: StrategyController._hasPendingLatestRequest probes this. No requests in these
-    ///      integration tests, so returning 1 keeps the predicate false.
+    /// @dev M-8: StrategyController now uses vault.pendingRequestCount() instead of
+    ///      _hasPendingLatestRequest. No requests in these integration tests → return 0.
+    function pendingRequestCount() external pure returns (uint256) {
+        return 0;
+    }
+
     function nextRequestId() external pure returns (uint256) {
         return 1;
     }
@@ -504,6 +508,8 @@ contract MockAdapterForUpgrade is IStrategyAdapter {
     function priceOracle() external pure returns (address) { return address(0); }
     function getPosTokenPrice() external pure returns (uint256) { return 0; }
     function estimatePosAmount(uint256 assetAmount) external pure returns (uint256) { return assetAmount; }
+    function minSubscribeAsset() external pure returns (uint256) { return 0; }
+    function minRedeemPos() external pure returns (uint256) { return 0; }
     function previewDeposit(uint256 assetAmount)
         external
         pure

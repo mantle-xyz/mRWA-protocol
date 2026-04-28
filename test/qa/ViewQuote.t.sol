@@ -167,6 +167,9 @@ contract MockStrategyAdapter_VQ is IStrategyAdapter {
         return assetAmount;
     }
 
+    function minSubscribeAsset() external pure returns (uint256) { return 0; }
+    function minRedeemPos() external pure returns (uint256) { return 0; }
+
     function previewDeposit(uint256 assetAmount)
         external
         pure

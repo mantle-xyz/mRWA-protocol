@@ -67,6 +67,8 @@ contract MockSyncAdapter_RB is IStrategyAdapter {
     function priceOracle() external pure returns (address) { return address(0); }
     function getPosTokenPrice() external pure returns (uint256) { return 1e18; }
     function estimatePosAmount(uint256 assetAmount) external pure returns (uint256) { return assetAmount; }
+    function minSubscribeAsset() external pure returns (uint256) { return 0; }
+    function minRedeemPos() external pure returns (uint256) { return 0; }
     function previewDeposit(uint256 assetAmount)
         external
         pure
@@ -157,6 +159,8 @@ contract MockAsyncAdapter_RB is IStrategyAdapter {
         if (posTokenPrice == 0) return assetAmount;
         return assetAmount * 1e18 / posTokenPrice;
     }
+    function minSubscribeAsset() external pure returns (uint256) { return 0; }
+    function minRedeemPos() external pure returns (uint256) { return 0; }
 
     function previewDeposit(uint256 assetAmount)
         external
@@ -243,6 +247,8 @@ contract MockRevertingAdapter_RB is IStrategyAdapter {
     function priceOracle() external pure returns (address) { return address(0); }
     function getPosTokenPrice() external pure returns (uint256) { return 1e18; }
     function estimatePosAmount(uint256 assetAmount) external pure returns (uint256) { return assetAmount; }
+    function minSubscribeAsset() external pure returns (uint256) { return 0; }
+    function minRedeemPos() external pure returns (uint256) { return 0; }
     function previewDeposit(uint256 assetAmount)
         external
         pure
@@ -331,6 +337,8 @@ contract MockPreviewFailAdapter_RB is IStrategyAdapter {
     function priceOracle() external pure returns (address) { return address(0); }
     function getPosTokenPrice() external pure returns (uint256) { return 1e18; }
     function estimatePosAmount(uint256 assetAmount) external pure returns (uint256) { return assetAmount; }
+    function minSubscribeAsset() external pure returns (uint256) { return 0; }
+    function minRedeemPos() external pure returns (uint256) { return 0; }
     function vault() external view returns (address) { return VAULT; }
     function totalValue() external view returns (uint256) { return IERC20(ASSET).balanceOf(address(this)); }
 
@@ -404,6 +412,8 @@ contract MockStepAdapter_RB is IStrategyAdapter {
     function priceOracle() external pure returns (address) { return address(0); }
     function getPosTokenPrice() external pure returns (uint256) { return 1e18; }
     function estimatePosAmount(uint256 assetAmount) external pure returns (uint256) { return assetAmount; }
+    function minSubscribeAsset() external pure returns (uint256) { return 0; }
+    function minRedeemPos() external pure returns (uint256) { return 0; }
     function vault() external view returns (address) { return VAULT; }
     function totalValue() external view returns (uint256) { return IERC20(ASSET).balanceOf(address(this)); }
 
@@ -469,6 +479,8 @@ contract MockRevertAsyncAdapter_RB is IStrategyAdapter {
     function priceOracle() external pure returns (address) { return address(0); }
     function getPosTokenPrice() external pure returns (uint256) { return 1e18; }
     function estimatePosAmount(uint256 assetAmount) external pure returns (uint256) { return assetAmount; }
+    function minSubscribeAsset() external pure returns (uint256) { return 0; }
+    function minRedeemPos() external pure returns (uint256) { return 0; }
     function vault() external view returns (address) { return VAULT; }
 
     function totalValue() external view returns (uint256) {
@@ -539,6 +551,8 @@ contract MockEventAsyncAdapter_RB is IStrategyAdapter {
         if (posTokenPrice == 0) return assetAmount;
         return assetAmount * 1e18 / posTokenPrice;
     }
+    function minSubscribeAsset() external pure returns (uint256) { return 0; }
+    function minRedeemPos() external pure returns (uint256) { return 0; }
 
     function totalValue() external view returns (uint256) {
         return IERC20(POS_TOKEN).balanceOf(VAULT) * posTokenPrice / 1e18;
@@ -614,6 +628,8 @@ contract MockSyncPricedAdapter_RB is IStrategyAdapter {
         if (posTokenPrice == 0) return assetAmount;
         return assetAmount * 1e18 / posTokenPrice;
     }
+    function minSubscribeAsset() external pure returns (uint256) { return 0; }
+    function minRedeemPos() external pure returns (uint256) { return 0; }
 
     function totalValue() external view returns (uint256) {
         return IERC20(ASSET).balanceOf(address(this));

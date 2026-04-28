@@ -75,6 +75,9 @@ contract MockAdapterOE is IStrategyAdapter {
         return assetAmount;
     }
 
+    function minSubscribeAsset() external pure returns (uint256) { return 0; }
+    function minRedeemPos() external pure returns (uint256) { return 0; }
+
     function previewDeposit(uint256 assetAmount)
         external
         pure
@@ -149,6 +152,7 @@ contract MockVaultOE {
     uint256 public redeemInFlightTotal;
     uint256 public nextInFlightId = 1;
     uint256 public nextRequestId = 1;
+    uint256 public pendingRequestCount;
     uint256 public totalLockedSharesValue;
     address public gateway;
 
@@ -211,6 +215,7 @@ contract MockVaultOE {
         totalLockedSharesValue += shares;
 
         requestId = nextRequestId++;
+        pendingRequestCount++;
         uint256 estimatedAssets = (shares * mockedExchangeRate) / 1e18;
         reqs[requestId] = Req({
             id: requestId,
@@ -296,6 +301,9 @@ contract MockVaultOE {
 
     function updateRequestBatch(uint256[] calldata ids, IMantleYieldVault.RequestStatus newStatus) external {
         for (uint256 i = 0; i < ids.length; i++) {
+            if (reqs[ids[i]].status == IMantleYieldVault.RequestStatus.PENDING && pendingRequestCount > 0) {
+                pendingRequestCount--;
+            }
             reqs[ids[i]].status = newStatus;
         }
     }
@@ -532,7 +540,7 @@ contract OperatorExecutorQATest is Test {
         vm.stopPrank();
     }
 
-    string constant MODULE = unicode"OperatorExecutor 端到端执行场景";
+    string constant MODULE = unicode"OperatorExecutor 执行场景";
     string private _caseId;
     string private _caseName;
     string private _buf;

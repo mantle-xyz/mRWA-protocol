@@ -151,6 +151,9 @@ contract MockSyncAdapter_ST is IStrategyAdapter {
         return assetAmount;
     }
 
+    function minSubscribeAsset() external pure returns (uint256) { return 0; }
+    function minRedeemPos() external pure returns (uint256) { return 0; }
+
     function previewDeposit(uint256 assetAmount)
         external
         pure
@@ -263,6 +266,9 @@ contract MockAsyncAdapter_ST is IStrategyAdapter {
         return assetAmount * 1e18 / posTokenPrice;
     }
 
+    function minSubscribeAsset() external pure returns (uint256) { return 0; }
+    function minRedeemPos() external pure returns (uint256) { return 0; }
+
     function previewDeposit(uint256 assetAmount)
         external
         pure
@@ -371,6 +377,9 @@ contract MockConfigSyncAdapter_ST is IStrategyAdapter {
         if (posTokenPrice == 0) return assetAmount;
         return assetAmount * 1e18 / posTokenPrice;
     }
+
+    function minSubscribeAsset() external pure returns (uint256) { return 0; }
+    function minRedeemPos() external pure returns (uint256) { return 0; }
 
     function previewDeposit(uint256 assetAmount)
         external
