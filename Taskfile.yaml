@@ -61,6 +61,20 @@ tasks:
         vars:
           EXTRA_ARGS: ${ROOT_DIR}/script/DeployAll.s.sol {{.CLI_ARGS}}
 
+  DeployEmptyVaultAndAdapterFactories:
+    desc: Deploy VaultFactory and SubRedManagementAdapterFactory with an empty beacon implementation
+    cmds:
+      - task: _script
+        vars:
+          EXTRA_ARGS: ${ROOT_DIR}/script/DeployEmptyVaultAndAdapterFactories.s.sol {{.CLI_ARGS}}
+
+  UpgradeAndInitVaultAndAdapter:
+    desc: Upgrade empty Vault/Adapter beacons to real implementations, then initialize their proxies
+    cmds:
+      - task: _script
+        vars:
+          EXTRA_ARGS: ${ROOT_DIR}/script/UpgradeAndInitVaultAndAdapter.s.sol {{.CLI_ARGS}}
+
   DeployInstance:
     desc: Deploy a new protocol instance using existing on-chain factories (no new impls/factories)
     cmds:
