@@ -113,14 +113,6 @@ contract MockStrategyAdapter is IStrategyAdapter {
         return assetAmount;
     }
 
-    function minSubscribeAsset() external pure returns (uint256) {
-        return 0;
-    }
-
-    function minRedeemPos() external pure returns (uint256) {
-        return 0;
-    }
-
     function previewDeposit(uint256 assetAmount)
         external
         pure
@@ -340,9 +332,16 @@ contract MockControllerVault {
     }
 
     function markRequestsDone(uint256[] calldata ids, uint256[] calldata settledAssets) external {
+        require(ids.length == settledAssets.length, "LENGTH_MISMATCH");
+        uint256 physicalCash = token.balanceOf(address(this));
         for (uint256 i = 0; i < ids.length; i++) {
-            reqs[ids[i]].settledAssets = settledAssets[i];
-            reqs[ids[i]].status = IMantleYieldVault.RequestStatus.DONE;
+            Req storage req = reqs[ids[i]];
+            require(req.status == IMantleYieldVault.RequestStatus.PROCESSING, "INVALID_STATE");
+            require(settledAssets[i] != 0, "ZERO_AMOUNT");
+            require(physicalCash >= settledAssets[i], "INSUFFICIENT_CASH");
+            req.settledAssets = settledAssets[i];
+            req.status = IMantleYieldVault.RequestStatus.DONE;
+            physicalCash -= settledAssets[i];
         }
     }
 

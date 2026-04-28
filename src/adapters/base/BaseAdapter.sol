@@ -127,7 +127,7 @@ abstract contract BaseAdapter is IStrategyAdapter, AccessControl, ReentrancyGuar
     }
 
     /// @notice Position-token quote in 1e18 precision (asset per 1 pos token).
-    /// @dev Priority: oracle valid price > manual written price.
+    /// @dev Priority: oracle valid price when configured, otherwise manual price.
     ///      Fallback: no valid source -> 0 (callers decide how to degrade).
     function getPosTokenPrice() public view virtual override returns (uint256) {
         if (priceOracle != address(0)) {
@@ -136,6 +136,7 @@ abstract contract BaseAdapter is IStrategyAdapter, AccessControl, ReentrancyGuar
                 uint8 dec = IDFeedPriceOracle(priceOracle).decimals();
                 return Math.mulDiv(rawPrice, 1e18, 10 ** dec, Math.Rounding.Floor);
             }
+            return 0;
         }
 
         if (manualPosTokenPrice > 0) {
@@ -191,7 +192,7 @@ abstract contract BaseAdapter is IStrategyAdapter, AccessControl, ReentrancyGuar
         emit ManualPosTokenPriceUpdated(oldPrice, priceE18, msg.sender);
     }
 
-    /// @notice Update oracle address. Set to address(0) to disable oracle and use manual/default pricing.
+    /// @notice Update oracle address. Set to address(0) to disable oracle and use manual pricing.
     function setPriceOracle(address newOracle) external onlyAdmin {
         address oldOracle = priceOracle;
         priceOracle = newOracle;

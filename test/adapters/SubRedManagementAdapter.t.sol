@@ -122,6 +122,7 @@ contract SubRedManagementAdapterTest is Test {
         adapter = new SubRedManagementAdapter(
             address(vault), address(subRed), address(stToken), address(this), address(this), address(this), address(0)
         );
+        adapter.setManualPosTokenPrice(1e18);
         adapterWithOracle = new SubRedManagementAdapter(
             address(vault),
             address(subRed),
@@ -294,12 +295,35 @@ contract SubRedManagementAdapterTest is Test {
         assertEq(value, 1000e18);
     }
 
-    function test_EstimatePosAmount_FallbacksToOneToOneWhenPriceZero() public {
+    function test_EstimatePosAmount_ReturnsZeroWhenOraclePriceZero() public {
         oracle.setPrice(0);
-        // fallback 1:1 in human terms (asset 18 -> st 6): divide by 1e12
+
         uint256 amountAsset = 2000e18;
         uint256 pos = adapterWithOracle.estimatePosAmount(amountAsset);
-        assertEq(pos, 2_000_000_000); // 2000 * 1e6
+        assertEq(pos, 0);
+
+        stToken6.mint(address(vault), 500e6);
+        assertEq(adapterWithOracle.totalValue(), 0);
+    }
+
+    function test_GetPosTokenPrice_DoesNotFallbackToManualWhenOracleConfigured() public {
+        adapter.setManualPosTokenPrice(4e18);
+        adapter.setPriceOracle(address(oracle));
+        oracle.setPrice(0);
+
+        assertEq(adapter.getPosTokenPrice(), 0);
+    }
+
+    function test_GetPosTokenPrice_ReturnsZeroWhenOracleNormalizesToZero() public {
+        adapter.setManualPosTokenPrice(4e18);
+        oracle.setDecimals(20);
+        oracle.setPrice(1);
+        adapter.setPriceOracle(address(oracle));
+
+        assertEq(adapter.getPosTokenPrice(), 0);
+
+        stToken.mint(address(vault), 500e18);
+        assertEq(adapter.totalValue(), 0);
     }
 
     function test_RevertWhen_SetManualPosTokenPrice_WithOracleConfigured() public {
@@ -319,7 +343,7 @@ contract SubRedManagementAdapterTest is Test {
     }
 
     function test_PreviewDeposit_FloorsToIncrement() public {
-        adapter.setExecutionSteps(SUBSCRIBE_STEP_ASSET, REDEEM_STEP_POS_18);
+        adapter.setExecutionConstraints(0, SUBSCRIBE_STEP_ASSET, 0, REDEEM_STEP_POS_18);
 
         uint256 rawAmount = 20_001e18 + 9e15; // 20,001.009
         (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount) = adapter.previewDeposit(rawAmount);
@@ -330,7 +354,7 @@ contract SubRedManagementAdapterTest is Test {
     }
 
     function test_PreviewDeposit_ReturnsFlooredAmountWithoutMinimumConstraint() public {
-        adapter.setExecutionSteps(SUBSCRIBE_STEP_ASSET, REDEEM_STEP_POS_18);
+        adapter.setExecutionConstraints(0, SUBSCRIBE_STEP_ASSET, 0, REDEEM_STEP_POS_18);
 
         uint256 rawAmount = 19_999e18 + 999e15; // 19,999.999
         (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount) = adapter.previewDeposit(rawAmount);
@@ -341,7 +365,7 @@ contract SubRedManagementAdapterTest is Test {
     }
 
     function test_PreviewRedeem_FloorsQuantityAndReturnsExecutableAsset() public {
-        adapterWithOracle.setExecutionSteps(SUBSCRIBE_STEP_ASSET, REDEEM_STEP_POS_6);
+        adapterWithOracle.setExecutionConstraints(0, SUBSCRIBE_STEP_ASSET, 0, REDEEM_STEP_POS_6);
 
         uint256 rawAmount = 3_003e18 + 8e17; // 3003.8 => 1501.9 pos at price 2
         (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount) = adapterWithOracle.previewRedeem(rawAmount);
@@ -352,7 +376,7 @@ contract SubRedManagementAdapterTest is Test {
     }
 
     function test_PreviewRedeem_ReturnsFlooredQuantityWithoutMinimumConstraint() public {
-        adapterWithOracle.setExecutionSteps(SUBSCRIBE_STEP_ASSET, REDEEM_STEP_POS_6);
+        adapterWithOracle.setExecutionConstraints(0, SUBSCRIBE_STEP_ASSET, 0, REDEEM_STEP_POS_6);
 
         uint256 rawAmount = 2_999e18 + 8e17; // 2999.8 => 1499.9 pos at price 2
         (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount) = adapterWithOracle.previewRedeem(rawAmount);
@@ -363,7 +387,7 @@ contract SubRedManagementAdapterTest is Test {
     }
 
     function test_RevertWhen_RequestRedeemAmountIsNotNormalizedToPreviewResult() public {
-        adapterWithOracle.setExecutionSteps(SUBSCRIBE_STEP_ASSET, REDEEM_STEP_POS_6);
+        adapterWithOracle.setExecutionConstraints(0, SUBSCRIBE_STEP_ASSET, 0, REDEEM_STEP_POS_6);
         stToken6.mint(address(vault), 5_000e6);
         vault.approveTokenToAdapter(address(stToken6), address(adapterWithOracle), 5_000e6);
 
