@@ -54,28 +54,28 @@ contract MantleVaultGateway is
         if (_isSubscribeRedeemPaused()) revert EnforcedPause();
         _requireNotSanctioned(msg.sender);
         _requireWhitelisted(msg.sender);
-        return vault.depositFor(msg.sender, assets, msg.sender);
+        return vault.deposit(assets, msg.sender);
     }
 
     function redeem(uint256 shares) external nonReentrant returns (uint256 assets) {
         if (syncRedeemDisabled) revert IMantleYieldVault.Vault__SyncRedeemDisabled();
         if (_isSubscribeRedeemPaused()) revert EnforcedPause();
         if (isSanctioned(msg.sender)) {
-            vault.routeSanctionedShares(msg.sender, msg.sender, shares);
+            vault.routeSanctionedShares(msg.sender, shares);
             return 0;
         }
         _requireWhitelisted(msg.sender);
-        return vault.redeemFor(msg.sender, shares, msg.sender, msg.sender);
+        return vault.redeem(shares, msg.sender, msg.sender);
     }
 
     function requestRedeem(uint256 shares) external override nonReentrant returns (uint256 requestId) {
         if (_isSubscribeRedeemPaused()) revert EnforcedPause();
         if (isSanctioned(msg.sender)) {
-            vault.routeSanctionedShares(msg.sender, msg.sender, shares);
+            vault.routeSanctionedShares(msg.sender, shares);
             return 0;
         }
         _requireWhitelisted(msg.sender);
-        return vault.requestRedeemFor(msg.sender, msg.sender, shares);
+        return vault.requestRedeem(msg.sender, shares);
     }
 
     function setSyncRedeemDisabled(bool disabled) external override onlyRole(DEFAULT_ADMIN_ROLE) {

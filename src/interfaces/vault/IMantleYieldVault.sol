@@ -102,7 +102,6 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     error Vault__InvalidState(uint256 requestId, RequestStatus currentStatus);
     error Vault__InsufficientPhysicalCash(uint256[] requestIds, uint256[] settledAssets, uint256 physicalCash);
     error Vault__InsufficientFreeCash(uint256 requested, uint256 freeCash);
-    error Vault__Underflow(uint256 current, uint256 deduction);
     error Vault__RescueAssetCannotBeUnderlying();
     error Vault__ZeroAmount();
     error Vault__FeeTooHigh(uint256 feeBps, uint256 maxBps);
@@ -134,7 +133,6 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     event MinDepositAmountUpdated(uint256 oldAmount, uint256 newAmount);
     event AdapterRegistered(address indexed adapter);
     event AdapterRemoved(address indexed adapter);
-    event AdapterApproved(address indexed adapter, address indexed token, uint256 amount);
     event RequestBatchUpdated(uint256[] ids, RequestStatus newStatus);
     event InFlightCreated(
         uint256 indexed inFlightId,
@@ -245,12 +243,10 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     // Gateway Only
     // =============================================================
 
-    function depositFor(address caller, uint256 assets, address receiver) external returns (uint256 shares);
-    function redeemFor(address caller, uint256 shares, address receiver, address owner)
-        external
-        returns (uint256 assets);
-    function requestRedeemFor(address caller, address owner, uint256 shares) external returns (uint256 requestId);
-    function routeSanctionedShares(address caller, address owner, uint256 shares) external;
+    // Note: deposit(uint256, address) and redeem(uint256, address, address)
+    // are inherited from IERC4626 — implemented as gateway-only in MantleYieldVault.
+    function requestRedeem(address owner, uint256 shares) external returns (uint256 requestId);
+    function routeSanctionedShares(address owner, uint256 shares) external;
 
     // =============================================================
     // Controller Only
