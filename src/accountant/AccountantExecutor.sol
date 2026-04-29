@@ -21,6 +21,7 @@ contract AccountantExecutor is AccessControlUpgradeable, UUPSUpgradeable {
     // =============================================================
 
     event RateUpdateExecuted(address indexed executor, uint256 newRate, uint256 computeTimestamp);
+    event ManagementFeeSettled(address indexed executor, address indexed accountant);
 
     // =============================================================
     //                       CUSTOM ERRORS
@@ -61,6 +62,14 @@ contract AccountantExecutor is AccessControlUpgradeable, UUPSUpgradeable {
         if (accountant_ == address(0)) revert AccountantExecutor__ZeroAddress();
         IAccountant(accountant_).updateExchangeRate(newRate, computeTimestamp);
         emit RateUpdateExecuted(msg.sender, newRate, computeTimestamp);
+    }
+
+    /// @notice Trigger a management fee settlement on the Accountant.
+    /// @param accountant_ The Accountant contract to call
+    function executeSettleManagementFee(address accountant_) external onlyRole(BOT_ROLE) {
+        if (accountant_ == address(0)) revert AccountantExecutor__ZeroAddress();
+        IAccountant(accountant_).settleManagementFee();
+        emit ManagementFeeSettled(msg.sender, accountant_);
     }
 
     // =============================================================
