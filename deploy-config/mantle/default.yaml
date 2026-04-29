@@ -9,7 +9,7 @@ envs:
   F_MNEMONIC_INDEX: 0 # also used by LEDGER/TREZOR; default 0 when omitted
   F_HARDWARE_DERIVATION_PATH: "" # optional for LEDGER/TREZOR, e.g. m/44'/60'/0'/0/0
   F_AWS_KMS_KEY_ID: ""
-  F_SENDER: "0x65Cf61678Cf120a8F40c2F3aEDCb50BBA0e85c78"
+  F_SENDER: "0x207E804758e28F2b3fD6E4219671B327100b82f8"
   F_VERBOSE: true
   F_RPC_URL: "https://rpc.mantle.xyz"
   F_VERIFY: "true" # set to "true" to verify on broadcast; use VerifyXxx tasks to verify post-deploy
@@ -88,7 +88,7 @@ envs:
   F_SYNC_REDEEM_DISABLED: "false"
 
   # ── Task: DeployEmptyVaultAndAdapterFactories ────────────────
-  DEPLOY_EMPTY_FACTORIES_BEACON_OWNER: ""
+  DEPLOY_EMPTY_FACTORIES_BEACON_OWNER: "0x207E804758e28F2b3fD6E4219671B327100b82f8"
 
   # ── Task: UpgradeAndInitVaultAndAdapter ──────────────────────
   UPGRADE_INIT_VAULT_FACTORY: ""
