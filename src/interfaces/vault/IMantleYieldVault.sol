@@ -62,6 +62,7 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
         uint256 redemptionFeeBps;
         uint256 minRedeemAmount;
         uint256 minDepositAmount;
+        uint256 maxSettlementDeviationBps;
     }
 
     struct RedemptionRequest {
@@ -119,6 +120,10 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     error Vault__ZeroExchangeRate();
     error Vault__InvalidInFlightState(uint256 inFlightId, InFlightStatus currentStatus);
     error Vault__LengthMismatch(uint256 idsLength, uint256 amountsLength);
+    error Vault__SettlementDeviationExceeded(
+        uint256 requestId, uint256 estimatedAssets, uint256 settledAssets, uint256 deviationBps, uint256 maxAllowed
+    );
+    error Vault__InvalidSettlementDeviation(uint256 deviation);
 
     // =============================================================
     // Events (vault-specific; RedeemRequest is inherited from IERC7540Redeem)
@@ -162,6 +167,7 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     event MaxRedemptionFeeUpdated(uint256 oldMaxBps, uint256 newMaxBps);
     event FeeChangedWithLockedShares(uint256 totalLockedShares, uint256 oldFeeBps, uint256 newFeeBps);
     event GatewayUpdated(address indexed oldGateway, address indexed newGateway);
+    event SettlementDeviationUpdated(uint256 oldBps, uint256 newBps);
 
     // =============================================================
     // Initialization
@@ -185,6 +191,7 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     function redemptionFeeBps() external view returns (uint256);
     function minRedeemAmount() external view returns (uint256);
     function minDepositAmount() external view returns (uint256);
+    function maxSettlementDeviationBps() external view returns (uint256);
     function totalLockedShares() external view returns (uint256);
 
     function totalInvestInFlight() external view returns (uint256);
@@ -270,6 +277,7 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     function setMaxRedemptionFee(uint256 newMaxBps) external;
     function setMinRedeemAmount(uint256 newAmount) external;
     function setMinDepositAmount(uint256 newAmount) external;
+    function setMaxSettlementDeviation(uint256 newBps) external;
     function setGateway(address newGateway) external;
     function setController(address newController) external;
     function setAccountant(address newAccountant) external;
