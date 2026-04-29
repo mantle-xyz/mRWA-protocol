@@ -256,8 +256,6 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
         AccountantStorage storage s = _getAccountantStorage();
         uint256 oldRate = s.lastExchangeRate;
 
-        _settleManagementFee(s);
-
         s.lastExchangeRate = newRate;
         s.lastUpdateTimestamp = block.timestamp.toUint64();
         s.lastComputeTimestamp = block.timestamp.toUint64();

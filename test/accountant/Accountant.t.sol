@@ -719,7 +719,7 @@ contract AccountantTest is Test {
         assertEq(accountant.lastExchangeRate(), 0.8e18);
     }
 
-    function test_emergencyRateUpdate_settlesFees() public {
+    function test_emergencyRateUpdate_doesNotSettleFees() public {
         uint256 totalShares = 100_000e18;
         vault.setTotalSupply(totalShares);
 
@@ -728,19 +728,20 @@ contract AccountantTest is Test {
         _settleFee();
         assertEq(accountant.totalSharesLastSettle(), totalShares);
 
-        // Advance time so fees accrue
+        uint256 settleTimestampBefore = accountant.lastFeeSettleTimestamp();
+        uint256 feeMintCallsBefore = vault.totalFeeMintCalls();
+
+        // Advance time so fees would otherwise accrue
         vm.warp(block.timestamp + 30 days);
-
-        uint256 timeElapsed = block.timestamp - accountant.lastFeeSettleTimestamp();
-        uint256 expectedShares = (totalShares * MANAGEMENT_FEE_BPS * timeElapsed) / (10_000 * 365 days);
-
-        vm.expectEmit(false, false, false, true);
-        emit Accountant.FeesDistributed(expectedShares);
 
         vm.prank(admin);
         accountant.emergencyRateUpdate(0.5e18);
 
-        assertEq(vault.lastFeeShares(), expectedShares);
+        // Fees must NOT be settled inside the emergency path; settlement is decoupled
+        // and must be triggered explicitly via settleManagementFee().
+        assertEq(vault.totalFeeMintCalls(), feeMintCallsBefore, "no fee mint should occur");
+        assertEq(accountant.lastFeeSettleTimestamp(), settleTimestampBefore, "settle timestamp unchanged");
+        assertEq(accountant.totalSharesLastSettle(), totalShares, "share snapshot unchanged");
     }
 
     function test_emergencyRateUpdate_blocksNormalUpdateAfterwards() public {
@@ -1393,8 +1394,8 @@ contract AccountantExecutorIntegrationTest is Test {
 
         vm.startPrank(admin);
         accountant.grantRole(accountant.EXECUTOR_ROLE(), address(executor));
-        // Grant admin EXECUTOR_ROLE so integration tests can settle fees directly
-        // (AccountantExecutor only relays updateExchangeRate, not settleManagementFee).
+        // Grant admin EXECUTOR_ROLE so integration tests can settle fees directly,
+        // alongside the AccountantExecutor relay path.
         accountant.grantRole(accountant.EXECUTOR_ROLE(), admin);
         executor.grantRole(executor.BOT_ROLE(), bot);
         vm.stopPrank();
@@ -1736,7 +1737,7 @@ contract AccountantExecutorIntegrationTest is Test {
         assertEq(accountant.lastExchangeRate(), recoveryRate);
     }
 
-    function test_integration_emergencyRateUpdate_settlesFees() public {
+    function test_integration_emergencyRateUpdate_doesNotSettleFees() public {
         uint256 totalShares = 100_000e18;
         vault.setTotalSupply(totalShares);
 
@@ -1744,19 +1745,20 @@ contract AccountantExecutorIntegrationTest is Test {
         skip(1);
         _settleFee();
 
-        // Advance time for fee accrual
+        uint256 settleTimestampBefore = accountant.lastFeeSettleTimestamp();
+        uint256 feeMintCallsBefore = vault.totalFeeMintCalls();
+
+        // Advance time so fees would otherwise accrue
         vm.warp(block.timestamp + 30 days);
-
-        uint256 timeElapsed = block.timestamp - accountant.lastFeeSettleTimestamp();
-        uint256 expectedShares = (totalShares * MANAGEMENT_FEE_BPS * timeElapsed) / (10_000 * 365 days);
-
-        vm.expectEmit(false, false, false, true);
-        emit Accountant.FeesDistributed(expectedShares);
 
         vm.prank(admin);
         accountant.emergencyRateUpdate(0.5e18);
 
-        assertEq(vault.lastFeeShares(), expectedShares);
+        // emergencyRateUpdate is decoupled from fee settlement; admin must call
+        // settleManagementFee() (or relay via AccountantExecutor) explicitly.
+        assertEq(vault.totalFeeMintCalls(), feeMintCallsBefore, "no fee mint should occur");
+        assertEq(accountant.lastFeeSettleTimestamp(), settleTimestampBefore, "settle timestamp unchanged");
+        assertEq(accountant.totalSharesLastSettle(), totalShares, "share snapshot unchanged");
     }
 
     // =============================================================
