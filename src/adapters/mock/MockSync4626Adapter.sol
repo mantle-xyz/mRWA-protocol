@@ -42,7 +42,7 @@ contract MockSync4626Adapter is BaseSync4626Adapter {
         whenNotPaused
         returns (uint256 sharesOrPos)
     {
-        if (amount == 0) revert InvalidAmount();
+        if (amount == 0) revert Adapter__InvalidAmount();
         receiver; // receipt location is adapter for sync-4626 mode.
         ASSET.safeTransferFrom(VAULT, address(this), amount);
         sharesOrPos = _erc4626Deposit(amount, address(this));
@@ -55,7 +55,7 @@ contract MockSync4626Adapter is BaseSync4626Adapter {
         whenNotPaused
         returns (uint256 actualUSDC)
     {
-        if (shares == 0) revert InvalidAmount();
+        if (shares == 0) revert Adapter__InvalidAmount();
         actualUSDC = _erc4626Redeem(shares, receiver, VAULT);
     }
 }

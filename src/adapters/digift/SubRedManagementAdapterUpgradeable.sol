@@ -2,19 +2,22 @@
 pragma solidity ^0.8.24;
 
 import {ISubRedManagement} from "../../interfaces/adapters/digift/ISubRedManagement.sol";
-import {BaseAsync7540Adapter} from "../base/capabilities/BaseAsync7540Adapter.sol";
+import {BaseAsync7540AdapterUpgradeable} from "../base/capabilities/BaseAsync7540AdapterUpgradeable.sol";
 
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {IERC20, SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
+/// @title SubRedManagementAdapter (Upgradeable)
 /// @notice Async-first adapter for Digift SubRed subscribe/redeem flow.
-/// @dev Controller drives unified adapter methods.
-contract SubRedManagementAdapter is BaseAsync7540Adapter {
+///         Deployed behind a BeaconProxy via SubRedManagementAdapterFactory.
+/// @dev Controller drives unified adapter methods. Uses ERC-7201 namespaced storage.
+contract SubRedManagementAdapter is BaseAsync7540AdapterUpgradeable {
     using SafeERC20 for IERC20;
 
-    ISubRedManagement public immutable SUB_RED;
-    address public immutable ST_TOKEN;
+    // =============================================================
+    //                  ERC-7201 NAMESPACED STORAGE
+    // =============================================================
 
     struct ExecutionConstraints {
         uint256 minSubscribeAsset;
@@ -23,10 +26,29 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
         uint256 redeemStepPos;
     }
 
-    ExecutionConstraints public executionConstraints;
+    /// @custom:storage-location erc7201:mrwa.storage.SubRedManagementAdapter
+    struct SubRedAdapterStorage {
+        ISubRedManagement subRed;
+        address stToken;
+        ExecutionConstraints executionConstraints;
+        uint64 subscribeDeadlineWindow;
+        uint64 redeemDeadlineWindow;
+    }
 
-    uint64 public subscribeDeadlineWindow = 6 hours;
-    uint64 public redeemDeadlineWindow = 6 hours;
+    /// @dev keccak256(abi.encode(uint256(keccak256("mrwa.storage.SubRedManagementAdapter")) - 1)) & ~bytes32(uint256(0xff))
+    bytes32 private constant SUBRED_ADAPTER_STORAGE_LOCATION =
+        0xb22e4412b8a9ccac26fd761a00159c74e4a8f8a39d20b2cbec0aa5b46bffd100;
+
+    function _getSubRedAdapterStorage() private pure returns (SubRedAdapterStorage storage $) {
+        // solhint-disable-next-line no-inline-assembly
+        assembly {
+            $.slot := SUBRED_ADAPTER_STORAGE_LOCATION
+        }
+    }
+
+    // =============================================================
+    //                          EVENTS
+    // =============================================================
 
     event ExecutionConstraintsUpdated(
         uint256 minSubscribeAsset, uint256 subscribeStepAsset, uint256 minRedeemPos, uint256 redeemStepPos
@@ -34,34 +56,49 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
     event SubscribeDeadlineWindowUpdated(uint64 newWindow);
     event RedeemDeadlineWindowUpdated(uint64 newWindow);
 
+    // =============================================================
+    //                 CONSTRUCTOR / INITIALIZER
+    // =============================================================
+
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
+
     /**
      * @notice Initialize Digift SubRed adapter.
      * @param vault_ Vault that owns strategy funds.
      * @param subRedManagement Digift SubRedManagement contract.
-     * @param stToken Target security token address supported by SubRedManagement.
+     * @param stToken_ Target security token address supported by SubRedManagement.
      * @param admin Adapter admin role address.
      * @param controller StrategyController role address.
-     * @param accountant Accountant role address for manual price updates.
+     * @param accountantExecutor AccountantExecutor role address for manual price updates.
      * @param priceOracle_ Optional DFeedPriceOracle for the ST token. Pass address(0) to use manual pricing.
      */
-    constructor(
+    function initialize(
         address vault_,
         address subRedManagement,
-        address stToken,
+        address stToken_,
         address admin,
         address controller,
-        address accountant,
+        address accountantExecutor,
         address priceOracle_
-    ) BaseAsync7540Adapter(vault_, admin, controller, accountant, priceOracle_) {
-        if (subRedManagement == address(0) || stToken == address(0)) {
-            revert Adapter__InvalidAddress();
+    ) external initializer {
+        if (subRedManagement == address(0) || stToken_ == address(0)) {
+            revert InvalidAddress();
         }
-        SUB_RED = ISubRedManagement(subRedManagement);
-        ST_TOKEN = stToken;
+
+        __BaseAsync7540Adapter_init(vault_, admin, controller, accountantExecutor, priceOracle_);
+
+        SubRedAdapterStorage storage s = _getSubRedAdapterStorage();
+        s.subRed = ISubRedManagement(subRedManagement);
+        s.stToken = stToken_;
+        s.subscribeDeadlineWindow = 6 hours;
+        s.redeemDeadlineWindow = 6 hours;
     }
 
     // =============================================================
-    // Adapter Views
+    //                       ADAPTER VIEWS
     // =============================================================
 
     function name() external pure override returns (string memory) {
@@ -69,7 +106,32 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
     }
 
     function posToken() external view override returns (address) {
-        return ST_TOKEN;
+        return _getSubRedAdapterStorage().stToken;
+    }
+
+    /// @notice The SubRedManagement contract address.
+    function subRed() external view returns (ISubRedManagement) {
+        return _getSubRedAdapterStorage().subRed;
+    }
+
+    /// @notice The security token address.
+    function stToken() external view returns (address) {
+        return _getSubRedAdapterStorage().stToken;
+    }
+
+    /// @notice Current execution constraints.
+    function executionConstraints() external view returns (ExecutionConstraints memory) {
+        return _getSubRedAdapterStorage().executionConstraints;
+    }
+
+    /// @notice Current subscribe deadline window (seconds).
+    function subscribeDeadlineWindow() external view returns (uint64) {
+        return _getSubRedAdapterStorage().subscribeDeadlineWindow;
+    }
+
+    /// @notice Current redeem deadline window (seconds).
+    function redeemDeadlineWindow() external view returns (uint64) {
+        return _getSubRedAdapterStorage().redeemDeadlineWindow;
     }
 
     /**
@@ -77,8 +139,9 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
      * @dev Uses getPosTokenPrice() in 1e18 precision. Returns 0 when price is unavailable.
      */
     function estimatePosAmount(uint256 amountAsset) external view override returns (uint256 positionAmount) {
-        uint8 assetDecimals = IERC20Metadata(address(ASSET)).decimals();
-        uint8 stDecimals = IERC20Metadata(ST_TOKEN).decimals();
+        SubRedAdapterStorage storage s = _getSubRedAdapterStorage();
+        uint8 assetDecimals = IERC20Metadata(address(_asset())).decimals();
+        uint8 stDecimals = IERC20Metadata(s.stToken).decimals();
         return _estimatePosAmount(amountAsset, assetDecimals, stDecimals);
     }
 
@@ -124,9 +187,10 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
      *      proceeds already tracked by vault.totalInvestInFlight / totalRedeemInFlight.
      */
     function totalValue() external view override returns (uint256) {
-        uint8 assetDecimals = IERC20Metadata(address(ASSET)).decimals();
-        uint8 stDecimals = IERC20Metadata(ST_TOKEN).decimals();
-        uint256 settledVaultPosBalance = IERC20(ST_TOKEN).balanceOf(VAULT);
+        SubRedAdapterStorage storage s = _getSubRedAdapterStorage();
+        uint8 assetDecimals = IERC20Metadata(address(_asset())).decimals();
+        uint8 stDecimals = IERC20Metadata(s.stToken).decimals();
+        uint256 settledVaultPosBalance = IERC20(s.stToken).balanceOf(_vault());
         return _estimateAssetAmount(settledVaultPosBalance, assetDecimals, stDecimals, Math.Rounding.Floor);
     }
 
@@ -151,14 +215,15 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
         view
         returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
     {
-        ExecutionConstraints memory constraints = executionConstraints;
+        SubRedAdapterStorage storage s = _getSubRedAdapterStorage();
+        ExecutionConstraints memory constraints = s.executionConstraints;
         executableAssetAmount = _floorToStep(amountAsset, constraints.subscribeStepAsset);
         if (executableAssetAmount == 0 || executableAssetAmount < constraints.minSubscribeAsset) {
             return (false, 0, 0);
         }
 
-        uint8 assetDecimals = IERC20Metadata(address(ASSET)).decimals();
-        uint8 stDecimals = IERC20Metadata(ST_TOKEN).decimals();
+        uint8 assetDecimals = IERC20Metadata(address(_asset())).decimals();
+        uint8 stDecimals = IERC20Metadata(s.stToken).decimals();
         expectedPosAmount = _estimatePosAmount(executableAssetAmount, assetDecimals, stDecimals);
         ok = executableAssetAmount > 0;
     }
@@ -177,15 +242,16 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
         override
         returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
     {
-        uint8 assetDecimals = IERC20Metadata(address(ASSET)).decimals();
-        uint8 stDecimals = IERC20Metadata(ST_TOKEN).decimals();
+        SubRedAdapterStorage storage s = _getSubRedAdapterStorage();
+        uint8 assetDecimals = IERC20Metadata(address(_asset())).decimals();
+        uint8 stDecimals = IERC20Metadata(s.stToken).decimals();
 
         uint256 originalPosAmount = _estimatePosAmount(amountAsset, assetDecimals, stDecimals);
         if (originalPosAmount == 0) {
             return (false, 0, 0);
         }
 
-        ExecutionConstraints memory constraints = executionConstraints;
+        ExecutionConstraints memory constraints = s.executionConstraints;
         expectedPosAmount = _floorToStep(originalPosAmount, constraints.redeemStepPos);
         if (expectedPosAmount == 0 || expectedPosAmount < constraints.minRedeemPos) {
             return (false, 0, 0);
@@ -200,7 +266,7 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
     }
 
     // =============================================================
-    // Admin Controls
+    //                      ADMIN CONTROLS
     // =============================================================
 
     /**
@@ -209,7 +275,7 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
      * @dev Only callable by DEFAULT_ADMIN_ROLE.
      */
     function setSubscribeDeadlineWindow(uint64 newWindow) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        subscribeDeadlineWindow = newWindow;
+        _getSubRedAdapterStorage().subscribeDeadlineWindow = newWindow;
         emit SubscribeDeadlineWindowUpdated(newWindow);
     }
 
@@ -219,7 +285,7 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
      * @dev Only callable by DEFAULT_ADMIN_ROLE.
      */
     function setRedeemDeadlineWindow(uint64 newWindow) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        redeemDeadlineWindow = newWindow;
+        _getSubRedAdapterStorage().redeemDeadlineWindow = newWindow;
         emit RedeemDeadlineWindowUpdated(newWindow);
     }
 
@@ -237,7 +303,7 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
         uint256 minRedeemPos_,
         uint256 redeemStepPos_
     ) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        executionConstraints = ExecutionConstraints({
+        _getSubRedAdapterStorage().executionConstraints = ExecutionConstraints({
             minSubscribeAsset: minSubscribeAsset_,
             subscribeStepAsset: subscribeStepAsset_,
             minRedeemPos: minRedeemPos_,
@@ -248,7 +314,7 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
     }
 
     // =============================================================
-    // Controller Actions
+    //                    CONTROLLER ACTIONS
     // =============================================================
 
     /**
@@ -267,11 +333,11 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
     {
         (bool ok, uint256 executableAssetAmount, uint256 previewPosAmount) = _previewDeposit(amountAsset);
         if (!ok || amountAsset != executableAssetAmount) {
-            revert Adapter__InvalidAmount();
+            revert InvalidAmount();
         }
         // Controller already validated via previewDeposit(); no redundant checks here.
-        ASSET.safeTransferFrom(VAULT, address(this), amountAsset);
-        _subscribe(amountAsset, uint64(block.timestamp + subscribeDeadlineWindow));
+        _asset().safeTransferFrom(_vault(), address(this), amountAsset);
+        _subscribe(amountAsset, uint64(block.timestamp + _getSubRedAdapterStorage().subscribeDeadlineWindow));
         _emitAdapterDeposit(amountAsset, receiver, previewPosAmount);
         return previewPosAmount;
     }
@@ -284,8 +350,9 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
      * @dev Pulls position token from vault, then submits redeem request to SubRed.
      */
     function requestRedeemAsync(uint256 posAmount, address receiver) external override onlyController whenNotPaused {
-        IERC20(ST_TOKEN).safeTransferFrom(VAULT, address(this), posAmount);
-        _redeem(posAmount, uint64(block.timestamp + redeemDeadlineWindow));
+        SubRedAdapterStorage storage s = _getSubRedAdapterStorage();
+        IERC20(s.stToken).safeTransferFrom(_vault(), address(this), posAmount);
+        _redeem(posAmount, uint64(block.timestamp + s.redeemDeadlineWindow));
         _registerAsyncRedeem(posAmount, receiver);
     }
 
@@ -297,28 +364,31 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
      */
     function retryRedeemAsync(uint256 retryPosAmount, address receiver) external override onlyController whenNotPaused {
         if (retryPosAmount == 0) {
-            revert Adapter__InvalidAmount();
+            revert InvalidAmount();
         }
-        if (IERC20(ST_TOKEN).balanceOf(address(this)) < retryPosAmount) {
-            revert Adapter__InvalidAmount();
+        SubRedAdapterStorage storage s = _getSubRedAdapterStorage();
+        if (IERC20(s.stToken).balanceOf(address(this)) < retryPosAmount) {
+            revert InvalidAmount();
         }
 
-        _redeem(retryPosAmount, uint64(block.timestamp + redeemDeadlineWindow));
+        _redeem(retryPosAmount, uint64(block.timestamp + s.redeemDeadlineWindow));
         _registerAsyncRedeem(retryPosAmount, receiver);
     }
 
     // =============================================================
-    // Internal Protocol Calls
+    //                  INTERNAL PROTOCOL CALLS
     // =============================================================
 
     function _subscribe(uint256 amountAsset, uint64 deadline) internal {
         if (amountAsset == 0) {
-            revert Adapter__InvalidAmount();
+            revert InvalidAmount();
         }
+        SubRedAdapterStorage storage s = _getSubRedAdapterStorage();
+        IERC20 assetToken = _asset();
         // Minimum-privilege approval: approve exact amount then reset.
-        ASSET.forceApprove(address(SUB_RED), amountAsset);
-        SUB_RED.subscribe(ST_TOKEN, address(ASSET), amountAsset, deadline);
-        ASSET.forceApprove(address(SUB_RED), 0);
+        assetToken.forceApprove(address(s.subRed), amountAsset);
+        s.subRed.subscribe(s.stToken, address(assetToken), amountAsset, deadline);
+        assetToken.forceApprove(address(s.subRed), 0);
     }
 
     function _floorToStep(uint256 amount, uint256 step) internal pure returns (uint256) {
@@ -330,11 +400,12 @@ contract SubRedManagementAdapter is BaseAsync7540Adapter {
 
     function _redeem(uint256 quantity, uint64 deadline) internal {
         if (quantity == 0) {
-            revert Adapter__InvalidAmount();
+            revert InvalidAmount();
         }
+        SubRedAdapterStorage storage s = _getSubRedAdapterStorage();
         // Minimum-privilege approval: approve exact amount then reset.
-        IERC20(ST_TOKEN).forceApprove(address(SUB_RED), quantity);
-        SUB_RED.redeem(ST_TOKEN, address(ASSET), quantity, deadline);
-        IERC20(ST_TOKEN).forceApprove(address(SUB_RED), 0);
+        IERC20(s.stToken).forceApprove(address(s.subRed), quantity);
+        s.subRed.redeem(s.stToken, address(_asset()), quantity, deadline);
+        IERC20(s.stToken).forceApprove(address(s.subRed), 0);
     }
 }
