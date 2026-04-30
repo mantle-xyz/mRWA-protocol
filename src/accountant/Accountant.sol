@@ -29,7 +29,7 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
     //                          ROLES
     // =============================================================
 
-    bytes32 public constant EXECUTOR_ROLE = keccak256("EXECUTOR_ROLE");
+    bytes32 public constant ACCOUNTANT_EXECUTOR_ROLE = keccak256("ACCOUNTANT_EXECUTOR_ROLE");
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
 
     // =============================================================
@@ -133,10 +133,10 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
         s.maxComputeAge = 5 minutes;
 
         _setRoleAdmin(PAUSER_ROLE, DEFAULT_ADMIN_ROLE);
-        _setRoleAdmin(EXECUTOR_ROLE, DEFAULT_ADMIN_ROLE);
+        _setRoleAdmin(ACCOUNTANT_EXECUTOR_ROLE, DEFAULT_ADMIN_ROLE);
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(PAUSER_ROLE, admin);
-        _grantRole(EXECUTOR_ROLE, admin);
+        _grantRole(ACCOUNTANT_EXECUTOR_ROLE, admin);
     }
 
     // =============================================================
@@ -202,7 +202,7 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
     /// @param computeTimestamp Off-chain computation timestamp; must be strictly newer than the previous one
     function updateExchangeRate(uint64 newRate, uint64 computeTimestamp)
         external
-        onlyRole(EXECUTOR_ROLE)
+        onlyRole(ACCOUNTANT_EXECUTOR_ROLE)
         whenNotPaused
         nonReentrant
     {
@@ -233,7 +233,7 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
     }
 
     /// @notice Settle accrued management fees by minting vault shares to the treasury.
-    function settleManagementFee() external onlyRole(EXECUTOR_ROLE) whenNotPaused nonReentrant {
+    function settleManagementFee() external onlyRole(ACCOUNTANT_EXECUTOR_ROLE) whenNotPaused nonReentrant {
         _settleManagementFee(_getAccountantStorage());
     }
 

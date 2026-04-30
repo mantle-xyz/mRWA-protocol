@@ -84,7 +84,7 @@ contract AccountantTest is Test {
         accountant = Accountant(address(proxy));
 
         vm.startPrank(admin);
-        accountant.grantRole(accountant.EXECUTOR_ROLE(), executor);
+        accountant.grantRole(accountant.ACCOUNTANT_EXECUTOR_ROLE(), executor);
         accountant.grantRole(accountant.PAUSER_ROLE(), pauser);
         vm.stopPrank();
     }
@@ -125,9 +125,9 @@ contract AccountantTest is Test {
     function test_initialize_setsRolesCorrectly() public view {
         assertTrue(accountant.hasRole(accountant.DEFAULT_ADMIN_ROLE(), admin));
         assertTrue(accountant.hasRole(accountant.PAUSER_ROLE(), admin));
-        assertTrue(accountant.hasRole(accountant.EXECUTOR_ROLE(), admin));
+        assertTrue(accountant.hasRole(accountant.ACCOUNTANT_EXECUTOR_ROLE(), admin));
         assertEq(accountant.getRoleAdmin(accountant.PAUSER_ROLE()), accountant.DEFAULT_ADMIN_ROLE());
-        assertEq(accountant.getRoleAdmin(accountant.EXECUTOR_ROLE()), accountant.DEFAULT_ADMIN_ROLE());
+        assertEq(accountant.getRoleAdmin(accountant.ACCOUNTANT_EXECUTOR_ROLE()), accountant.DEFAULT_ADMIN_ROLE());
     }
 
     function test_initialize_revertsOnDoubleInit() public {
@@ -240,7 +240,7 @@ contract AccountantTest is Test {
     function test_updateExchangeRate_revertsWhenNotExecutor() public {
         _skipCooldown();
 
-        bytes32 role = accountant.EXECUTOR_ROLE();
+        bytes32 role = accountant.ACCOUNTANT_EXECUTOR_ROLE();
         vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user, role));
         vm.prank(user);
         accountant.updateExchangeRate(1.005e18, uint64(block.timestamp));
@@ -249,7 +249,7 @@ contract AccountantTest is Test {
     function test_updateExchangeRate_revertsWhenCalledByPauser() public {
         _skipCooldown();
 
-        bytes32 role = accountant.EXECUTOR_ROLE();
+        bytes32 role = accountant.ACCOUNTANT_EXECUTOR_ROLE();
         vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, pauser, role));
         vm.prank(pauser);
         accountant.updateExchangeRate(1.005e18, uint64(block.timestamp));
@@ -1393,10 +1393,10 @@ contract AccountantExecutorIntegrationTest is Test {
         executor = AccountantExecutor(address(execProxy));
 
         vm.startPrank(admin);
-        accountant.grantRole(accountant.EXECUTOR_ROLE(), address(executor));
-        // Grant admin EXECUTOR_ROLE so integration tests can settle fees directly,
+        accountant.grantRole(accountant.ACCOUNTANT_EXECUTOR_ROLE(), address(executor));
+        // Grant admin ACCOUNTANT_EXECUTOR_ROLE so integration tests can settle fees directly,
         // alongside the AccountantExecutor relay path.
-        accountant.grantRole(accountant.EXECUTOR_ROLE(), admin);
+        accountant.grantRole(accountant.ACCOUNTANT_EXECUTOR_ROLE(), admin);
         executor.grantRole(executor.BOT_ROLE(), bot);
         vm.stopPrank();
     }

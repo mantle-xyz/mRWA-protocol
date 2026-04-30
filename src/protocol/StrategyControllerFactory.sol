@@ -69,7 +69,7 @@ contract StrategyControllerFactory {
      * @param vault_ The MantleYieldVault address this controller manages
      * @param admin Address granted DEFAULT_ADMIN_ROLE
      * @param strategyManager Address granted STRATEGY_MANAGER_ROLE
-     * @param executorGateway Address granted EXECUTOR_ROLE (must be a contract)
+     * @param executorGateway Address granted OPERATOR_EXECUTOR_ROLE (must be a contract)
      * @param bufferTargetBps_ Buffer target in basis points
      * @param rebalanceThresholdBps_ Rebalance threshold in basis points
      * @param rebalanceCooldown_ Minimum seconds between rebalances

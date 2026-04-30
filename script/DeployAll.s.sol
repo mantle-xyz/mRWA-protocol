@@ -50,7 +50,7 @@ import {Script, console2} from "forge-std/Script.sol";
 ///         │  (Vault first: Controller reads vault.asset() during init)     │
 ///         └─────────────────────────────────────────────────────────────────┘
 ///         ┌─ Phase 4: Wire roles ──────────────────────────────────────────┐
-///         │  Accountant   → EXECUTOR_ROLE  → AccountantExecutor            │
+///         │  Accountant   → ACCOUNTANT_EXECUTOR_ROLE → AccountantExecutor  │
 ///         │  AcctExecutor → BOT_ROLE       → bot                           │
 ///         │  Vault        → PAUSER_ROLE    → pauser                        │
 ///         └─────────────────────────────────────────────────────────────────┘
@@ -266,13 +266,13 @@ contract DeployAll is Script {
         //  Phase 4: Wire roles
         // ═════════════════════════════════════════════════════════════
 
-        d.accountant.grantRole(d.accountant.EXECUTOR_ROLE(), address(d.accountantExecutor));
+        d.accountant.grantRole(d.accountant.ACCOUNTANT_EXECUTOR_ROLE(), address(d.accountantExecutor));
         d.accountantExecutor.grantRole(d.accountantExecutor.BOT_ROLE(), bot);
         d.vault.grantRole(d.vault.PAUSER_ROLE(), pauser);
 
         console2.log("");
         console2.log("[Phase 4] Roles wired");
-        console2.log("  Accountant EXECUTOR_ROLE -> AcctExecutor");
+        console2.log("  Accountant ACCOUNTANT_EXECUTOR_ROLE -> AcctExecutor");
         console2.log("  AcctExecutor BOT_ROLE    -> bot   :", bot);
         console2.log("  Vault PAUSER_ROLE        -> pauser:", pauser);
 
@@ -298,7 +298,8 @@ contract DeployAll is Script {
         console2.log("--- Accountant ---");
         console2.log("  Vault:           ", address(d.accountant.vault()));
         console2.log(
-            "  Has EXECUTOR:    ", d.accountant.hasRole(d.accountant.EXECUTOR_ROLE(), address(d.accountantExecutor))
+            "  Has EXECUTOR:    ",
+            d.accountant.hasRole(d.accountant.ACCOUNTANT_EXECUTOR_ROLE(), address(d.accountantExecutor))
         );
         console2.log("");
         console2.log("--- AccountantExecutor ---");

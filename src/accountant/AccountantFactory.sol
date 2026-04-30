@@ -78,7 +78,7 @@ contract AccountantFactory {
      * @param vault_ The MantleYieldVault address this accountant manages
      * @param initialRate Initial exchange rate (18-decimal precision)
      * @param managementFeeRate_ Annual management fee in basis points
-     * @param admin Address granted DEFAULT_ADMIN_ROLE, PAUSER_ROLE, and EXECUTOR_ROLE
+     * @param admin Address granted DEFAULT_ADMIN_ROLE, PAUSER_ROLE, and ACCOUNTANT_EXECUTOR_ROLE
      */
     function deployAndInitAccountant(address vault_, uint64 initialRate, uint32 managementFeeRate_, address admin)
         external
