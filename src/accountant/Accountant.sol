@@ -225,13 +225,16 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
 
         uint256 oldRate = s.lastExchangeRate;
 
-        _settleManagementFee(s);
-
         s.lastExchangeRate = newRate;
         s.lastUpdateTimestamp = block.timestamp.toUint64();
         s.lastComputeTimestamp = computeTimestamp;
 
         emit ExchangeRateUpdated(oldRate, newRate, block.timestamp);
+    }
+
+    /// @notice Settle accrued management fees by minting vault shares to the treasury.
+    function settleManagementFee() external onlyRole(EXECUTOR_ROLE) whenNotPaused nonReentrant {
+        _settleManagementFee(_getAccountantStorage());
     }
 
     // =============================================================
@@ -252,8 +255,6 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
 
         AccountantStorage storage s = _getAccountantStorage();
         uint256 oldRate = s.lastExchangeRate;
-
-        _settleManagementFee(s);
 
         s.lastExchangeRate = newRate;
         s.lastUpdateTimestamp = block.timestamp.toUint64();

@@ -92,6 +92,18 @@ abstract contract MantleYieldVaultControllerModule is MantleYieldVaultStorage {
             uint256 actual = settledAssets[i];
             if (actual == 0) revert Vault__ZeroAmount();
 
+            // Settlement deviation guard: revert if settled amount deviates too far from estimate
+            if (maxSettlementDeviationBps > 0 && req.estimatedAssets > 0) {
+                uint256 delta =
+                    actual > req.estimatedAssets ? actual - req.estimatedAssets : req.estimatedAssets - actual;
+                uint256 deviationBps = (delta * FEE_BASIS) / req.estimatedAssets;
+                if (deviationBps > maxSettlementDeviationBps) {
+                    revert Vault__SettlementDeviationExceeded(
+                        id, req.estimatedAssets, actual, deviationBps, maxSettlementDeviationBps
+                    );
+                }
+            }
+
             if (actual != req.estimatedAssets) {
                 emit RequestSettlementAdjusted(id, req.estimatedAssets, actual);
             }
