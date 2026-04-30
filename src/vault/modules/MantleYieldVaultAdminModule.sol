@@ -50,6 +50,15 @@ abstract contract MantleYieldVaultAdminModule is MantleYieldVaultStorage {
         emit MinDepositAmountUpdated(oldAmount, newAmount);
     }
 
+    function setMaxSettlementDeviation(uint256 newBps) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (newBps > MAX_SETTLEMENT_DEVIATION_CEILING) {
+            revert Vault__InvalidSettlementDeviation(newBps);
+        }
+        uint256 old = maxSettlementDeviationBps;
+        maxSettlementDeviationBps = newBps;
+        emit SettlementDeviationUpdated(old, newBps);
+    }
+
     function setGateway(address newGateway) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (newGateway == address(0)) revert Vault__ZeroAddress();
         address old = gateway;

@@ -81,6 +81,9 @@ abstract contract MantleYieldVaultStorage is
     // Used by controller to gate rebalance divest — prevents pre-empting user liability.
     uint256 public pendingRequestCount;
 
+    uint256 public constant MAX_SETTLEMENT_DEVIATION_CEILING = 3_000; // 30% absolute cap
+    uint256 public maxSettlementDeviationBps;
+
     // =============================================================
     // Modifiers
     // =============================================================
@@ -147,6 +150,9 @@ abstract contract MantleYieldVaultStorage is
         if (p.redemptionFeeBps > p.maxRedemptionFeeBps) {
             revert Vault__FeeTooHigh(p.redemptionFeeBps, p.maxRedemptionFeeBps);
         }
+        if (p.maxSettlementDeviationBps > MAX_SETTLEMENT_DEVIATION_CEILING) {
+            revert Vault__InvalidSettlementDeviation(p.maxSettlementDeviationBps);
+        }
 
         gateway = p.gateway;
         controller = p.controller;
@@ -156,6 +162,7 @@ abstract contract MantleYieldVaultStorage is
         redemptionFeeBps = p.redemptionFeeBps;
         minRedeemAmount = p.minRedeemAmount;
         minDepositAmount = p.minDepositAmount;
+        maxSettlementDeviationBps = p.maxSettlementDeviationBps;
         nextRequestId = 1;
         nextInFlightId = 1;
     }

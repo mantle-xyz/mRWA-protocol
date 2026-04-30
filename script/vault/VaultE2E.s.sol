@@ -300,7 +300,8 @@ contract VaultE2E is Script {
                 maxRedemptionFeeBps: 500,
                 redemptionFeeBps: 100,
                 minRedeemAmount: 10e6,
-                minDepositAmount: 1e6
+                minDepositAmount: 1e6,
+                maxSettlementDeviationBps: 1000
             })
         );
         gateway.initialize(
