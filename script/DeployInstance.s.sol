@@ -170,7 +170,7 @@ contract DeployInstance is Script {
         // ── Phase 6: Wire roles ───────────────────────────────────────
         // Grant the existing AccountantExecutor access to the new Accountant instance.
         // BOT_ROLE on the executor itself is already configured — no change needed there.
-        d.accountant.grantRole(d.accountant.EXECUTOR_ROLE(), acctExecAddr);
+        d.accountant.grantRole(d.accountant.ACCOUNTANT_EXECUTOR_ROLE(), acctExecAddr);
         d.vault.grantRole(d.vault.PAUSER_ROLE(), pauser);
         console2.log("[6] Roles wired");
 
