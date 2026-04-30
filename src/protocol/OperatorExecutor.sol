@@ -7,7 +7,7 @@ import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/U
 
 /**
  * @notice Operator gateway for StrategyController command execution.
- * @dev Grant this contract EXECUTOR_ROLE on StrategyController after deployment.
+ * @dev Grant this contract OPERATOR_EXECUTOR_ROLE on StrategyController after deployment.
  *      Only accounts holding BOT_ROLE can trigger commands.
  *      DEFAULT_ADMIN_ROLE manages BOT_ROLE membership and authorizes upgrades.
  */

@@ -4,6 +4,8 @@ pragma solidity ^0.8.24;
 import {Accountant} from "../src/accountant/Accountant.sol";
 import {AccountantExecutor} from "../src/accountant/AccountantExecutor.sol";
 import {AccountantFactory} from "../src/accountant/AccountantFactory.sol";
+import {SubRedManagementAdapterFactory} from "../src/adapters/digift/SubRedManagementAdapterFactory.sol";
+import {SubRedManagementAdapter} from "../src/adapters/digift/SubRedManagementAdapterUpgradeable.sol";
 import {SanctionsOracle} from "../src/compliance/SanctionsOracle.sol";
 import {SanctionsOracleFactory} from "../src/compliance/SanctionsOracleFactory.sol";
 import {ISanctionsOracle} from "../src/interfaces/compliance/ISanctionsOracle.sol";
@@ -58,6 +60,17 @@ import {Script, console2} from "forge-std/Script.sol";
 ///   F_MIN_REDEEM_AMOUNT
 ///   F_MIN_DEPOSIT_AMOUNT
 ///   F_SYNC_REDEEM_DISABLED
+///
+/// Optional adapter env (omit F_SUBRED_ADAPTER_FACTORY to skip adapter deployment):
+///   F_SUBRED_ADAPTER_FACTORY     – SubRedManagementAdapterFactory address
+///   F_ADAPTER_SUBRED_MANAGEMENT  – Digift SubRedManagement contract address
+///   F_ADAPTER_ST_TOKEN           – Target security token address
+///   F_ADAPTER_PRICE_ORACLE       – DFeedPriceOracle address (default: address(0))
+///   F_ADAPTER_MANUAL_POS_TOKEN_PRICE – Manual pos token price (default: 0)
+///   F_ADAPTER_SUBSCRIBE_STEP_ASSET   – Subscribe step size (default: 0)
+///   F_ADAPTER_REDEEM_STEP_POS        – Redeem step size (default: 0)
+///   F_ADAPTER_MIN_SUBSCRIBE_ASSET    – Min subscribe amount (default: 0)
+///   F_ADAPTER_MIN_REDEEM_POS         – Min redeem amount (default: 0)
 contract DeployInstance is Script {
     struct Deployed {
         SanctionsOracle oracle;
@@ -67,6 +80,7 @@ contract DeployInstance is Script {
         AccountantExecutor accountantExecutor;
         StrategyController controller;
         OperatorExecutor operatorExecutor;
+        SubRedManagementAdapter adapter;
     }
 
     function run() external returns (Deployed memory d) {
@@ -170,9 +184,40 @@ contract DeployInstance is Script {
         // ── Phase 6: Wire roles ───────────────────────────────────────
         // Grant the existing AccountantExecutor access to the new Accountant instance.
         // BOT_ROLE on the executor itself is already configured — no change needed there.
-        d.accountant.grantRole(d.accountant.EXECUTOR_ROLE(), acctExecAddr);
+        d.accountant.grantRole(d.accountant.ACCOUNTANT_EXECUTOR_ROLE(), acctExecAddr);
         d.vault.grantRole(d.vault.PAUSER_ROLE(), pauser);
         console2.log("[6] Roles wired");
+
+        // ── Phase 7 (optional): Deploy adapter via existing factory ───
+        address adapterFactoryAddr = vm.envOr("F_SUBRED_ADAPTER_FACTORY", address(0));
+        if (adapterFactoryAddr != address(0)) {
+            SubRedManagementAdapterFactory adapterFactory = SubRedManagementAdapterFactory(adapterFactoryAddr);
+            address adapterSubRed = vm.envAddress("F_ADAPTER_SUBRED_MANAGEMENT");
+            address adapterStToken = vm.envAddress("F_ADAPTER_ST_TOKEN");
+            address adapterPriceOracle = vm.envOr("F_ADAPTER_PRICE_ORACLE", address(0));
+            uint256 adapterManualPrice = vm.envOr("F_ADAPTER_MANUAL_POS_TOKEN_PRICE", uint256(0));
+
+            address adapterAddr = adapterFactory.deployAndInitAdapter(
+                vaultAddr, adapterSubRed, adapterStToken, admin, controllerAddr, acctExecAddr, adapterPriceOracle
+            );
+            d.adapter = SubRedManagementAdapter(adapterAddr);
+
+            if (adapterManualPrice != 0) {
+                require(adapterPriceOracle == address(0), "MANUAL_PRICE_WITH_ORACLE");
+                d.adapter.setManualPosTokenPrice(adapterManualPrice);
+            }
+
+            uint256 subscribeStep = vm.envOr("F_ADAPTER_SUBSCRIBE_STEP_ASSET", uint256(0));
+            uint256 redeemStep = vm.envOr("F_ADAPTER_REDEEM_STEP_POS", uint256(0));
+            uint256 minSubscribe = vm.envOr("F_ADAPTER_MIN_SUBSCRIBE_ASSET", uint256(0));
+            uint256 minRedeem = vm.envOr("F_ADAPTER_MIN_REDEEM_POS", uint256(0));
+            if (subscribeStep != 0 || redeemStep != 0 || minSubscribe != 0 || minRedeem != 0) {
+                d.adapter.setExecutionConstraints(minSubscribe, subscribeStep, minRedeem, redeemStep);
+            }
+            console2.log("[7] Adapter deployed:", adapterAddr);
+        } else {
+            console2.log("[7] Adapter skipped (F_SUBRED_ADAPTER_FACTORY not set)");
+        }
 
         vm.stopBroadcast();
 
@@ -185,6 +230,9 @@ contract DeployInstance is Script {
         console2.log("Controller         :", controllerAddr);
         console2.log("OperatorExecutor   :", opExecAddr);
         console2.log("AccountantExecutor :", acctExecAddr);
+        if (address(d.adapter) != address(0)) {
+            console2.log("Adapter            :", address(d.adapter));
+        }
         console2.log("");
         console2.log("All proxies share beacons with existing instances.");
         console2.log("UpgradeAll will upgrade this instance atomically with the rest.");

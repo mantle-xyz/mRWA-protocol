@@ -13,7 +13,7 @@ import {Script, console2} from "forge-std/Script.sol";
 ///         2. AccountantFactory (creates UpgradeableBeacon internally)
 ///         3. Accountant instance via BeaconProxy (through factory)
 ///         4. AccountantExecutor behind a UUPS proxy (ERC1967Proxy)
-///         5. Wires EXECUTOR_ROLE and BOT_ROLE
+///         5. Wires ACCOUNTANT_EXECUTOR_ROLE and BOT_ROLE
 ///
 /// Required env vars (set via deploy-config YAML):
 ///   F_VAULT_ADDRESS        – MantleYieldVault proxy address
@@ -70,10 +70,10 @@ contract DeployAccountant is Script {
         console2.log("       Executor (UUPS)   :", address(executorProxy));
 
         // ---- 5. Wire roles ----
-        accountant.grantRole(accountant.EXECUTOR_ROLE(), address(executorProxy));
+        accountant.grantRole(accountant.ACCOUNTANT_EXECUTOR_ROLE(), address(executorProxy));
         executor.grantRole(executor.BOT_ROLE(), bot);
         console2.log("[5/5] Roles wired");
-        console2.log("  EXECUTOR_ROLE -> Executor proxy");
+        console2.log("  ACCOUNTANT_EXECUTOR_ROLE -> Executor proxy");
         console2.log("  BOT_ROLE      -> bot:", bot);
 
         vm.stopBroadcast();
@@ -83,7 +83,10 @@ contract DeployAccountant is Script {
         console2.log("=== Post-deploy Verification ===");
         console2.log("Beacon -> impl:         ", factory.implementation());
         console2.log("Factory accountant cnt: ", factory.accountantCount());
-        console2.log("Has EXECUTOR_ROLE:      ", accountant.hasRole(accountant.EXECUTOR_ROLE(), address(executor)));
+        console2.log(
+            "Has ACCOUNTANT_EXECUTOR_ROLE:",
+            accountant.hasRole(accountant.ACCOUNTANT_EXECUTOR_ROLE(), address(executor))
+        );
         console2.log("Has BOT_ROLE:           ", executor.hasRole(executor.BOT_ROLE(), bot));
     }
 }

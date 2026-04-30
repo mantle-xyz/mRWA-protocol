@@ -116,6 +116,20 @@ tasks:
         vars:
           EXTRA_ARGS: ${ROOT_DIR}/script/strategy/DeploySubRedManagementAdapter.s.sol {{.CLI_ARGS}}
 
+  DeploySubRedManagementAdapterUpgradeable:
+    desc: Deploy an upgradeable SubRedManagementAdapter as BeaconProxy via SubRedManagementAdapterFactory
+    cmds:
+      - task: _script
+        vars:
+          EXTRA_ARGS: ${ROOT_DIR}/script/strategy/DeploySubRedManagementAdapterUpgradeable.s.sol {{.CLI_ARGS}}
+
+  VerifySubRedManagementAdapterUpgradeable:
+    desc: Verify upgradeable SubRedManagementAdapter on block explorer (re-runs with --resume; F_VERIFY=true adds --verify)
+    cmds:
+      - task: _script
+        vars:
+          EXTRA_ARGS: ${ROOT_DIR}/script/strategy/DeploySubRedManagementAdapterUpgradeable.s.sol --broadcast --resume {{.CLI_ARGS}}
+
   ReplaceStrategyAdapter:
     desc: |
       Replace an active adapter with a new one (preserving slot/weight/priority/isAsync).
@@ -139,6 +153,13 @@ tasks:
       - task: _script
         vars:
           EXTRA_ARGS: ${ROOT_DIR}/script/strategy/UpgradeStrategyController.s.sol {{.CLI_ARGS}}
+
+  UpgradeSubRedManagementAdapter:
+    desc: Upgrade the upgradeable SubRedManagementAdapter beacon implementation (all BeaconProxy instances)
+    cmds:
+      - task: _script
+        vars:
+          EXTRA_ARGS: ${ROOT_DIR}/script/strategy/UpgradeSubRedManagementAdapter.s.sol {{.CLI_ARGS}}
 
   UpgradeSanctionsOracle:
     cmds:
@@ -192,5 +213,8 @@ tasks:
         vars:
           CLI_ARGS: "{{.CLI_ARGS}}"
       - task: UpgradeAccountantExecutor
+        vars:
+          CLI_ARGS: "{{.CLI_ARGS}}"
+      - task: UpgradeSubRedManagementAdapter
         vars:
           CLI_ARGS: "{{.CLI_ARGS}}"
