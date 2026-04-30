@@ -61,7 +61,6 @@ import {Script, console2} from "forge-std/Script.sol";
 ///   F_COMPLIANCE_BOT_ADDRESS     – SanctionsOracle COMPLIANCE_ROLE
 ///   F_BOT_ADDRESS                – AccountantExecutor BOT_ROLE
 ///   F_SIGNER_ADDRESS             – OperatorExecutor BOT_ROLE (initial bot, legacy env name)
-///   F_STRATEGY_MANAGER_ADDRESS   – StrategyController STRATEGY_MANAGER_ROLE
 ///   F_TREASURY_ADDRESS           – fee share recipient
 ///   (also used as gateway sanctionSafe init)
 ///   F_PAUSER_ADDRESS             – Vault PAUSER_ROLE
@@ -100,7 +99,6 @@ contract DeployAll is Script {
         address complianceBot = vm.envAddress("F_COMPLIANCE_BOT_ADDRESS");
         address bot = vm.envAddress("F_BOT_ADDRESS");
         address signer = vm.envAddress("F_SIGNER_ADDRESS");
-        // strategyManager removed — StrategyController.initialize doesn't take this param
         address treasury = vm.envAddress("F_TREASURY_ADDRESS");
         address pauser = vm.envAddress("F_PAUSER_ADDRESS");
         uint64 initialRate = uint64(vm.envUint("F_INITIAL_RATE"));

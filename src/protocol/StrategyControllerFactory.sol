@@ -68,8 +68,8 @@ contract StrategyControllerFactory {
      * @notice Deploy and atomically initialize a StrategyController as a BeaconProxy.
      * @param vault_ The MantleYieldVault address this controller manages
      * @param admin Address granted DEFAULT_ADMIN_ROLE
-     * @param strategyManager Address granted STRATEGY_MANAGER_ROLE
-     * @param executorGateway Address granted OPERATOR_EXECUTOR_ROLE (must be a contract)
+     * @param operatorExecutor Address granted OPERATOR_EXECUTOR_ROLE (must be a contract)
+     * @param pauser Address granted PAUSER_ROLE
      * @param bufferTargetBps_ Buffer target in basis points
      * @param rebalanceThresholdBps_ Rebalance threshold in basis points
      * @param rebalanceCooldown_ Minimum seconds between rebalances
@@ -77,23 +77,15 @@ contract StrategyControllerFactory {
     function deployAndInitController(
         address vault_,
         address admin,
-        address strategyManager,
-        address executorGateway,
+        address operatorExecutor,
+        address pauser,
         uint16 bufferTargetBps_,
         uint16 rebalanceThresholdBps_,
         uint64 rebalanceCooldown_
     ) external returns (address controller) {
         bytes memory initData = abi.encodeCall(
             StrategyController.initialize,
-            (
-                vault_,
-                admin,
-                strategyManager,
-                executorGateway,
-                bufferTargetBps_,
-                rebalanceThresholdBps_,
-                rebalanceCooldown_
-            )
+            (vault_, admin, operatorExecutor, pauser, bufferTargetBps_, rebalanceThresholdBps_, rebalanceCooldown_)
         );
 
         BeaconProxy proxy = new BeaconProxy(address(BEACON), initData);
