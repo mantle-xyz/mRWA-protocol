@@ -2017,6 +2017,27 @@ contract StrategyControllerUnitTest is Test {
         assertEq(settledAmount, 0);
     }
 
+    function test_RevertWhen_SettleAdapterInvestRefundExceedsOriginalAssetAmount() public {
+        _registerSingleAsyncStrategy();
+        uint256 inFlightId = vault.createInFlight(address(asyncAdapter), address(posToken), 5_000e18, 5_000e18, true);
+        uint256[] memory investInFlightIds = new uint256[](1);
+        investInFlightIds[0] = inFlightId;
+        uint256[] memory investSettledPosAmounts = new uint256[](1);
+        investSettledPosAmounts[0] = 0;
+        uint256[] memory investRefundAssetAmounts = new uint256[](1);
+        investRefundAssetAmounts[0] = 5_001e18;
+
+        bytes4 invalidRefundSelector =
+            bytes4(keccak256("Controller__InvalidInvestRefundAmount(uint256,uint256,uint256)"));
+        vm.prank(address(executorGateway));
+        vm.expectRevert(abi.encodeWithSelector(invalidRefundSelector, inFlightId, 5_001e18, 5_000e18));
+        controller.settleAdapter(
+            address(asyncAdapter),
+            _investSettlement(investInFlightIds, investSettledPosAmounts, investRefundAssetAmounts),
+            _redeemSettlement(new uint256[](0), new uint256[](0))
+        );
+    }
+
     function test_RetryRedeemInFlight_Success_ForAsyncPendingRedeem() public {
         _registerSingleAsyncStrategy();
         uint256 inFlightId = vault.createInFlight(address(asyncAdapter), address(posToken), 50e18, 100e18, false);

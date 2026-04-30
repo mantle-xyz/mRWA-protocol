@@ -112,6 +112,9 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     error Controller__InvestSweepAmountMismatch(address adapter, uint256 expected, uint256 claimed);
     error Controller__InvestRefundSweepAmountMismatch(address adapter, uint256 expected, uint256 claimed);
     error Controller__RedeemSweepAmountMismatch(address adapter, uint256 expected, uint256 claimed);
+    error Controller__InvalidInvestRefundAmount(
+        uint256 inFlightId, uint256 refundAssetAmount, uint256 originalAssetAmount
+    );
     error Controller__ClaimInputsLengthMismatch();
     error Controller__UpdateStrategiesLengthMismatch();
     error Controller__DuplicateStrategyUpdate(address adapter);
@@ -1022,6 +1025,25 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         }
     }
 
+    function _validateInvestSettlement(
+        address adapter,
+        IStrategyControllerExecutor.InvestSettlementInput calldata invest
+    ) internal view {
+        uint256 len = invest.inFlightIds.length;
+        for (uint256 i = 0; i < len; i++) {
+            (, address recordAdapter,,, uint256 originalAssetAmount,, bool isInvest,,) =
+                vault.inFlightRecords(invest.inFlightIds[i]);
+            if (recordAdapter != adapter || !isInvest) {
+                revert Controller__InvalidInvestInFlight(invest.inFlightIds[i]);
+            }
+            if (invest.refundAssetAmounts[i] > originalAssetAmount) {
+                revert Controller__InvalidInvestRefundAmount(
+                    invest.inFlightIds[i], invest.refundAssetAmounts[i], originalAssetAmount
+                );
+            }
+        }
+    }
+
     function _confirmSingleRedeemInFlight(address expectedAdapter, uint256 inFlightId, uint256 settledAmount) internal {
         (, address recordAdapter,,,,, bool isInvest,,) = vault.inFlightRecords(inFlightId);
         if (recordAdapter != expectedAdapter || isInvest) {
@@ -1100,6 +1122,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
             revert Controller__SettleAmountsLengthMismatch();
         }
 
+        _validateInvestSettlement(adapter, invest);
         _sweepInvestSettlement(adapter, invest);
         _sweepRedeemSettlement(adapter, redeem);
 
