@@ -110,6 +110,13 @@ tasks:
           EXTRA_ARGS: ${ROOT_DIR}/script/accountant/UpgradeAccountant.s.sol {{.CLI_ARGS}}
 
 
+  DeploySubRedManagementAdapterFactory:
+    desc: Deploy SubRedManagementAdapterFactory with real implementation behind UpgradeableBeacon
+    cmds:
+      - task: _script
+        vars:
+          EXTRA_ARGS: ${ROOT_DIR}/script/strategy/DeploySubRedManagementAdapterFactory.s.sol {{.CLI_ARGS}}
+
   DeploySubRedManagementAdapter:
     cmds:
       - task: _script
