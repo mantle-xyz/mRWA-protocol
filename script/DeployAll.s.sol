@@ -4,8 +4,11 @@ pragma solidity ^0.8.24;
 import {Accountant} from "../src/accountant/Accountant.sol";
 import {AccountantExecutor} from "../src/accountant/AccountantExecutor.sol";
 import {AccountantFactory} from "../src/accountant/AccountantFactory.sol";
+import {SubRedManagementAdapterFactory} from "../src/adapters/digift/SubRedManagementAdapterFactory.sol";
+import {SubRedManagementAdapter} from "../src/adapters/digift/SubRedManagementAdapterUpgradeable.sol";
 import {SanctionsOracle} from "../src/compliance/SanctionsOracle.sol";
 import {SanctionsOracleFactory} from "../src/compliance/SanctionsOracleFactory.sol";
+import {ISubRedManagementAdapter} from "../src/interfaces/adapters/digift/ISubRedManagementAdapter.sol";
 
 import {ISanctionsOracle} from "../src/interfaces/compliance/ISanctionsOracle.sol";
 import {IMantleVaultGateway} from "../src/interfaces/vault/IMantleVaultGateway.sol";
@@ -74,6 +77,16 @@ import {Script, console2} from "forge-std/Script.sol";
 ///   F_MIN_REDEEM_AMOUNT          – Vault minimum redeem amount
 ///   F_MIN_DEPOSIT_AMOUNT         – Vault minimum deposit amount
 ///   F_SYNC_REDEEM_DISABLED       – Gateway sync redeem disabled flag (true/false)
+///
+/// Optional adapter env (omit to skip adapter deployment):
+///   F_ADAPTER_SUBRED_MANAGEMENT  – Digift SubRedManagement contract address
+///   F_ADAPTER_ST_TOKEN           – Target security token address
+///   F_ADAPTER_PRICE_ORACLE       – DFeedPriceOracle address (default: address(0))
+///   F_ADAPTER_MANUAL_POS_TOKEN_PRICE – Manual pos token price (default: 0)
+///   F_ADAPTER_SUBSCRIBE_STEP_ASSET   – Subscribe step size (default: 0)
+///   F_ADAPTER_REDEEM_STEP_POS        – Redeem step size (default: 0)
+///   F_ADAPTER_MIN_SUBSCRIBE_ASSET    – Min subscribe amount (default: 0)
+///   F_ADAPTER_MIN_REDEEM_POS         – Min redeem amount (default: 0)
 contract DeployAll is Script {
     struct Deployed {
         // Factories
@@ -82,6 +95,7 @@ contract DeployAll is Script {
         GatewayFactory gatewayFactory;
         AccountantFactory accountantFactory;
         StrategyControllerFactory controllerFactory;
+        SubRedManagementAdapterFactory adapterFactory;
         // Proxies (user-facing)
         SanctionsOracle oracle;
         MantleYieldVault vault;
@@ -90,6 +104,7 @@ contract DeployAll is Script {
         AccountantExecutor accountantExecutor;
         StrategyController controller;
         OperatorExecutor operatorExecutor;
+        SubRedManagementAdapter adapter;
     }
 
     function run() external returns (Deployed memory d) {
@@ -142,6 +157,9 @@ contract DeployAll is Script {
         StrategyController controllerImpl = new StrategyController();
         d.controllerFactory = new StrategyControllerFactory(address(controllerImpl), admin);
 
+        SubRedManagementAdapter adapterImpl = new SubRedManagementAdapter();
+        d.adapterFactory = new SubRedManagementAdapterFactory(address(adapterImpl), admin);
+
         AccountantExecutor accountantExecImpl = new AccountantExecutor();
         OperatorExecutor operatorExecImpl = new OperatorExecutor();
 
@@ -152,6 +170,7 @@ contract DeployAll is Script {
         console2.log("  GatewayFactory     :", address(d.gatewayFactory));
         console2.log("  AccountantFactory  :", address(d.accountantFactory));
         console2.log("  ControllerFactory  :", address(d.controllerFactory));
+        console2.log("  AdapterFactory     :", address(d.adapterFactory));
         console2.log("  AcctExecutor impl  :", address(accountantExecImpl));
         console2.log("  OpExecutor impl    :", address(operatorExecImpl));
 
@@ -274,6 +293,52 @@ contract DeployAll is Script {
         console2.log("  AcctExecutor BOT_ROLE    -> bot   :", bot);
         console2.log("  Vault PAUSER_ROLE        -> pauser:", pauser);
 
+        // ═════════════════════════════════════════════════════════════
+        //  Phase 5 (optional): Deploy upgradeable SubRedManagementAdapter
+        //  Skipped when F_ADAPTER_SUBRED_MANAGEMENT is not set.
+        // ═════════════════════════════════════════════════════════════
+
+        address adapterSubRed = vm.envOr("F_ADAPTER_SUBRED_MANAGEMENT", address(0));
+        if (adapterSubRed != address(0)) {
+            address adapterStToken = vm.envAddress("F_ADAPTER_ST_TOKEN");
+            address adapterPriceOracle = vm.envOr("F_ADAPTER_PRICE_ORACLE", address(0));
+            uint256 adapterManualPrice = vm.envOr("F_ADAPTER_MANUAL_POS_TOKEN_PRICE", uint256(0));
+
+            address adapterAddr = d.adapterFactory
+                .deployAndInitAdapter(
+                    vaultAddr,
+                    adapterSubRed,
+                    adapterStToken,
+                    admin,
+                    controllerAddr,
+                    address(d.accountantExecutor),
+                    adapterPriceOracle
+                );
+            d.adapter = SubRedManagementAdapter(adapterAddr);
+
+            if (adapterManualPrice != 0) {
+                require(adapterPriceOracle == address(0), "MANUAL_PRICE_WITH_ORACLE");
+                d.adapter.setManualPosTokenPrice(adapterManualPrice);
+            }
+
+            uint256 subscribeStep = vm.envOr("F_ADAPTER_SUBSCRIBE_STEP_ASSET", uint256(0));
+            uint256 redeemStep = vm.envOr("F_ADAPTER_REDEEM_STEP_POS", uint256(0));
+            uint256 minSubscribe = vm.envOr("F_ADAPTER_MIN_SUBSCRIBE_ASSET", uint256(0));
+            uint256 minRedeem = vm.envOr("F_ADAPTER_MIN_REDEEM_POS", uint256(0));
+            if (subscribeStep != 0 || redeemStep != 0 || minSubscribe != 0 || minRedeem != 0) {
+                d.adapter.setExecutionConstraints(minSubscribe, subscribeStep, minRedeem, redeemStep);
+            }
+
+            console2.log("");
+            console2.log("[Phase 5] Adapter deployed");
+            console2.log("  Adapter (proxy)    :", adapterAddr);
+            console2.log("  Adapter vault      :", d.adapter.vault());
+            console2.log("  Adapter posToken   :", d.adapter.posToken());
+        } else {
+            console2.log("");
+            console2.log("[Phase 5] Adapter skipped (F_ADAPTER_SUBRED_MANAGEMENT not set)");
+        }
+
         vm.stopBroadcast();
 
         // ═════════════════════════════════════════════════════════════
@@ -315,6 +380,16 @@ contract DeployAll is Script {
         console2.log("--- OperatorExecutor ---");
         console2.log("  Controller:      ", "passed per execute call");
         console2.log("  Has BOT:         ", d.operatorExecutor.hasRole(d.operatorExecutor.BOT_ROLE(), signer));
+        console2.log("");
+        console2.log("--- SubRedManagementAdapterFactory ---");
+        console2.log("  Factory:         ", address(d.adapterFactory));
+        console2.log("  Beacon:          ", address(d.adapterFactory.BEACON()));
+        console2.log("  Adapter count:   ", d.adapterFactory.adapterCount());
+        if (address(d.adapter) != address(0)) {
+            console2.log("  Adapter[0]:      ", address(d.adapter));
+            console2.log("    vault():       ", d.adapter.vault());
+            console2.log("    posToken():    ", d.adapter.posToken());
+        }
         console2.log("");
         console2.log("========== Deployment Complete ==========");
     }
