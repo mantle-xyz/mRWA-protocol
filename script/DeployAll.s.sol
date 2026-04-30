@@ -236,7 +236,8 @@ contract DeployAll is Script {
                     maxRedemptionFeeBps: vm.envUint("F_MAX_REDEMPTION_FEE_BPS"),
                     redemptionFeeBps: vm.envUint("F_REDEMPTION_FEE_BPS"),
                     minRedeemAmount: vm.envUint("F_MIN_REDEEM_AMOUNT"),
-                    minDepositAmount: vm.envUint("F_MIN_DEPOSIT_AMOUNT")
+                    minDepositAmount: vm.envUint("F_MIN_DEPOSIT_AMOUNT"),
+                    maxSettlementDeviationBps: vm.envOr("F_MAX_SETTLEMENT_DEVIATION_BPS", uint256(1000))
                 })
             );
 
