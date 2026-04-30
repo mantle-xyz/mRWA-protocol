@@ -8,10 +8,11 @@ import {IMantleYieldVault} from "../../interfaces/vault/IMantleYieldVault.sol";
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
-abstract contract BaseAdapter is IStrategyAdapter, AccessControl, ReentrancyGuard {
+abstract contract BaseAdapter is IStrategyAdapter, AccessControl, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
 
     bytes32 public constant CONTROLLER_ROLE = keccak256("CONTROLLER_ROLE");
@@ -22,9 +23,7 @@ abstract contract BaseAdapter is IStrategyAdapter, AccessControl, ReentrancyGuar
     address public immutable VAULT;
     address public priceOracle;
     uint256 public manualPosTokenPrice;
-    bool public paused;
 
-    error Adapter__Paused();
     error Adapter__InvalidAmount();
     error Adapter__InvalidAddress();
     error Adapter__Unsupported();
@@ -44,20 +43,8 @@ abstract contract BaseAdapter is IStrategyAdapter, AccessControl, ReentrancyGuar
         _;
     }
 
-    modifier onlyPauser() {
-        _checkRole(PAUSER_ROLE, msg.sender);
-        _;
-    }
-
     modifier onlyAccountantExecutor() {
         _checkRole(ACCOUNTANT_EXECUTOR_ROLE, msg.sender);
-        _;
-    }
-
-    modifier whenNotPaused() {
-        if (paused) {
-            revert Adapter__Paused();
-        }
         _;
     }
 
@@ -94,9 +81,7 @@ abstract contract BaseAdapter is IStrategyAdapter, AccessControl, ReentrancyGuar
         return address(ASSET);
     }
 
-    function posToken() external view virtual override returns (address) {
-        return address(0);
-    }
+    function posToken() external view virtual override returns (address);
 
     function estimatePosAmount(uint256 assetAmount) external view virtual override returns (uint256 positionAmount) {
         positionAmount = assetAmount;
@@ -177,8 +162,14 @@ abstract contract BaseAdapter is IStrategyAdapter, AccessControl, ReentrancyGuar
     // Admin Actions
     // =============================================================
 
-    function setPaused(bool paused_) external virtual override onlyPauser {
-        paused = paused_;
+    function setPaused(bool paused_) external virtual override onlyRole(PAUSER_ROLE) {
+        if (paused_ != paused()) {
+            if (paused_) {
+                _pause();
+            } else {
+                _unpause();
+            }
+        }
         emit AdapterPaused(address(this), paused_);
     }
 

@@ -88,6 +88,10 @@ contract MockSubRedManagement is ISubRedManagement {
 }
 
 contract SubRedManagementAdapterTest is Test {
+    error EnforcedPause();
+
+    event Paused(address account);
+    event Unpaused(address account);
     event AdapterRedeemRequested(
         address indexed adapter, address indexed caller, uint256 amount, address indexed receiver
     );
@@ -251,6 +255,33 @@ contract SubRedManagementAdapterTest is Test {
         vm.prank(other);
         vm.expectRevert();
         adapter.setPaused(true);
+    }
+
+    function test_SetPaused_EmitsOZPausableEventsAndRemainsIdempotent() public {
+        vm.expectEmit(false, false, false, true, address(adapter));
+        emit Paused(address(this));
+        adapter.setPaused(true);
+        assertTrue(adapter.paused());
+
+        adapter.setPaused(true);
+        assertTrue(adapter.paused());
+
+        vm.expectEmit(false, false, false, true, address(adapter));
+        emit Unpaused(address(this));
+        adapter.setPaused(false);
+        assertFalse(adapter.paused());
+
+        adapter.setPaused(false);
+        assertFalse(adapter.paused());
+    }
+
+    function test_RevertWhen_DepositPaused_UsesOZPausableError() public {
+        usdc.mint(address(vault), 1_000e18);
+        vault.approveToAdapter(address(adapter), 500e18);
+        adapter.setPaused(true);
+
+        vm.expectRevert(EnforcedPause.selector);
+        adapter.deposit(100e18, address(0));
     }
 
     function test_SweepDustToken_Success() public {
