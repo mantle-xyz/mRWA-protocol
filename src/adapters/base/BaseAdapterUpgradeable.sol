@@ -7,6 +7,7 @@ import {IDFeedPriceOracle} from "../../interfaces/adapters/digift/IDFeedPriceOra
 import {IMantleYieldVault} from "../../interfaces/vault/IMantleYieldVault.sol";
 import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
@@ -15,7 +16,13 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 /// @title BaseAdapterUpgradeable
 /// @notice Upgradeable version of BaseAdapter using ERC-7201 namespaced storage.
 ///         Designed to be deployed behind a BeaconProxy via a factory.
-abstract contract BaseAdapterUpgradeable is IStrategyAdapter, Initializable, AccessControlUpgradeable, ReentrancyGuard {
+abstract contract BaseAdapterUpgradeable is
+    IStrategyAdapter,
+    Initializable,
+    AccessControlUpgradeable,
+    ReentrancyGuard,
+    PausableUpgradeable
+{
     using SafeERC20 for IERC20;
 
     // =============================================================
@@ -36,7 +43,6 @@ abstract contract BaseAdapterUpgradeable is IStrategyAdapter, Initializable, Acc
         address vault;
         address priceOracle;
         uint256 manualPosTokenPrice;
-        bool paused;
     }
 
     /// @dev keccak256(abi.encode(uint256(keccak256("mrwa.storage.BaseAdapter")) - 1)) & ~bytes32(uint256(0xff))
@@ -54,7 +60,6 @@ abstract contract BaseAdapterUpgradeable is IStrategyAdapter, Initializable, Acc
     //                          ERRORS
     // =============================================================
 
-    error PausedError();
     error InvalidAmount();
     error InvalidAddress();
     error Unsupported();
@@ -82,20 +87,8 @@ abstract contract BaseAdapterUpgradeable is IStrategyAdapter, Initializable, Acc
         _;
     }
 
-    modifier onlyPauser() {
-        _checkRole(PAUSER_ROLE, msg.sender);
-        _;
-    }
-
     modifier onlyAccountantExecutor() {
         _checkRole(ACCOUNTANT_EXECUTOR_ROLE, msg.sender);
-        _;
-    }
-
-    modifier whenNotPaused() {
-        if (_getBaseAdapterStorage().paused) {
-            revert PausedError();
-        }
         _;
     }
 
@@ -111,6 +104,7 @@ abstract contract BaseAdapterUpgradeable is IStrategyAdapter, Initializable, Acc
         address priceOracle_
     ) internal onlyInitializing {
         __AccessControl_init();
+        __Pausable_init();
         __BaseAdapter_init_unchained(vault_, admin_, controller_, accountantExecutor_, priceOracle_);
     }
 
@@ -151,9 +145,7 @@ abstract contract BaseAdapterUpgradeable is IStrategyAdapter, Initializable, Acc
         return address(_getBaseAdapterStorage().asset);
     }
 
-    function posToken() external view virtual override returns (address) {
-        return address(0);
-    }
+    function posToken() external view virtual override returns (address);
 
     function estimatePosAmount(uint256 assetAmount) external view virtual override returns (uint256 positionAmount) {
         positionAmount = assetAmount;
@@ -240,8 +232,14 @@ abstract contract BaseAdapterUpgradeable is IStrategyAdapter, Initializable, Acc
     //                      ADMIN ACTIONS
     // =============================================================
 
-    function setPaused(bool paused_) external virtual override onlyPauser {
-        _getBaseAdapterStorage().paused = paused_;
+    function setPaused(bool paused_) external virtual override onlyRole(PAUSER_ROLE) {
+        if (paused_ != paused()) {
+            if (paused_) {
+                _pause();
+            } else {
+                _unpause();
+            }
+        }
         emit AdapterPaused(address(this), paused_);
     }
 

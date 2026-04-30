@@ -274,7 +274,7 @@ contract SubRedManagementAdapter is BaseAsync7540AdapterUpgradeable {
      * @param newWindow New deadline window in seconds.
      * @dev Only callable by DEFAULT_ADMIN_ROLE.
      */
-    function setSubscribeDeadlineWindow(uint64 newWindow) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function setSubscribeDeadlineWindow(uint64 newWindow) external onlyAdmin {
         _getSubRedAdapterStorage().subscribeDeadlineWindow = newWindow;
         emit SubscribeDeadlineWindowUpdated(newWindow);
     }
@@ -284,7 +284,7 @@ contract SubRedManagementAdapter is BaseAsync7540AdapterUpgradeable {
      * @param newWindow New deadline window in seconds.
      * @dev Only callable by DEFAULT_ADMIN_ROLE.
      */
-    function setRedeemDeadlineWindow(uint64 newWindow) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function setRedeemDeadlineWindow(uint64 newWindow) external onlyAdmin {
         _getSubRedAdapterStorage().redeemDeadlineWindow = newWindow;
         emit RedeemDeadlineWindowUpdated(newWindow);
     }
@@ -302,7 +302,7 @@ contract SubRedManagementAdapter is BaseAsync7540AdapterUpgradeable {
         uint256 subscribeStepAsset_,
         uint256 minRedeemPos_,
         uint256 redeemStepPos_
-    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    ) external onlyAdmin {
         _getSubRedAdapterStorage().executionConstraints = ExecutionConstraints({
             minSubscribeAsset: minSubscribeAsset_,
             subscribeStepAsset: subscribeStepAsset_,
@@ -329,6 +329,7 @@ contract SubRedManagementAdapter is BaseAsync7540AdapterUpgradeable {
         override
         onlyController
         whenNotPaused
+        nonReentrant
         returns (uint256)
     {
         (bool ok, uint256 executableAssetAmount, uint256 previewPosAmount) = _previewDeposit(amountAsset);
@@ -349,7 +350,13 @@ contract SubRedManagementAdapter is BaseAsync7540AdapterUpgradeable {
      * @dev Only callable by controller when not paused.
      * @dev Pulls position token from vault, then submits redeem request to SubRed.
      */
-    function requestRedeemAsync(uint256 posAmount, address receiver) external override onlyController whenNotPaused {
+    function requestRedeemAsync(uint256 posAmount, address receiver)
+        external
+        override
+        onlyController
+        whenNotPaused
+        nonReentrant
+    {
         SubRedAdapterStorage storage s = _getSubRedAdapterStorage();
         IERC20(s.stToken).safeTransferFrom(_vault(), address(this), posAmount);
         _redeem(posAmount, uint64(block.timestamp + s.redeemDeadlineWindow));
@@ -362,7 +369,13 @@ contract SubRedManagementAdapter is BaseAsync7540AdapterUpgradeable {
      * @param receiver Receiver used for adapter-level async redeem request events.
      * @dev Only callable by controller when not paused.
      */
-    function retryRedeemAsync(uint256 retryPosAmount, address receiver) external override onlyController whenNotPaused {
+    function retryRedeemAsync(uint256 retryPosAmount, address receiver)
+        external
+        override
+        onlyController
+        nonReentrant
+        whenNotPaused
+    {
         if (retryPosAmount == 0) {
             revert InvalidAmount();
         }
