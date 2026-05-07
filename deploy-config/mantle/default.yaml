@@ -1,4 +1,4 @@
-chainId: 5003
+chainId: 5000
 
 envs:
   # ── Wallet / RPC ──────────────────────────────────────────────
@@ -15,7 +15,7 @@ envs:
   F_VERIFY: "true" # set to "true" to verify on broadcast; use VerifyXxx tasks to verify post-deploy
 
   # ── Addresses (roles) ────────────────────────────────────────
-  F_ADMIN_ADDRESS: "0x65Cf61678Cf120a8F40c2F3aEDCb50BBA0e85c78"
+  F_ADMIN_ADDRESS: "0x207E804758e28F2b3fD6E4219671B327100b82f8"
   # 0x3C8af6063c934dc25F7dB727bBB6c7DeEBE21Bb2 is driven by mnemonic index 1
   F_COMPLIANCE_BOT_ADDRESS: "0x026C0fA47A4D10cb83bB580DaD884c10986115c0" # SanctionsOracle COMPLIANCE_ROLE
   F_BOT_ADDRESS: "0x026C0fA47A4D10cb83bB580DaD884c10986115c0" # AccountantExecutor BOT_ROLE
@@ -90,16 +90,22 @@ envs:
   # ── Task: DeployEmptyVaultAndAdapterFactories ────────────────
   DEPLOY_EMPTY_FACTORIES_BEACON_OWNER: ""
 
-  # ── Task: UpgradeAndInitVaultAndAdapter ──────────────────────
-  UPGRADE_INIT_VAULT_FACTORY: ""
-  UPGRADE_INIT_SUBRED_ADAPTER_FACTORY: ""
-  UPGRADE_INIT_VAULT_PROXY: ""
-  UPGRADE_INIT_ADAPTER_PROXY: ""
+  # ── Task: DeployRemainingForExistingFactories (Phase A) ─────
+  # Existing on-chain Vault BeaconProxy (passed to Gateway.init's vault pointer)
+  EXISTING_VAULT_PROXY: "0xdc26d4c8643db1eb68d31cce8aa9f221d8fb2b8c"
+
+  # ── Task: UpgradeAndInitVaultAndAdapter (Phase B) ────────────
+  UPGRADE_INIT_VAULT_FACTORY: "0xaa5c9c993d960349f18a8ed4e88dc107c3454840"
+  UPGRADE_INIT_SUBRED_ADAPTER_FACTORY: "0x6d827ca00b26817286a94abfce7aa83418ddbb40"
+  UPGRADE_INIT_VAULT_PROXY: "0xdc26d4c8643db1eb68d31cce8aa9f221d8fb2b8c"
+  UPGRADE_INIT_ADAPTER_PROXY: "0x15269bd17a9dcc6e053292d9f78b748e3efd1d6b"
   UPGRADE_INIT_ADMIN: ""
   UPGRADE_INIT_USDC: ""
-  UPGRADE_INIT_GATEWAY: ""
-  UPGRADE_INIT_CONTROLLER: ""
-  UPGRADE_INIT_ACCOUNTANT: ""
+  UPGRADE_INIT_GATEWAY: ""                    # filled from Phase A address dump
+  UPGRADE_INIT_CONTROLLER: ""                 # filled from Phase A (uninit, init in this Phase)
+  UPGRADE_INIT_ACCOUNTANT: ""                 # filled from Phase A (uninit, init in this Phase)
+  UPGRADE_INIT_ACCOUNTANT_EXECUTOR: ""        # filled from Phase A (UUPS, already inited)
+  UPGRADE_INIT_OPERATOR_EXECUTOR: ""          # filled from Phase A (UUPS, already inited)
   UPGRADE_INIT_TREASURY: ""
   UPGRADE_INIT_PAUSER: ""
   UPGRADE_INIT_VAULT_NAME: ""
