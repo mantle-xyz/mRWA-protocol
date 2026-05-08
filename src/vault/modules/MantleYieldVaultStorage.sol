@@ -32,6 +32,7 @@ abstract contract MantleYieldVaultStorage is
     // =============================================================
 
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
+    bytes32 public constant CAP_MANAGER_ROLE = keccak256("CAP_MANAGER_ROLE");
 
     address public controller;
     address public accountant;
@@ -83,6 +84,17 @@ abstract contract MantleYieldVaultStorage is
 
     uint256 public constant MAX_SETTLEMENT_DEVIATION_CEILING = 3_000; // 30% absolute cap
     uint256 public maxSettlementDeviationBps;
+
+    // =============================================================
+    // Daily Cap State
+    // =============================================================
+
+    /// @notice Remaining deposit allowance (USDC). 0 = blocked, type(uint256).max = no limit.
+    ///         Decremented on deposit. Reset by admin/off-chain service via setDepositDailyRemaining.
+    uint256 public depositDailyRemaining;
+    /// @notice Remaining redeem allowance (shares). 0 = blocked, type(uint256).max = no limit.
+    ///         Decremented on redeem/requestRedeem. Reset by admin/off-chain service via setRedeemDailyRemaining.
+    uint256 public redeemDailyRemaining;
 
     // =============================================================
     // Modifiers
@@ -163,6 +175,8 @@ abstract contract MantleYieldVaultStorage is
         minRedeemAmount = p.minRedeemAmount;
         minDepositAmount = p.minDepositAmount;
         maxSettlementDeviationBps = p.maxSettlementDeviationBps;
+        depositDailyRemaining = p.depositDailyRemaining;
+        redeemDailyRemaining = p.redeemDailyRemaining;
         nextRequestId = 1;
         nextInFlightId = 1;
     }
