@@ -32,6 +32,7 @@ abstract contract MantleYieldVaultStorage is
     // =============================================================
 
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
+    bytes32 public constant CAP_MANAGER_ROLE = keccak256("CAP_MANAGER_ROLE");
 
     address public controller;
     address public accountant;
