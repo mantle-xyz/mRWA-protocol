@@ -41,11 +41,15 @@ contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultA
     function _requestRedeem(address owner, uint256 shares) internal returns (uint256 requestId) {
         if (shares == 0) revert Vault__ZeroAmount();
 
+        if (shares < minRedeemAmount) revert Vault__BelowMinRedeem(shares, minRedeemAmount);
+        if (redeemDailyRemaining < shares) {
+            revert Vault__RedeemDailyCapExceeded(shares, redeemDailyRemaining);
+        }
+        redeemDailyRemaining -= shares;
+
         uint256 treasuryShare = shares.mulDiv(redemptionFeeBps, FEE_BASIS, Math.Rounding.Ceil);
         uint256 netShares = shares - treasuryShare;
         uint256 estimatedAssets = _convertToAssets(netShares, Math.Rounding.Floor);
-
-        if (shares < minRedeemAmount) revert Vault__BelowMinRedeem(shares, minRedeemAmount);
 
         if (treasuryShare > 0) {
             _update(owner, treasury, treasuryShare);
@@ -143,31 +147,51 @@ contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultA
     }
 
     function maxDeposit(address) public view override(ERC4626Upgradeable, IERC4626) returns (uint256) {
-        return paused() ? 0 : type(uint256).max;
+        if (paused()) return 0;
+        if (depositDailyRemaining > 0 && depositDailyRemaining < minDepositAmount) return 0;
+        return depositDailyRemaining;
     }
 
-    function maxMint(address) public view override(ERC4626Upgradeable, IERC4626) returns (uint256) {
-        return paused() ? 0 : type(uint256).max;
+    function maxMint(address owner) public view override(ERC4626Upgradeable, IERC4626) returns (uint256) {
+        uint256 maxAssets = maxDeposit(owner);
+        if (maxAssets >= type(uint256).max) return type(uint256).max;
+        if (maxAssets == 0) return 0;
+        return _convertToShares(maxAssets, Math.Rounding.Floor);
     }
 
     function maxRedeem(address owner) public view override(ERC4626Upgradeable, IERC4626) returns (uint256) {
         if (paused()) return 0;
         uint256 shares = balanceOf(owner);
+
+        // Constraint 1: freeCash → max redeemable shares (existing logic)
         uint256 freeCash = getFreeCash();
         uint256 assetsForAll = previewRedeem(shares);
-        if (assetsForAll <= freeCash) return shares;
-        if (redemptionFeeBps >= FEE_BASIS) return 0;
-        uint256 grossFromCash = redemptionFeeBps > 0
-            ? freeCash.mulDiv(FEE_BASIS, FEE_BASIS - redemptionFeeBps, Math.Rounding.Floor)
-            : freeCash;
-        return _convertToShares(grossFromCash, Math.Rounding.Floor);
+        uint256 cashLimited = shares;
+        if (assetsForAll > freeCash) {
+            if (redemptionFeeBps >= FEE_BASIS) return 0;
+            uint256 grossFromCash = redemptionFeeBps > 0
+                ? freeCash.mulDiv(FEE_BASIS, FEE_BASIS - redemptionFeeBps, Math.Rounding.Floor)
+                : freeCash;
+            cashLimited = _convertToShares(grossFromCash, Math.Rounding.Floor);
+        }
+
+        // Take min of all constraints
+        uint256 result = cashLimited < redeemDailyRemaining ? cashLimited : redeemDailyRemaining;
+        if (result > shares) result = shares;
+        if (result > 0 && result < minRedeemAmount) return 0;
+        return result;
     }
 
     function maxWithdraw(address owner) public view override(ERC4626Upgradeable, IERC4626) returns (uint256) {
         if (paused()) return 0;
         uint256 redeemable = previewRedeem(balanceOf(owner));
         uint256 freeCash = getFreeCash();
-        return redeemable < freeCash ? redeemable : freeCash;
+        uint256 ceiling = redeemable < freeCash ? redeemable : freeCash;
+        if (redeemDailyRemaining < type(uint256).max) {
+            uint256 capAssets = previewRedeem(redeemDailyRemaining);
+            if (capAssets < ceiling) ceiling = capAssets;
+        }
+        return ceiling;
     }
 
     // =============================================================
@@ -231,6 +255,10 @@ contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultA
         returns (uint256 shares)
     {
         if (assets < minDepositAmount) revert Vault__BelowMinDeposit(assets, minDepositAmount);
+        if (assets > depositDailyRemaining) {
+            revert Vault__DepositDailyCapExceeded(assets, depositDailyRemaining);
+        }
+        depositDailyRemaining -= assets;
         shares = previewDeposit(assets);
         _deposit(receiver, receiver, assets, shares);
     }

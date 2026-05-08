@@ -303,7 +303,9 @@ abstract contract VaultTestBase is Test {
             redemptionFeeBps: FEE_BPS,
             minRedeemAmount: MIN_REDEEM,
             minDepositAmount: 0,
-            maxSettlementDeviationBps: 1000
+            maxSettlementDeviationBps: 1000,
+            depositDailyRemaining: type(uint256).max,
+            redeemDailyRemaining: type(uint256).max
         });
     }
 }

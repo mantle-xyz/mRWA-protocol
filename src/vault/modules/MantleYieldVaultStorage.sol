@@ -85,6 +85,17 @@ abstract contract MantleYieldVaultStorage is
     uint256 public maxSettlementDeviationBps;
 
     // =============================================================
+    // Daily Cap State
+    // =============================================================
+
+    /// @notice Remaining deposit allowance (USDC). 0 = blocked, type(uint256).max = no limit.
+    ///         Decremented on deposit. Reset by admin/off-chain service via setDepositDailyRemaining.
+    uint256 public depositDailyRemaining;
+    /// @notice Remaining redeem allowance (shares). 0 = blocked, type(uint256).max = no limit.
+    ///         Decremented on redeem/requestRedeem. Reset by admin/off-chain service via setRedeemDailyRemaining.
+    uint256 public redeemDailyRemaining;
+
+    // =============================================================
     // Modifiers
     // =============================================================
 
@@ -163,6 +174,8 @@ abstract contract MantleYieldVaultStorage is
         minRedeemAmount = p.minRedeemAmount;
         minDepositAmount = p.minDepositAmount;
         maxSettlementDeviationBps = p.maxSettlementDeviationBps;
+        depositDailyRemaining = p.depositDailyRemaining;
+        redeemDailyRemaining = p.redeemDailyRemaining;
         nextRequestId = 1;
         nextInFlightId = 1;
     }
