@@ -22,7 +22,7 @@ contract AccountantExecutor is AccessControlUpgradeable, UUPSUpgradeable {
 
     event RateUpdateExecuted(address indexed executor, uint256 newRate, uint256 computeTimestamp);
     event ManagementFeeSettled(address indexed executor, address indexed accountant);
-
+    event AccountantPaused(address indexed accountant);
     // =============================================================
     //                       CUSTOM ERRORS
     // =============================================================
@@ -77,4 +77,9 @@ contract AccountantExecutor is AccessControlUpgradeable, UUPSUpgradeable {
     // =============================================================
 
     function _authorizeUpgrade(address) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
+
+    function executePause(address accountant_) external onlyRole(BOT_ROLE) {
+        IAccountant(accountant_).pause();
+        emit AccountantPaused(accountant_);
+    }
 }
