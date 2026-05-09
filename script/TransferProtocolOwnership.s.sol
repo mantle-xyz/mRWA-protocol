@@ -9,6 +9,13 @@ interface IAccessControlLike {
     function hasRole(bytes32 role, address account) external view returns (bool);
 }
 
+interface IDefaultAdminRulesLike {
+    function defaultAdmin() external view returns (address);
+    function pendingDefaultAdmin() external view returns (address newAdmin, uint48 schedule);
+    function beginDefaultAdminTransfer(address newAdmin) external;
+    function acceptDefaultAdminTransfer() external;
+}
+
 interface IOwnableLike {
     function owner() external view returns (address);
     function transferOwnership(address newOwner) external;
@@ -22,11 +29,17 @@ interface IBeaconFactoryLike {
 /// @notice Two-step admin transfer helper for protocol proxies and Beacon ownership.
 ///
 /// Grant/transfer phase (default):
-/// - Grants DEFAULT_ADMIN_ROLE to TRANSFER_NEW_ADMIN on protocol proxies.
+/// - Grants DEFAULT_ADMIN_ROLE to TRANSFER_NEW_ADMIN on plain AccessControl proxies.
+/// - Begins default-admin transfer on AccessControlDefaultAdminRules proxies.
 /// - Transfers each factory BEACON owner to TRANSFER_NEW_BEACON_OWNER.
 ///
+/// Accept phase:
+/// - Set TRANSFER_ACCEPT_DEFAULT_ADMIN=true after the default-admin delay has passed.
+/// - The current sender must be TRANSFER_NEW_ADMIN because AccessControlDefaultAdminRules
+///   only allows the pending admin to accept.
+///
 /// Renounce phase:
-/// - Set TRANSFER_RENOUNCE_OLD_ADMIN=true after verifying the new admin has every role.
+/// - Set TRANSFER_RENOUNCE_OLD_ADMIN=true after all default-admin transfers have been accepted.
 /// - The current sender must be TRANSFER_OLD_ADMIN because AccessControl.renounceRole
 ///   only allows an account to renounce its own role.
 ///
@@ -59,12 +72,14 @@ contract TransferProtocolOwnership is Script {
         address oldAdmin = vm.envOr("TRANSFER_OLD_ADMIN", address(0));
         address newAdmin = vm.envOr("TRANSFER_NEW_ADMIN", address(0));
         address newBeaconOwner = vm.envOr("TRANSFER_NEW_BEACON_OWNER", address(0));
+        bool acceptDefaultAdmin = _envBool("TRANSFER_ACCEPT_DEFAULT_ADMIN", false);
         bool renounceOldAdmin = _envBool("TRANSFER_RENOUNCE_OLD_ADMIN", false);
 
         _requireNonZero(oldAdmin, "TRANSFER_OLD_ADMIN");
         _requireNonZero(newAdmin, "TRANSFER_NEW_ADMIN");
         _requireNonZero(newBeaconOwner, "TRANSFER_NEW_BEACON_OWNER");
         require(oldAdmin != newAdmin, "OLD_NEW_ADMIN_SAME");
+        require(!(acceptDefaultAdmin && renounceOldAdmin), "INVALID_PHASE");
 
         (string[] memory proxyNames, address[] memory proxies) = _proxyTargets();
         (string[] memory factoryNames, address[] memory factories) = _factoryTargets();
@@ -75,15 +90,21 @@ contract TransferProtocolOwnership is Script {
         console2.log("Old admin        :", oldAdmin);
         console2.log("New admin        :", newAdmin);
         console2.log("New beacon owner :", newBeaconOwner);
+        console2.log("Accept new admin :", acceptDefaultAdmin);
         console2.log("Renounce old     :", renounceOldAdmin);
 
-        if (renounceOldAdmin) {
+        if (acceptDefaultAdmin) {
+            _requireReadyDefaultAdminTransfers(proxies, newAdmin);
+            _startBroadcast(newAdmin);
+            _acceptDefaultAdminTransfers(proxyNames, proxies, newAdmin);
+            vm.stopBroadcast();
+        } else if (renounceOldAdmin) {
             _requireNewAdminPresent(proxies, newAdmin);
-            vm.startBroadcast();
+            _startBroadcast(oldAdmin);
             _renounceOldAdmin(proxyNames, proxies, oldAdmin);
             vm.stopBroadcast();
         } else {
-            vm.startBroadcast();
+            _startBroadcast(oldAdmin);
             _grantNewAdmin(proxyNames, proxies, newAdmin);
             _transferBeaconOwners(factoryNames, factories, newBeaconOwner);
             vm.stopBroadcast();
@@ -146,6 +167,29 @@ contract TransferProtocolOwnership is Script {
 
     function _grantNewAdmin(string[] memory names, address[] memory proxies, address newAdmin) internal {
         for (uint256 i; i < proxies.length; ++i) {
+            if (_isDefaultAdminRules(proxies[i])) {
+                IDefaultAdminRulesLike defaultAdminRules = IDefaultAdminRulesLike(proxies[i]);
+                address currentDefaultAdmin = defaultAdminRules.defaultAdmin();
+                if (currentDefaultAdmin == newAdmin) {
+                    console2.log("Default admin already accepted:", names[i], newAdmin);
+                    continue;
+                }
+
+                (address pendingAdmin, uint48 schedule) = defaultAdminRules.pendingDefaultAdmin();
+                if (pendingAdmin == newAdmin) {
+                    console2.log("Default admin already pending :", names[i], newAdmin);
+                    console2.log("  schedule:", schedule);
+                    continue;
+                }
+                require(pendingAdmin == address(0), "PENDING_ADMIN_EXISTS");
+
+                defaultAdminRules.beginDefaultAdminTransfer(newAdmin);
+                (, schedule) = defaultAdminRules.pendingDefaultAdmin();
+                console2.log("Default admin transfer begun:", names[i], newAdmin);
+                console2.log("  schedule:", schedule);
+                continue;
+            }
+
             IAccessControlLike proxy = IAccessControlLike(proxies[i]);
             if (proxy.hasRole(DEFAULT_ADMIN_ROLE, newAdmin)) {
                 console2.log("Admin already granted:", names[i], newAdmin);
@@ -153,6 +197,21 @@ contract TransferProtocolOwnership is Script {
             }
             proxy.grantRole(DEFAULT_ADMIN_ROLE, newAdmin);
             console2.log("Admin granted        :", names[i], newAdmin);
+        }
+    }
+
+    function _acceptDefaultAdminTransfers(string[] memory names, address[] memory proxies, address newAdmin) internal {
+        for (uint256 i; i < proxies.length; ++i) {
+            if (!_isDefaultAdminRules(proxies[i])) continue;
+
+            IDefaultAdminRulesLike proxy = IDefaultAdminRulesLike(proxies[i]);
+            if (proxy.defaultAdmin() == newAdmin) {
+                console2.log("Default admin already accepted:", names[i], newAdmin);
+                continue;
+            }
+
+            proxy.acceptDefaultAdminTransfer();
+            console2.log("Default admin accepted:", names[i], newAdmin);
         }
     }
 
@@ -171,6 +230,11 @@ contract TransferProtocolOwnership is Script {
 
     function _renounceOldAdmin(string[] memory names, address[] memory proxies, address oldAdmin) internal {
         for (uint256 i; i < proxies.length; ++i) {
+            if (_isDefaultAdminRules(proxies[i])) {
+                console2.log("Default admin rules skip:", names[i]);
+                continue;
+            }
+
             IAccessControlLike proxy = IAccessControlLike(proxies[i]);
             if (!proxy.hasRole(DEFAULT_ADMIN_ROLE, oldAdmin)) {
                 console2.log("Old admin absent    :", names[i], oldAdmin);
@@ -184,6 +248,19 @@ contract TransferProtocolOwnership is Script {
     function _requireNewAdminPresent(address[] memory proxies, address newAdmin) internal view {
         for (uint256 i; i < proxies.length; ++i) {
             require(IAccessControlLike(proxies[i]).hasRole(DEFAULT_ADMIN_ROLE, newAdmin), "NEW_ADMIN_MISSING");
+        }
+    }
+
+    function _requireReadyDefaultAdminTransfers(address[] memory proxies, address newAdmin) internal view {
+        for (uint256 i; i < proxies.length; ++i) {
+            if (!_isDefaultAdminRules(proxies[i])) continue;
+
+            IDefaultAdminRulesLike proxy = IDefaultAdminRulesLike(proxies[i]);
+            if (proxy.defaultAdmin() == newAdmin) continue;
+
+            (address pendingAdmin, uint48 schedule) = proxy.pendingDefaultAdmin();
+            require(pendingAdmin == newAdmin, "PENDING_ADMIN_MISMATCH");
+            require(schedule != 0 && schedule < block.timestamp, "DEFAULT_ADMIN_TRANSFER_NOT_READY");
         }
     }
 
@@ -202,6 +279,13 @@ contract TransferProtocolOwnership is Script {
             console2.log(proxyNames[i], proxies[i]);
             console2.log("  old admin:", proxy.hasRole(DEFAULT_ADMIN_ROLE, oldAdmin));
             console2.log("  new admin:", proxy.hasRole(DEFAULT_ADMIN_ROLE, newAdmin));
+            if (_isDefaultAdminRules(proxies[i])) {
+                IDefaultAdminRulesLike defaultAdminRules = IDefaultAdminRulesLike(proxies[i]);
+                (address pendingAdmin, uint48 schedule) = defaultAdminRules.pendingDefaultAdmin();
+                console2.log("  default admin:", defaultAdminRules.defaultAdmin());
+                console2.log("  pending admin:", pendingAdmin);
+                console2.log("  pending schedule:", schedule);
+            }
         }
 
         console2.log("");
@@ -221,6 +305,25 @@ contract TransferProtocolOwnership is Script {
 
     function _requireNonZero(address value, string memory envName) internal pure {
         require(value != address(0), string.concat(envName, "_ZERO"));
+    }
+
+    function _isDefaultAdminRules(address target) internal view returns (bool) {
+        try IDefaultAdminRulesLike(target).defaultAdmin() returns (address) {
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    function _startBroadcast(address expectedSender) internal {
+        address configuredSender = vm.envOr("F_SENDER", address(0));
+        if (configuredSender != address(0)) {
+            require(configuredSender == expectedSender, "F_SENDER_UNEXPECTED");
+            vm.startBroadcast(configuredSender);
+            return;
+        }
+
+        vm.startBroadcast();
     }
 
     function _envOr(string memory primary, string memory fallback1, string memory fallback2)

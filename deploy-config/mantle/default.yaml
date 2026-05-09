@@ -130,4 +130,5 @@ envs:
   TRANSFER_OLD_ADMIN: "0x207E804758e28F2b3fD6E4219671B327100b82f8"
   TRANSFER_NEW_ADMIN: "" # final SecurityCouncil Safe / timelock
   TRANSFER_NEW_BEACON_OWNER: "" # final SecurityCouncil Safe / timelock
+  TRANSFER_ACCEPT_DEFAULT_ADMIN: "false" # set true only for Vault/Gateway accept phase
   TRANSFER_RENOUNCE_OLD_ADMIN: "false" # first run false; set true only after grant/owner verification

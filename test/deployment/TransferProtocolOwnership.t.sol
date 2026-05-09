@@ -3,6 +3,9 @@ pragma solidity ^0.8.24;
 
 import {TransferProtocolOwnership} from "../../script/TransferProtocolOwnership.s.sol";
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+import {
+    AccessControlDefaultAdminRules
+} from "@openzeppelin/contracts/access/extensions/AccessControlDefaultAdminRules.sol";
 import {UpgradeableBeacon} from "@openzeppelin/contracts/proxy/beacon/UpgradeableBeacon.sol";
 import {Test} from "forge-std/Test.sol";
 
@@ -10,6 +13,10 @@ contract MockAdminProxy is AccessControl {
     constructor(address admin) {
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
     }
+}
+
+contract MockDefaultAdminRulesProxy is AccessControlDefaultAdminRules {
+    constructor(uint48 initialDelay, address admin) AccessControlDefaultAdminRules(initialDelay, admin) {}
 }
 
 contract MockBeaconImplementation {}
@@ -25,8 +32,8 @@ contract MockBeaconFactory {
 contract TransferProtocolOwnershipTest is Test {
     address internal constant BROADCAST_SENDER = 0x1804c8AB1F12E6bbf3894d4083f33e07309d1f38;
 
-    MockAdminProxy internal vault;
-    MockAdminProxy internal gateway;
+    MockDefaultAdminRulesProxy internal vault;
+    MockDefaultAdminRulesProxy internal gateway;
     MockAdminProxy internal accountant;
     MockAdminProxy internal controller;
     MockAdminProxy internal oracle;
@@ -46,8 +53,8 @@ contract TransferProtocolOwnershipTest is Test {
     address internal newBeaconOwner = makeAddr("newBeaconOwner");
 
     function setUp() public {
-        vault = new MockAdminProxy(oldAdmin);
-        gateway = new MockAdminProxy(oldAdmin);
+        vault = new MockDefaultAdminRulesProxy(1 days, oldAdmin);
+        gateway = new MockDefaultAdminRulesProxy(1 days, oldAdmin);
         accountant = new MockAdminProxy(oldAdmin);
         controller = new MockAdminProxy(oldAdmin);
         oracle = new MockAdminProxy(oldAdmin);
@@ -73,13 +80,27 @@ contract TransferProtocolOwnershipTest is Test {
         script.run();
 
         vm.setEnv("TRANSFER_RENOUNCE_OLD_ADMIN", "false");
+        vm.setEnv("F_SENDER", vm.toString(oldAdmin));
         new TransferProtocolOwnership().run();
-        _assertProxyAdmins(true, true);
+        _assertDefaultAdminTransfersScheduled();
+        _assertDefaultAdminRulesAdmins(true, false);
+        _assertPlainProxyAdmins(true, true);
+        _assertBeaconOwners(newBeaconOwner);
+
+        _warpPastDefaultAdminTransferSchedule();
+        vm.setEnv("TRANSFER_ACCEPT_DEFAULT_ADMIN", "true");
+        vm.setEnv("F_SENDER", vm.toString(newAdmin));
+        new TransferProtocolOwnership().run();
+        _assertDefaultAdminRulesAdmins(false, true);
+        _assertPlainProxyAdmins(true, true);
         _assertBeaconOwners(newBeaconOwner);
 
         vm.setEnv("TRANSFER_RENOUNCE_OLD_ADMIN", "true");
+        vm.setEnv("TRANSFER_ACCEPT_DEFAULT_ADMIN", "false");
+        vm.setEnv("F_SENDER", vm.toString(oldAdmin));
         new TransferProtocolOwnership().run();
-        _assertProxyAdmins(false, true);
+        _assertDefaultAdminRulesAdmins(false, true);
+        _assertPlainProxyAdmins(false, true);
         _assertBeaconOwners(newBeaconOwner);
     }
 
@@ -105,9 +126,30 @@ contract TransferProtocolOwnershipTest is Test {
         vm.setEnv("TRANSFER_SUBRED_ADAPTER_FACTORY", vm.toString(address(adapterFactory)));
     }
 
-    function _assertProxyAdmins(bool oldExpected, bool newExpected) internal view {
+    function _assertDefaultAdminTransfersScheduled() internal view {
+        (address vaultPendingAdmin, uint48 vaultSchedule) = vault.pendingDefaultAdmin();
+        (address gatewayPendingAdmin, uint48 gatewaySchedule) = gateway.pendingDefaultAdmin();
+        assertEq(vaultPendingAdmin, newAdmin);
+        assertEq(gatewayPendingAdmin, newAdmin);
+        assertGt(vaultSchedule, block.timestamp);
+        assertGt(gatewaySchedule, block.timestamp);
+    }
+
+    function _warpPastDefaultAdminTransferSchedule() internal {
+        (, uint48 vaultSchedule) = vault.pendingDefaultAdmin();
+        (, uint48 gatewaySchedule) = gateway.pendingDefaultAdmin();
+        uint48 readyAt = vaultSchedule > gatewaySchedule ? vaultSchedule : gatewaySchedule;
+        vm.warp(uint256(readyAt) + 1);
+    }
+
+    function _assertDefaultAdminRulesAdmins(bool oldExpected, bool newExpected) internal view {
         assertEq(vault.hasRole(bytes32(0), oldAdmin), oldExpected);
         assertEq(gateway.hasRole(bytes32(0), oldAdmin), oldExpected);
+        assertEq(vault.hasRole(bytes32(0), newAdmin), newExpected);
+        assertEq(gateway.hasRole(bytes32(0), newAdmin), newExpected);
+    }
+
+    function _assertPlainProxyAdmins(bool oldExpected, bool newExpected) internal view {
         assertEq(accountant.hasRole(bytes32(0), oldAdmin), oldExpected);
         assertEq(controller.hasRole(bytes32(0), oldAdmin), oldExpected);
         assertEq(oracle.hasRole(bytes32(0), oldAdmin), oldExpected);
@@ -115,8 +157,6 @@ contract TransferProtocolOwnershipTest is Test {
         assertEq(operatorExecutor.hasRole(bytes32(0), oldAdmin), oldExpected);
         assertEq(adapter.hasRole(bytes32(0), oldAdmin), oldExpected);
 
-        assertEq(vault.hasRole(bytes32(0), newAdmin), newExpected);
-        assertEq(gateway.hasRole(bytes32(0), newAdmin), newExpected);
         assertEq(accountant.hasRole(bytes32(0), newAdmin), newExpected);
         assertEq(controller.hasRole(bytes32(0), newAdmin), newExpected);
         assertEq(oracle.hasRole(bytes32(0), newAdmin), newExpected);
