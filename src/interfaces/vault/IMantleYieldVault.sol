@@ -63,6 +63,8 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
         uint256 minRedeemAmount;
         uint256 minDepositAmount;
         uint256 maxSettlementDeviationBps;
+        uint256 depositDailyRemaining; // USDC units. 0 = blocked, type(uint256).max = no limit
+        uint256 redeemDailyRemaining; // Share units. 0 = blocked, type(uint256).max = no limit
     }
 
     struct RedemptionRequest {
@@ -124,6 +126,8 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
         uint256 requestId, uint256 estimatedAssets, uint256 settledAssets, uint256 deviationBps, uint256 maxAllowed
     );
     error Vault__InvalidSettlementDeviation(uint256 deviation);
+    error Vault__DepositDailyCapExceeded(uint256 attempted, uint256 remaining);
+    error Vault__RedeemDailyCapExceeded(uint256 attempted, uint256 remaining);
 
     // =============================================================
     // Events (vault-specific; RedeemRequest is inherited from IERC7540Redeem)
@@ -168,6 +172,8 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     event FeeChangedWithLockedShares(uint256 totalLockedShares, uint256 oldFeeBps, uint256 newFeeBps);
     event GatewayUpdated(address indexed oldGateway, address indexed newGateway);
     event SettlementDeviationUpdated(uint256 oldBps, uint256 newBps);
+    event DepositDailyRemainingUpdated(uint256 oldValue, uint256 newValue);
+    event RedeemDailyRemainingUpdated(uint256 oldValue, uint256 newValue);
 
     // =============================================================
     // Initialization
@@ -192,6 +198,8 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     function minRedeemAmount() external view returns (uint256);
     function minDepositAmount() external view returns (uint256);
     function maxSettlementDeviationBps() external view returns (uint256);
+    function depositDailyRemaining() external view returns (uint256);
+    function redeemDailyRemaining() external view returns (uint256);
     function totalLockedShares() external view returns (uint256);
 
     function totalInvestInFlight() external view returns (uint256);
@@ -278,6 +286,8 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     function setMinRedeemAmount(uint256 newAmount) external;
     function setMinDepositAmount(uint256 newAmount) external;
     function setMaxSettlementDeviation(uint256 newBps) external;
+    function setDepositDailyRemaining(uint256 newValue) external;
+    function setRedeemDailyRemaining(uint256 newValue) external;
     function setGateway(address newGateway) external;
     function setController(address newController) external;
     function setAccountant(address newAccountant) external;

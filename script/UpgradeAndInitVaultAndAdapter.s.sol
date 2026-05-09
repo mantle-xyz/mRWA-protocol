@@ -70,7 +70,9 @@ contract UpgradeAndInitVaultAndAdapter is Script {
             redemptionFeeBps: vm.envUint("UPGRADE_INIT_REDEMPTION_FEE_BPS"),
             minRedeemAmount: vm.envUint("UPGRADE_INIT_MIN_REDEEM_AMOUNT"),
             minDepositAmount: vm.envUint("UPGRADE_INIT_MIN_DEPOSIT_AMOUNT"),
-            maxSettlementDeviationBps: vm.envOr("UPGRADE_INIT_MAX_SETTLEMENT_DEVIATION_BPS", uint256(1000))
+            maxSettlementDeviationBps: vm.envOr("UPGRADE_INIT_MAX_SETTLEMENT_DEVIATION_BPS", uint256(1000)),
+            depositDailyRemaining: vm.envOr("UPGRADE_INIT_DEPOSIT_DAILY_REMAINING", type(uint256).max),
+            redeemDailyRemaining: vm.envOr("UPGRADE_INIT_REDEEM_DAILY_REMAINING", type(uint256).max)
         });
 
         address subRedManagement = vm.envAddress("UPGRADE_INIT_ADAPTER_SUBRED_MANAGEMENT");
