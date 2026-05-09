@@ -82,6 +82,13 @@ tasks:
         vars:
           EXTRA_ARGS: ${ROOT_DIR}/script/UpgradeAndInitVaultAndAdapter.s.sol {{.CLI_ARGS}}
 
+  TransferProtocolOwnership:
+    desc: Grant final admin, transfer beacon ownership, or renounce old admin after verification
+    cmds:
+      - task: _script
+        vars:
+          EXTRA_ARGS: ${ROOT_DIR}/script/TransferProtocolOwnership.s.sol {{.CLI_ARGS}}
+
   DeployInstance:
     desc: Deploy a new protocol instance using existing on-chain factories (no new impls/factories)
     cmds:
