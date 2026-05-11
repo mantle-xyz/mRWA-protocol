@@ -59,6 +59,18 @@ abstract contract MantleYieldVaultAdminModule is MantleYieldVaultStorage {
         emit SettlementDeviationUpdated(old, newBps);
     }
 
+    function setDepositDailyRemaining(uint256 newValue) external onlyRole(CAP_MANAGER_ROLE) {
+        uint256 old = depositDailyRemaining;
+        depositDailyRemaining = newValue;
+        emit DepositDailyRemainingUpdated(old, newValue);
+    }
+
+    function setRedeemDailyRemaining(uint256 newValue) external onlyRole(CAP_MANAGER_ROLE) {
+        uint256 old = redeemDailyRemaining;
+        redeemDailyRemaining = newValue;
+        emit RedeemDailyRemainingUpdated(old, newValue);
+    }
+
     function setGateway(address newGateway) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (newGateway == address(0)) revert Vault__ZeroAddress();
         address old = gateway;

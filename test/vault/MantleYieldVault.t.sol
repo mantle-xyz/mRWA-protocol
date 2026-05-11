@@ -303,7 +303,9 @@ abstract contract VaultTestBase is Test {
             redemptionFeeBps: FEE_BPS,
             minRedeemAmount: MIN_REDEEM,
             minDepositAmount: 0,
-            maxSettlementDeviationBps: 1000
+            maxSettlementDeviationBps: 1000,
+            depositDailyRemaining: type(uint256).max,
+            redeemDailyRemaining: type(uint256).max
         });
     }
 }
@@ -1771,5 +1773,489 @@ contract SyncRedeemDisabledTest is VaultTestBase {
         gateway.redeem(shares);
 
         assertEq(vault.balanceOf(alice), 0);
+    }
+}
+
+// =============================================================
+// Daily Cap Tests
+// =============================================================
+
+contract DailyCapTest is VaultTestBase {
+    address capManager = makeAddr("capManager");
+    address charlie = makeAddr("charlie");
+
+    function setUp() public override {
+        super.setUp();
+        // Grant CAP_MANAGER_ROLE to capManager
+        bytes32 capRole = vault.CAP_MANAGER_ROLE();
+        vm.prank(admin);
+        vault.grantRole(capRole, capManager);
+
+        // Fund bob & charlie
+        usdc.mint(bob, 10_000e6);
+        vm.prank(bob);
+        usdc.approve(address(vault), type(uint256).max);
+
+        usdc.mint(charlie, 10_000e6);
+        vm.prank(charlie);
+        usdc.approve(address(vault), type(uint256).max);
+    }
+
+    // ---------------------------------------------------------
+    // Admin setter & role tests
+    // ---------------------------------------------------------
+
+    function test_setDepositDailyRemaining_byCapManager() public {
+        uint256 currentRemaining = vault.depositDailyRemaining();
+        vm.prank(capManager);
+        vm.expectEmit(address(vault));
+        emit IMantleYieldVault.DepositDailyRemainingUpdated(currentRemaining, 5_000e6);
+        vault.setDepositDailyRemaining(5_000e6);
+
+        assertEq(vault.depositDailyRemaining(), 5_000e6);
+    }
+
+    function test_setRedeemDailyRemaining_byCapManager() public {
+        vm.prank(capManager);
+        vm.expectEmit(address(vault));
+        emit IMantleYieldVault.RedeemDailyRemainingUpdated(type(uint256).max, 500e6);
+        vault.setRedeemDailyRemaining(500e6);
+
+        assertEq(vault.redeemDailyRemaining(), 500e6);
+    }
+
+    function test_setDepositDailyRemaining_revertsWithoutRole() public {
+        vm.prank(alice);
+        vm.expectRevert();
+        vault.setDepositDailyRemaining(1_000e6);
+    }
+
+    function test_setRedeemDailyRemaining_revertsWithoutRole() public {
+        vm.prank(alice);
+        vm.expectRevert();
+        vault.setRedeemDailyRemaining(1_000e6);
+    }
+
+    function test_adminCannotSetCap_withoutCapManagerRole() public {
+        // admin does NOT have CAP_MANAGER_ROLE by default
+        vm.prank(admin);
+        vm.expectRevert();
+        vault.setDepositDailyRemaining(1_000e6);
+    }
+
+    // ---------------------------------------------------------
+    // Deposit cap: single user
+    // ---------------------------------------------------------
+
+    function test_deposit_singleUser_exactCap() public {
+        vm.prank(capManager);
+        vault.setDepositDailyRemaining(2_000e6);
+
+        // Deposit exactly the cap
+        vm.prank(bob);
+        gateway.deposit(2_000e6);
+
+        assertEq(vault.depositDailyRemaining(), 0);
+        assertEq(vault.balanceOf(bob), 2_000e6);
+    }
+
+    function test_deposit_singleUser_exceedsCap_reverts() public {
+        vm.prank(capManager);
+        vault.setDepositDailyRemaining(1_000e6);
+
+        vm.prank(bob);
+        vm.expectRevert(
+            abi.encodeWithSelector(IMantleYieldVault.Vault__DepositDailyCapExceeded.selector, 2_000e6, 1_000e6)
+        );
+        gateway.deposit(2_000e6);
+    }
+
+    function test_deposit_singleUser_multipleDeposits_drainCap() public {
+        vm.prank(capManager);
+        vault.setDepositDailyRemaining(3_000e6);
+
+        vm.prank(bob);
+        gateway.deposit(1_500e6);
+        assertEq(vault.depositDailyRemaining(), 1_500e6);
+
+        vm.prank(bob);
+        gateway.deposit(1_500e6);
+        assertEq(vault.depositDailyRemaining(), 0);
+
+        // Third deposit should revert
+        vm.prank(bob);
+        vm.expectRevert(abi.encodeWithSelector(IMantleYieldVault.Vault__DepositDailyCapExceeded.selector, 100e6, 0));
+        gateway.deposit(100e6);
+    }
+
+    // ---------------------------------------------------------
+    // Deposit cap: multiple users stacking
+    // ---------------------------------------------------------
+
+    function test_deposit_multipleUsers_shareCap() public {
+        vm.prank(capManager);
+        vault.setDepositDailyRemaining(3_000e6);
+
+        vm.prank(bob);
+        gateway.deposit(1_500e6);
+        assertEq(vault.depositDailyRemaining(), 1_500e6);
+
+        vm.prank(charlie);
+        gateway.deposit(1_000e6);
+        assertEq(vault.depositDailyRemaining(), 500e6);
+
+        // Charlie tries to deposit 600 more, only 500 remaining
+        vm.prank(charlie);
+        vm.expectRevert(abi.encodeWithSelector(IMantleYieldVault.Vault__DepositDailyCapExceeded.selector, 600e6, 500e6));
+        gateway.deposit(600e6);
+
+        // Charlie deposits exactly 500 — succeeds
+        vm.prank(charlie);
+        gateway.deposit(500e6);
+        assertEq(vault.depositDailyRemaining(), 0);
+    }
+
+    // ---------------------------------------------------------
+    // Deposit cap: zero means blocked
+    // ---------------------------------------------------------
+
+    function test_deposit_capZero_blocked() public {
+        vm.prank(capManager);
+        vault.setDepositDailyRemaining(0);
+
+        assertEq(vault.maxDeposit(bob), 0);
+        assertEq(vault.maxMint(bob), 0);
+
+        vm.prank(bob);
+        vm.expectRevert(abi.encodeWithSelector(IMantleYieldVault.Vault__DepositDailyCapExceeded.selector, 100e6, 0));
+        gateway.deposit(100e6);
+    }
+
+    // ---------------------------------------------------------
+    // Deposit cap: remaining < minDepositAmount → maxDeposit returns 0
+    // ---------------------------------------------------------
+
+    function test_maxDeposit_remainingBelowMin_returnsZero() public {
+        vm.prank(admin);
+        vault.setMinDepositAmount(100e6);
+
+        vm.prank(capManager);
+        vault.setDepositDailyRemaining(50e6); // < minDepositAmount
+
+        assertEq(vault.maxDeposit(bob), 0);
+        assertEq(vault.maxMint(bob), 0);
+    }
+
+    // ---------------------------------------------------------
+    // Deposit cap: type(uint256).max means no limit
+    // ---------------------------------------------------------
+
+    function test_deposit_maxRemaining_noLimit() public view {
+        // Default is type(uint256).max, but setUp deposits INITIAL_DEPOSIT (1000e6)
+        // so remaining = type(uint256).max - INITIAL_DEPOSIT
+        assertEq(vault.depositDailyRemaining(), type(uint256).max - INITIAL_DEPOSIT);
+    }
+
+    // ---------------------------------------------------------
+    // maxDeposit / maxMint reflect cap
+    // ---------------------------------------------------------
+
+    function test_maxDeposit_reflectsCap() public {
+        vm.prank(capManager);
+        vault.setDepositDailyRemaining(2_000e6);
+
+        assertEq(vault.maxDeposit(bob), 2_000e6);
+
+        // After a deposit, maxDeposit decreases
+        vm.prank(bob);
+        gateway.deposit(800e6);
+
+        assertEq(vault.maxDeposit(bob), 1_200e6);
+    }
+
+    function test_maxMint_reflectsCap() public {
+        vm.prank(capManager);
+        vault.setDepositDailyRemaining(2_000e6);
+
+        uint256 expectedShares = vault.previewDeposit(2_000e6);
+        assertEq(vault.maxMint(bob), expectedShares);
+    }
+
+    // ---------------------------------------------------------
+    // Redeem cap: single user sync redeem
+    // ---------------------------------------------------------
+
+    function test_syncRedeem_singleUser_exceedsCap_reverts() public {
+        // Alice has 1000e6 shares from setUp
+        vm.prank(capManager);
+        vault.setRedeemDailyRemaining(200e6);
+
+        vm.prank(alice);
+        vm.expectRevert();
+        gateway.redeem(500e6);
+    }
+
+    function test_syncRedeem_singleUser_withinCap() public {
+        vm.prank(capManager);
+        vault.setRedeemDailyRemaining(500e6);
+
+        vm.prank(alice);
+        gateway.redeem(200e6);
+
+        assertEq(vault.redeemDailyRemaining(), 300e6);
+    }
+
+    function test_syncRedeem_drainsCap_thenBlocked() public {
+        vm.prank(capManager);
+        vault.setRedeemDailyRemaining(300e6);
+
+        vm.prank(alice);
+        gateway.redeem(300e6);
+        assertEq(vault.redeemDailyRemaining(), 0);
+
+        // maxRedeem is 0 now, so redeem reverts via ERC4626ExceededMaxRedeem
+        vm.prank(alice);
+        vm.expectRevert();
+        gateway.redeem(100e6);
+    }
+
+    // ---------------------------------------------------------
+    // Redeem cap: single user requestRedeem (async)
+    // ---------------------------------------------------------
+
+    function test_requestRedeem_singleUser_exceedsCap_reverts() public {
+        vm.prank(capManager);
+        vault.setRedeemDailyRemaining(200e6);
+
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(IMantleYieldVault.Vault__RedeemDailyCapExceeded.selector, 500e6, 200e6));
+        gateway.requestRedeem(500e6);
+    }
+
+    function test_requestRedeem_singleUser_withinCap() public {
+        vm.prank(capManager);
+        vault.setRedeemDailyRemaining(800e6);
+
+        vm.prank(alice);
+        gateway.requestRedeem(500e6);
+
+        assertEq(vault.redeemDailyRemaining(), 300e6);
+    }
+
+    // ---------------------------------------------------------
+    // Redeem cap: multiple users stacking (mix sync + async)
+    // ---------------------------------------------------------
+
+    function test_redeemCap_multipleUsers_syncAndAsync() public {
+        // Give bob shares too
+        vm.prank(bob);
+        gateway.deposit(2_000e6);
+
+        vm.prank(capManager);
+        vault.setRedeemDailyRemaining(600e6);
+
+        // Alice sync redeems 300 shares
+        vm.prank(alice);
+        gateway.redeem(300e6);
+        assertEq(vault.redeemDailyRemaining(), 300e6);
+
+        // Bob async requestRedeem 200 shares
+        vm.prank(bob);
+        gateway.requestRedeem(200e6);
+        assertEq(vault.redeemDailyRemaining(), 100e6);
+
+        // Alice tries another 200 — exceeds remaining (maxRedeem will cap at 100)
+        vm.prank(alice);
+        vm.expectRevert();
+        gateway.redeem(200e6);
+
+        // Alice redeems exactly 100 — succeeds
+        vm.prank(alice);
+        gateway.redeem(100e6);
+        assertEq(vault.redeemDailyRemaining(), 0);
+    }
+
+    // ---------------------------------------------------------
+    // Redeem cap: zero means blocked
+    // ---------------------------------------------------------
+
+    function test_redeemCap_zero_blocked() public {
+        vm.prank(capManager);
+        vault.setRedeemDailyRemaining(0);
+
+        assertEq(vault.maxRedeem(alice), 0);
+        assertEq(vault.maxWithdraw(alice), 0);
+
+        vm.prank(alice);
+        vm.expectRevert();
+        gateway.redeem(100e6);
+
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(IMantleYieldVault.Vault__RedeemDailyCapExceeded.selector, 100e6, 0));
+        gateway.requestRedeem(100e6);
+    }
+
+    // ---------------------------------------------------------
+    // maxRedeem / maxWithdraw respect cap
+    // ---------------------------------------------------------
+
+    function test_maxRedeem_reflectsCap() public {
+        vm.prank(capManager);
+        vault.setRedeemDailyRemaining(300e6);
+
+        // Alice has 1000e6 shares, freeCash is sufficient, but cap limits to 300
+        uint256 maxR = vault.maxRedeem(alice);
+        assertEq(maxR, 300e6);
+    }
+
+    function test_maxRedeem_capLargerThanBalance_limitedByBalance() public {
+        vm.prank(capManager);
+        vault.setRedeemDailyRemaining(5_000e6);
+
+        // Alice only has 1000e6 shares
+        uint256 maxR = vault.maxRedeem(alice);
+        assertEq(maxR, INITIAL_DEPOSIT);
+    }
+
+    function test_maxRedeem_belowMinRedeem_returnsZero() public {
+        // minRedeemAmount = 10e6 (set in _defaultParams)
+        vm.prank(capManager);
+        vault.setRedeemDailyRemaining(5e6); // below min
+
+        assertEq(vault.maxRedeem(alice), 0);
+    }
+
+    function test_maxWithdraw_reflectsCap() public {
+        vm.prank(capManager);
+        vault.setRedeemDailyRemaining(300e6);
+
+        uint256 maxW = vault.maxWithdraw(alice);
+        uint256 capAssets = vault.previewRedeem(300e6);
+        // maxWithdraw should not exceed capAssets
+        assertLe(maxW, capAssets);
+    }
+
+    // ---------------------------------------------------------
+    // Cap reset by capManager (simulates off-chain service)
+    // ---------------------------------------------------------
+
+    function test_capReset_afterDrain() public {
+        vm.prank(capManager);
+        vault.setDepositDailyRemaining(1_000e6);
+
+        // Drain deposit cap
+        vm.prank(bob);
+        gateway.deposit(1_000e6);
+        assertEq(vault.depositDailyRemaining(), 0);
+        assertEq(vault.maxDeposit(bob), 0);
+
+        // Off-chain service resets cap
+        vm.prank(capManager);
+        vault.setDepositDailyRemaining(2_000e6);
+        assertEq(vault.depositDailyRemaining(), 2_000e6);
+        assertEq(vault.maxDeposit(bob), 2_000e6);
+
+        // Bob can deposit again
+        vm.prank(bob);
+        gateway.deposit(500e6);
+        assertEq(vault.depositDailyRemaining(), 1_500e6);
+    }
+
+    function test_redeemCapReset_afterDrain() public {
+        vm.prank(capManager);
+        vault.setRedeemDailyRemaining(500e6);
+
+        vm.prank(alice);
+        gateway.redeem(500e6);
+        assertEq(vault.redeemDailyRemaining(), 0);
+
+        // Reset
+        vm.prank(capManager);
+        vault.setRedeemDailyRemaining(1_000e6);
+        assertEq(vault.redeemDailyRemaining(), 1_000e6);
+
+        // Alice can redeem again (she has 500e6 shares left after redeeming 500)
+        vm.prank(alice);
+        gateway.redeem(200e6);
+        assertEq(vault.redeemDailyRemaining(), 800e6);
+    }
+
+    // ---------------------------------------------------------
+    // Init params set cap correctly
+    // ---------------------------------------------------------
+
+    function test_initParams_setCaps() public view {
+        // Default params set both to type(uint256).max, but setUp deposits INITIAL_DEPOSIT
+        // so depositDailyRemaining has been decremented by INITIAL_DEPOSIT
+        assertEq(vault.depositDailyRemaining(), type(uint256).max - INITIAL_DEPOSIT);
+        assertEq(vault.redeemDailyRemaining(), type(uint256).max);
+    }
+
+    // ---------------------------------------------------------
+    // Large single-user deposit filling entire cap
+    // ---------------------------------------------------------
+
+    function test_deposit_largeAmount_fillsCap() public {
+        vm.prank(capManager);
+        vault.setDepositDailyRemaining(10_000e6);
+
+        vm.prank(bob);
+        gateway.deposit(10_000e6);
+        assertEq(vault.depositDailyRemaining(), 0);
+
+        // Any further deposit reverts
+        usdc.mint(bob, 1e6);
+        vm.prank(bob);
+        vm.expectRevert();
+        gateway.deposit(1e6);
+    }
+
+    // ---------------------------------------------------------
+    // Large single-user requestRedeem filling entire cap
+    // ---------------------------------------------------------
+
+    function test_requestRedeem_largeAmount_fillsCap() public {
+        // Give alice more shares
+        usdc.mint(alice, 9_000e6);
+        vm.prank(alice);
+        usdc.approve(address(vault), 9_000e6);
+        vm.prank(alice);
+        gateway.deposit(9_000e6);
+        // Alice now has 10_000e6 shares
+
+        vm.prank(capManager);
+        vault.setRedeemDailyRemaining(10_000e6);
+
+        vm.prank(alice);
+        gateway.requestRedeem(10_000e6);
+        assertEq(vault.redeemDailyRemaining(), 0);
+
+        // No more redeems possible
+        assertEq(vault.maxRedeem(alice), 0);
+    }
+
+    // ---------------------------------------------------------
+    // Interaction: both caps active simultaneously
+    // ---------------------------------------------------------
+
+    function test_bothCaps_active_independently() public {
+        vm.startPrank(capManager);
+        vault.setDepositDailyRemaining(2_000e6);
+        vault.setRedeemDailyRemaining(500e6);
+        vm.stopPrank();
+
+        // Bob deposits 1500
+        vm.prank(bob);
+        gateway.deposit(1_500e6);
+        assertEq(vault.depositDailyRemaining(), 500e6);
+        // Redeem cap unaffected
+        assertEq(vault.redeemDailyRemaining(), 500e6);
+
+        // Alice redeems 300
+        vm.prank(alice);
+        gateway.redeem(300e6);
+        assertEq(vault.redeemDailyRemaining(), 200e6);
+        // Deposit cap unaffected
+        assertEq(vault.depositDailyRemaining(), 500e6);
     }
 }
