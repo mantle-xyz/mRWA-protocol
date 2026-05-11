@@ -56,6 +56,7 @@ import {Script, console2} from "forge-std/Script.sol";
 ///         │  Accountant   → ACCOUNTANT_EXECUTOR_ROLE → AccountantExecutor  │
 ///         │  AcctExecutor → BOT_ROLE       → bot                           │
 ///         │  Vault        → PAUSER_ROLE    → pauser                        │
+///         │  Vault        → CAP_MANAGER_ROLE → capManager                  │
 ///         └─────────────────────────────────────────────────────────────────┘
 ///
 /// Required env vars (set via deploy-config YAML):
@@ -67,6 +68,7 @@ import {Script, console2} from "forge-std/Script.sol";
 ///   F_TREASURY_ADDRESS           – fee share recipient
 ///   (also used as gateway sanctionSafe init)
 ///   F_PAUSER_ADDRESS             – Vault PAUSER_ROLE
+///   F_CAP_MANAGER_ADDRESS        – Vault CAP_MANAGER_ROLE
 ///   F_INITIAL_RATE               – Accountant starting exchange rate (e.g. 1e18)
 ///   F_MANAGEMENT_FEE_BPS         – Accountant management fee in bps (e.g. 50)
 ///   F_BUFFER_TARGET_BPS          – StrategyController buffer target
@@ -116,6 +118,7 @@ contract DeployAll is Script {
         address signer = vm.envAddress("F_SIGNER_ADDRESS");
         address treasury = vm.envAddress("F_TREASURY_ADDRESS");
         address pauser = vm.envAddress("F_PAUSER_ADDRESS");
+        address capManager = vm.envAddress("F_CAP_MANAGER_ADDRESS");
         uint64 initialRate = uint64(vm.envUint("F_INITIAL_RATE"));
         uint32 managementFeeBps = uint32(vm.envUint("F_MANAGEMENT_FEE_BPS"));
         uint16 bufferTargetBps = uint16(vm.envUint("F_BUFFER_TARGET_BPS"));
@@ -288,12 +291,14 @@ contract DeployAll is Script {
         d.accountant.grantRole(d.accountant.ACCOUNTANT_EXECUTOR_ROLE(), address(d.accountantExecutor));
         d.accountantExecutor.grantRole(d.accountantExecutor.BOT_ROLE(), bot);
         d.vault.grantRole(d.vault.PAUSER_ROLE(), pauser);
+        d.vault.grantRole(d.vault.CAP_MANAGER_ROLE(), capManager);
 
         console2.log("");
         console2.log("[Phase 4] Roles wired");
         console2.log("  Accountant ACCOUNTANT_EXECUTOR_ROLE -> AcctExecutor");
         console2.log("  AcctExecutor BOT_ROLE    -> bot   :", bot);
         console2.log("  Vault PAUSER_ROLE        -> pauser:", pauser);
+        console2.log("  Vault CAP_MANAGER_ROLE   -> capMgr:", capManager);
 
         // ═════════════════════════════════════════════════════════════
         //  Phase 5 (optional): Deploy upgradeable SubRedManagementAdapter

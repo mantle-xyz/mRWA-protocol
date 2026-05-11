@@ -27,6 +27,7 @@ import {Script, console2} from "forge-std/Script.sol";
 ///   F_TREASURY_ADDRESS        – treasury address for fee shares
 ///                              (also used as gateway.sanctionSafe init)
 ///   F_PAUSER_ADDRESS          – address to receive PAUSER_ROLE
+///   F_CAP_MANAGER_ADDRESS     – address to receive CAP_MANAGER_ROLE
 ///   F_MAX_REDEMPTION_FEE_BPS  – max redemption fee cap in bps
 ///   F_REDEMPTION_FEE_BPS      – initial redemption fee in bps
 ///   F_MIN_REDEEM_AMOUNT       – minimum redeem amount
@@ -39,6 +40,7 @@ contract DeployVault is Script {
     {
         address admin = vm.envAddress("F_ADMIN_ADDRESS");
         address pauser = vm.envAddress("F_PAUSER_ADDRESS");
+        address capManager = vm.envAddress("F_CAP_MANAGER_ADDRESS");
         address treasury = vm.envAddress("F_TREASURY_ADDRESS");
         address sanctionsOracle = vm.envAddress("F_SANCTIONS_ORACLE");
 
@@ -68,6 +70,7 @@ contract DeployVault is Script {
         console2.log("Accountant         :", params.accountant);
         console2.log("Treasury           :", params.treasury);
         console2.log("Pauser             :", pauser);
+        console2.log("CapManager         :", capManager);
         console2.log("MaxRedemptionFee   :", params.maxRedemptionFeeBps);
         console2.log("RedemptionFee      :", params.redemptionFeeBps);
         console2.log("MinRedeem          :", params.minRedeemAmount);
@@ -109,9 +112,11 @@ contract DeployVault is Script {
         );
         console2.log("[4/5] Vault Gateway      :", params.gateway);
 
-        // ---- 5. Grant PAUSER_ROLE ----
+        // ---- 5. Grant Vault roles ----
         vault.grantRole(vault.PAUSER_ROLE(), pauser);
-        console2.log("[5/5] PAUSER_ROLE granted to:", pauser);
+        vault.grantRole(vault.CAP_MANAGER_ROLE(), capManager);
+        console2.log("[5/5] PAUSER_ROLE granted to     :", pauser);
+        console2.log("[5/5] CAP_MANAGER_ROLE granted to:", capManager);
 
         vm.stopBroadcast();
 
@@ -122,6 +127,7 @@ contract DeployVault is Script {
         console2.log("Factory vault cnt: ", factory.vaultCount());
         console2.log("Has ADMIN_ROLE:    ", vault.hasRole(vault.DEFAULT_ADMIN_ROLE(), admin));
         console2.log("Has PAUSER_ROLE:   ", vault.hasRole(vault.PAUSER_ROLE(), pauser));
+        console2.log("Has CAP_MANAGER:   ", vault.hasRole(vault.CAP_MANAGER_ROLE(), capManager));
         console2.log("Gateway:           ", vault.gateway());
         console2.log("Asset:             ", vault.asset());
         console2.log("Exchange rate:     ", vault.exchangeRate());

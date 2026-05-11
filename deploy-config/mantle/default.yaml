@@ -20,6 +20,7 @@ envs:
   F_SIGNER_ADDRESS: "" # Phase A 前填写 KMS Operator Bot, grants OperatorExecutor BOT_ROLE
   F_TREASURY_ADDRESS: "" # Phase A 前填写 fee recipient / sanction safe
   F_PAUSER_ADDRESS: "" # Phase B 前填写 Vault + StrategyController PAUSER_ROLE
+  F_CAP_MANAGER_ADDRESS: "" # Phase B 前填写 CAP_MANAGER_ROLE holder for daily cap reset
 
   # ── Existing factory + Phase A outputs ────────────────────────
   F_ACCOUNTANT_FACTORY: ""
@@ -84,6 +85,10 @@ envs:
   F_REDEMPTION_FEE_BPS: "10" # 0.1%
   F_MIN_REDEEM_AMOUNT: "1000000" # 1 USDC (6 decimals)
   F_MIN_DEPOSIT_AMOUNT: "1000000" # 1 USDC (6 decimals)
+  F_MAX_SETTLEMENT_DEVIATION_BPS: "1000" # 10% absolute cap
+  # Daily caps (initial values). 0 = blocked. CAP_MANAGER_ROLE 后续可调。
+  F_DEPOSIT_DAILY_REMAINING: "0" # uint256 max = unlimited (USDC units)
+  F_REDEEM_DAILY_REMAINING: "0" # uint256 max = unlimited (share units)
   F_SYNC_REDEEM_DISABLED: "false"
 
   # ── Task: DeployEmptyVaultAndAdapterFactories ────────────────
@@ -107,12 +112,17 @@ envs:
   UPGRADE_INIT_OPERATOR_EXECUTOR: ""          # filled from Phase A (UUPS, already inited)
   UPGRADE_INIT_TREASURY: ""                   # copy F_TREASURY_ADDRESS before Phase B
   UPGRADE_INIT_PAUSER: ""                     # copy F_PAUSER_ADDRESS before Phase B
+  UPGRADE_INIT_CAP_MANAGER: ""                # copy F_CAP_MANAGER_ADDRESS before Phase B
   UPGRADE_INIT_VAULT_NAME: "Mantle RWA Vault"
   UPGRADE_INIT_VAULT_SYMBOL: "mRWA"
   UPGRADE_INIT_MAX_REDEMPTION_FEE_BPS: "500"
   UPGRADE_INIT_REDEMPTION_FEE_BPS: "10"
   UPGRADE_INIT_MIN_REDEEM_AMOUNT: "1000000"
   UPGRADE_INIT_MIN_DEPOSIT_AMOUNT: "1000000"
+  UPGRADE_INIT_MAX_SETTLEMENT_DEVIATION_BPS: "1000" # 10% absolute cap
+  # Daily caps (initial values). 0 = blocked. CAP_MANAGER_ROLE 后续可调。
+  UPGRADE_INIT_DEPOSIT_DAILY_REMAINING: "0" # uint256 max = unlimited
+  UPGRADE_INIT_REDEEM_DAILY_REMAINING: "0" # uint256 max = unlimited
   UPGRADE_INIT_ADAPTER_SUBRED_MANAGEMENT: ""
   UPGRADE_INIT_ADAPTER_ST_TOKEN: ""
   UPGRADE_INIT_ADAPTER_ADMIN: "0x207E804758e28F2b3fD6E4219671B327100b82f8"

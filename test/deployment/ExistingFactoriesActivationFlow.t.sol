@@ -37,6 +37,7 @@ contract ExistingFactoriesActivationFlowTest is Test {
         address admin = BROADCAST_SENDER;
         address bot = makeAddr("bot");
         address pauser = makeAddr("pauser");
+        address capManager = makeAddr("capManager");
         address treasury = makeAddr("treasury");
         MockERC20Mintable usdc = new MockERC20Mintable("USD Coin", "USDC", 6);
         MockERC20Mintable stToken = new MockERC20Mintable("DigiFt ST", "dST", 18);
@@ -94,6 +95,7 @@ contract ExistingFactoriesActivationFlowTest is Test {
             operatorExecutor,
             treasury,
             pauser,
+            capManager,
             address(subRed),
             address(stToken)
         );
@@ -109,6 +111,8 @@ contract ExistingFactoriesActivationFlowTest is Test {
         assertEq(vault.gateway(), gateway);
         assertEq(vault.controller(), controllerProxy);
         assertEq(vault.accountant(), accountantProxy);
+        assertEq(vault.depositDailyRemaining(), 123_456e6);
+        assertEq(vault.redeemDailyRemaining(), 789_012e18);
         assertEq(address(accountant.vault()), vaultProxy);
         assertTrue(accountant.hasRole(accountant.DEFAULT_ADMIN_ROLE(), admin));
         assertTrue(accountant.hasRole(accountant.ACCOUNTANT_EXECUTOR_ROLE(), accountantExecutor));
@@ -116,6 +120,7 @@ contract ExistingFactoriesActivationFlowTest is Test {
         assertTrue(controller.hasRole(controller.DEFAULT_ADMIN_ROLE(), admin));
         assertTrue(controller.hasRole(controller.OPERATOR_EXECUTOR_ROLE(), operatorExecutor));
         assertTrue(controller.hasRole(controller.PAUSER_ROLE(), pauser));
+        assertTrue(vault.hasRole(vault.CAP_MANAGER_ROLE(), capManager));
         assertEq(adapter.vault(), vaultProxy);
     }
 
@@ -139,6 +144,7 @@ contract ExistingFactoriesActivationFlowTest is Test {
         address operatorExecutor,
         address treasury,
         address pauser,
+        address capManager,
         address subRed,
         address stToken
     ) internal {
@@ -155,12 +161,15 @@ contract ExistingFactoriesActivationFlowTest is Test {
         vm.setEnv("UPGRADE_INIT_OPERATOR_EXECUTOR", vm.toString(operatorExecutor));
         vm.setEnv("UPGRADE_INIT_TREASURY", vm.toString(treasury));
         vm.setEnv("UPGRADE_INIT_PAUSER", vm.toString(pauser));
+        vm.setEnv("UPGRADE_INIT_CAP_MANAGER", vm.toString(capManager));
         vm.setEnv("UPGRADE_INIT_VAULT_NAME", "Mantle RWA Vault");
         vm.setEnv("UPGRADE_INIT_VAULT_SYMBOL", "mRWA");
         vm.setEnv("UPGRADE_INIT_MAX_REDEMPTION_FEE_BPS", "500");
         vm.setEnv("UPGRADE_INIT_REDEMPTION_FEE_BPS", "10");
         vm.setEnv("UPGRADE_INIT_MIN_REDEEM_AMOUNT", "1000000");
         vm.setEnv("UPGRADE_INIT_MIN_DEPOSIT_AMOUNT", "1000000");
+        vm.setEnv("UPGRADE_INIT_DEPOSIT_DAILY_REMAINING", "123456000000");
+        vm.setEnv("UPGRADE_INIT_REDEEM_DAILY_REMAINING", "789012000000000000000000");
         vm.setEnv("UPGRADE_INIT_ADAPTER_SUBRED_MANAGEMENT", vm.toString(subRed));
         vm.setEnv("UPGRADE_INIT_ADAPTER_ST_TOKEN", vm.toString(stToken));
         vm.setEnv("UPGRADE_INIT_ADAPTER_ADMIN", vm.toString(admin));

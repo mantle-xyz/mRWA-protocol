@@ -30,6 +30,7 @@ import {Script, console2} from "forge-std/Script.sol";
 /// - UPGRADE_INIT_OPERATOR_EXECUTOR           OperatorExecutor UUPS proxy (init, from Phase A)
 /// - UPGRADE_INIT_TREASURY
 /// - UPGRADE_INIT_PAUSER
+/// - UPGRADE_INIT_CAP_MANAGER
 /// - UPGRADE_INIT_MAX_REDEMPTION_FEE_BPS
 /// - UPGRADE_INIT_REDEMPTION_FEE_BPS
 /// - UPGRADE_INIT_MIN_REDEEM_AMOUNT
@@ -64,6 +65,7 @@ contract UpgradeAndInitVaultAndAdapter is Script {
         address adapterProxy = vm.envOr("UPGRADE_INIT_ADAPTER_PROXY", address(0));
         address admin = vm.envOr("UPGRADE_INIT_ADMIN", address(0));
         address pauser = vm.envOr("UPGRADE_INIT_PAUSER", address(0));
+        address capManager = vm.envOr("UPGRADE_INIT_CAP_MANAGER", address(0));
         address usdc = vm.envOr("UPGRADE_INIT_USDC", address(0));
         address gateway = vm.envOr("UPGRADE_INIT_GATEWAY", address(0));
         address treasury = vm.envOr("UPGRADE_INIT_TREASURY", address(0));
@@ -83,6 +85,7 @@ contract UpgradeAndInitVaultAndAdapter is Script {
         _requireNonZero(adapterProxy, "UPGRADE_INIT_ADAPTER_PROXY");
         _requireNonZero(admin, "UPGRADE_INIT_ADMIN");
         _requireNonZero(pauser, "UPGRADE_INIT_PAUSER");
+        _requireNonZero(capManager, "UPGRADE_INIT_CAP_MANAGER");
         _requireNonZero(usdc, "UPGRADE_INIT_USDC");
         _requireNonZero(gateway, "UPGRADE_INIT_GATEWAY");
         _requireNonZero(treasury, "UPGRADE_INIT_TREASURY");
@@ -214,6 +217,15 @@ contract UpgradeAndInitVaultAndAdapter is Script {
         } else {
             console2.log("[7/9] Vault PAUSER_ROLE already granted, skip");
         }
+        if (!vault.hasRole(vault.CAP_MANAGER_ROLE(), capManager)) {
+            vm.startBroadcast();
+            vault.grantRole(vault.CAP_MANAGER_ROLE(), capManager);
+            vm.stopBroadcast();
+            console2.log("      Vault CAP_MANAGER_ROLE granted");
+            _settleBlock(settleMs);
+        } else {
+            console2.log("      Vault CAP_MANAGER_ROLE already granted, skip");
+        }
 
         adapter = SubRedManagementAdapter(adapterProxy);
         if (!_adapterInitialized(adapter, vaultProxy)) {
@@ -269,6 +281,7 @@ contract UpgradeAndInitVaultAndAdapter is Script {
         console2.log("Vault accountant    :", vault.accountant());
         console2.log("Vault has admin     :", vault.hasRole(vault.DEFAULT_ADMIN_ROLE(), admin));
         console2.log("Vault has pauser    :", vault.hasRole(vault.PAUSER_ROLE(), pauser));
+        console2.log("Vault has cap mgr   :", vault.hasRole(vault.CAP_MANAGER_ROLE(), capManager));
         console2.log("Accountant vault    :", address(accountant.vault()));
         console2.log("Accountant has admin:", accountant.hasRole(accountant.DEFAULT_ADMIN_ROLE(), admin));
         console2.log(
