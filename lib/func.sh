@@ -76,28 +76,29 @@ print_cmd() {
 
 forge_script() {
   log_info "forge script"
-  local FORGE_OPTS="--ffi --rpc-url $F_RPC_URL --sender $F_SENDER --slow"
+  local -a forge_opts
+  forge_opts=(--ffi --rpc-url "$F_RPC_URL" --sender "$F_SENDER" --slow)
 
   if [[ "$F_VERBOSE" == "true" ]]; then 
-    FORGE_OPTS="${FORGE_OPTS} -vvvv"
+    forge_opts+=(-vvvv)
   fi
 
   # wallet type
   if [[ "$F_NO_WALLET" != "true" ]]; then
     if [[ "$F_WALLET_TYPE" == "PRIVATE_KEY" ]]; then 
       log_info "Use $F_WALLET_TYPE wallet"
-      FORGE_OPTS="${FORGE_OPTS} --private-key ${F_PRIVATE_KEY}"
+      forge_opts+=(--private-key "$F_PRIVATE_KEY")
     elif [[ "$F_WALLET_TYPE" == "LEDGER" ]]; then
       log_info "Use $F_WALLET_TYPE wallet"
-      FORGE_OPTS="${FORGE_OPTS} --ledger --mnemonic-indexes ${F_MNEMONIC_INDEX:-0}"
+      forge_opts+=(--ledger --mnemonic-indexes "${F_MNEMONIC_INDEX:-0}")
       if [[ -n "$F_HARDWARE_DERIVATION_PATH" ]]; then
-        FORGE_OPTS="${FORGE_OPTS} --mnemonic-derivation-paths ${F_HARDWARE_DERIVATION_PATH}"
+        forge_opts+=(--mnemonic-derivation-paths "$F_HARDWARE_DERIVATION_PATH")
       fi
     elif [[ "$F_WALLET_TYPE" == "TREZOR" ]]; then
       log_info "Use $F_WALLET_TYPE wallet"
-      FORGE_OPTS="${FORGE_OPTS} --trezor --mnemonic-indexes ${F_MNEMONIC_INDEX:-0}"
+      forge_opts+=(--trezor --mnemonic-indexes "${F_MNEMONIC_INDEX:-0}")
       if [[ -n "$F_HARDWARE_DERIVATION_PATH" ]]; then
-        FORGE_OPTS="${FORGE_OPTS} --mnemonic-derivation-paths ${F_HARDWARE_DERIVATION_PATH}"
+        forge_opts+=(--mnemonic-derivation-paths "$F_HARDWARE_DERIVATION_PATH")
       fi
     elif [[ "$F_WALLET_TYPE" == "MNEMONIC" ]]; then
       log_info "Use $F_WALLET_TYPE wallet"
@@ -105,7 +106,7 @@ forge_script() {
         log_error "MNEMONIC_INDEX must be set for MNEMONIC wallet, exit."
         exit 1
       fi
-      FORGE_OPTS="${FORGE_OPTS} --mnemonics ${F_MNEMONIC} --mnemonic-indexes ${F_MNEMONIC_INDEX}"
+      forge_opts+=(--mnemonics "$F_MNEMONIC" --mnemonic-indexes "$F_MNEMONIC_INDEX")
     elif [[ "$F_WALLET_TYPE" == "AWS_KMS" ]]; then
       log_info "Use $F_WALLET_TYPE wallet"
       if [[ -z "$AWS_KMS_KEY_ID" && -z "$F_AWS_KMS_KEY_ID" ]]; then
@@ -113,7 +114,7 @@ forge_script() {
         exit 1
       fi
       export AWS_KMS_KEY_ID="${AWS_KMS_KEY_ID:-$F_AWS_KMS_KEY_ID}"
-      FORGE_OPTS="${FORGE_OPTS} --aws"
+      forge_opts+=(--aws)
     else
       log_error "Unknown wallet type. Options: AWS_KMS, PRIVATE_KEY, LEDGER, TREZOR, MNEMONIC"
     fi
@@ -121,13 +122,35 @@ forge_script() {
 
   # verifier options
   if [[ "$F_VERIFY" == "true" ]]; then
-    FORGE_OPTS="${FORGE_OPTS} --verify"
+    forge_opts+=(--verify)
     log_info "Verification enabled (etherscan config from foundry.toml)"
   fi
 
-  log_info "forge script ${FORGE_OPTS} ${@}"
+  log_info "forge script $(_redacted_cmd "${forge_opts[@]}" "$@")"
 
-  forge script ${FORGE_OPTS} "${@}"
+  forge script "${forge_opts[@]}" "$@"
+}
+
+_redacted_cmd() {
+  local -a out
+  local redact_next="false"
+  local arg
+  for arg in "$@"; do
+    if [[ "$redact_next" == "true" ]]; then
+      out+=("<redacted>")
+      redact_next="false"
+      continue
+    fi
+
+    out+=("$arg")
+    case "$arg" in
+      --private-key|--private-keys|--mnemonics|--mnemonic-passphrases)
+        redact_next="true"
+        ;;
+    esac
+  done
+
+  printf "%s " "${out[@]}"
 }
 
 sender_impersonate_safe_signer_on_forked_network() {

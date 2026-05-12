@@ -107,11 +107,15 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
         _disableInitializers();
     }
 
-    function initialize(address vault_, uint64 initialRate, uint32 managementFeeRate_, address admin)
-        external
-        initializer
-    {
-        if (vault_ == address(0) || admin == address(0)) {
+    function initialize(
+        address vault_,
+        uint64 initialRate,
+        uint32 managementFeeRate_,
+        address admin,
+        address pauser_,
+        address executor_
+    ) external initializer {
+        if (vault_ == address(0) || admin == address(0) || pauser_ == address(0) || executor_ == address(0)) {
             revert Accountant__ZeroAddress();
         }
         if (initialRate == 0) revert Accountant__InvalidRate();
@@ -135,8 +139,9 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
         _setRoleAdmin(PAUSER_ROLE, DEFAULT_ADMIN_ROLE);
         _setRoleAdmin(ACCOUNTANT_EXECUTOR_ROLE, DEFAULT_ADMIN_ROLE);
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
-        _grantRole(PAUSER_ROLE, admin);
-        _grantRole(ACCOUNTANT_EXECUTOR_ROLE, admin);
+        _grantRole(PAUSER_ROLE, pauser_);
+        _grantRole(PAUSER_ROLE, executor_);
+        _grantRole(ACCOUNTANT_EXECUTOR_ROLE, executor_);
     }
 
     // =============================================================
