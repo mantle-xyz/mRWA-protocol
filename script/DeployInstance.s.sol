@@ -50,6 +50,7 @@ import {Script, console2} from "forge-std/Script.sol";
 ///   F_ACCOUNTANT_EXECUTOR        – existing AccountantExecutor proxy (reused)
 ///   F_TREASURY_ADDRESS
 ///   F_PAUSER_ADDRESS
+///   F_CAP_MANAGER_ADDRESS
 ///   F_INITIAL_RATE
 ///   F_MANAGEMENT_FEE_BPS
 ///   F_BUFFER_TARGET_BPS
@@ -98,6 +99,7 @@ contract DeployInstance is Script {
         address complianceBot = vm.envAddress("F_COMPLIANCE_BOT_ADDRESS");
         address treasury = vm.envAddress("F_TREASURY_ADDRESS");
         address pauser = vm.envAddress("F_PAUSER_ADDRESS");
+        address capManager = vm.envAddress("F_CAP_MANAGER_ADDRESS");
         uint64 initialRate = uint64(vm.envUint("F_INITIAL_RATE"));
         uint32 managementFeeBps = uint32(vm.envUint("F_MANAGEMENT_FEE_BPS"));
         uint16 bufferTargetBps = uint16(vm.envUint("F_BUFFER_TARGET_BPS"));
@@ -128,19 +130,20 @@ contract DeployInstance is Script {
         console2.log("[2] Gteway (uninit):", gatewayAddr);
         console2.log("[2] Ctrl   (uninit):", controllerAddr);
 
-        // ── Phase 3: Accountant (vault addr known) ────────────────────
-        address accountantAddr =
-            accountantFactory.deployAndInitAccountant(vaultAddr, initialRate, managementFeeBps, admin);
-        d.accountant = Accountant(accountantAddr);
-        console2.log("[3] Accountant     :", accountantAddr);
-
-        // ── Phase 4: Reuse existing UUPS executor proxies ────────────
+        // ── Phase 3: Reuse existing UUPS executor proxies ────────────
         address opExecAddr = vm.envAddress("F_OPERATOR_EXECUTOR");
         address acctExecAddr = vm.envAddress("F_ACCOUNTANT_EXECUTOR");
         d.operatorExecutor = OperatorExecutor(opExecAddr);
         d.accountantExecutor = AccountantExecutor(acctExecAddr);
-        console2.log("[4] OpExecutor (reused)  :", opExecAddr);
-        console2.log("[4] AcctExecutor (reused):", acctExecAddr);
+        console2.log("[3] OpExecutor (reused)  :", opExecAddr);
+        console2.log("[3] AcctExecutor (reused):", acctExecAddr);
+
+        // ── Phase 4: Accountant (vault + executor addrs known) ───────
+        address accountantAddr = accountantFactory.deployAndInitAccountant(
+            vaultAddr, initialRate, managementFeeBps, admin, pauser, acctExecAddr
+        );
+        d.accountant = Accountant(accountantAddr);
+        console2.log("[4] Accountant     :", accountantAddr);
 
         // ── Phase 5: Initialize deferred proxies ──────────────────────
         // Vault first — Controller.initialize reads vault.asset()
@@ -188,6 +191,7 @@ contract DeployInstance is Script {
         // BOT_ROLE on the executor itself is already configured — no change needed there.
         d.accountant.grantRole(d.accountant.ACCOUNTANT_EXECUTOR_ROLE(), acctExecAddr);
         d.vault.grantRole(d.vault.PAUSER_ROLE(), pauser);
+        d.vault.grantRole(d.vault.CAP_MANAGER_ROLE(), capManager);
         console2.log("[6] Roles wired");
 
         // ── Phase 7 (optional): Deploy adapter via existing factory ───
