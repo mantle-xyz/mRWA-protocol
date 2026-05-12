@@ -8,6 +8,7 @@ import {IStrategyControllerExecutor} from "../../src/interfaces/strategy/IStrate
 import {IMantleYieldVault} from "../../src/interfaces/vault/IMantleYieldVault.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {IERC20Errors} from "@openzeppelin/contracts/interfaces/draft-IERC6093.sol";
 import {Test, console2} from "forge-std/Test.sol";
 
 // ---------------------------------------------------------------------------
@@ -191,22 +192,28 @@ contract MockVaultRB {
 
     function totalLockedShares() external view returns (uint256) { return totalLockedSharesValue; }
 
-    // ---- FreeCash: physical balance - locked shares value (real formula) ----
+    /// @dev Ceil rounding to match real vault's _convertToAssets(totalLockedShares, Math.Rounding.Ceil)
+    function _lockedValue() private view returns (uint256) {
+        uint256 num = totalLockedSharesValue * mockedExchangeRate;
+        return num == 0 ? 0 : (num - 1) / 1e18 + 1;
+    }
+
+    // ---- FreeCash: physical balance - locked shares value (real formula, Ceil rounding) ----
     function getFreeCash() external view returns (uint256) {
         uint256 totalCash = token.balanceOf(address(this));
-        uint256 lockedValue = (totalLockedSharesValue * mockedExchangeRate) / 1e18;
-        return totalCash > lockedValue ? totalCash - lockedValue : 0;
+        uint256 locked = _lockedValue();
+        return totalCash > locked ? totalCash - locked : 0;
     }
 
     function totalLockedLiabilities() external view returns (uint256) {
-        return (totalLockedSharesValue * mockedExchangeRate) / 1e18;
+        return _lockedValue();
     }
 
     function getCashDeficit() external view returns (uint256) {
         uint256 totalCash = token.balanceOf(address(this));
-        uint256 lockedValue = (totalLockedSharesValue * mockedExchangeRate) / 1e18;
-        if (totalCash > lockedValue) return 0;
-        return lockedValue - totalCash;
+        uint256 locked = _lockedValue();
+        if (totalCash > locked) return 0;
+        return locked - totalCash;
     }
 
     function totalInvestInFlight() external view returns (uint256) { return investInFlightTotal; }
@@ -214,13 +221,13 @@ contract MockVaultRB {
     function adapterInvestInFlightTokens(address a) external view returns (uint256) { return investInFlightByAdapter[a]; }
     function adapterRedeemInFlightUsdc(address a) external view returns (uint256) { return redeemInFlightByAdapter[a]; }
 
-    /// @dev Simplified totalAssets: physical + inflight - lockedLiabilities.
+    /// @dev Simplified totalAssets: physical + inflight - lockedLiabilities (Ceil rounding).
     ///      Matches real formula semantics enough for rebalance arithmetic in this mock.
     function totalAssets() external view returns (uint256) {
         uint256 total = token.balanceOf(address(this)) + investInFlightTotal + redeemInFlightTotal;
-        uint256 lockedValue = (totalLockedSharesValue * mockedExchangeRate) / 1e18;
-        if (total <= lockedValue) return 0;
-        return total - lockedValue;
+        uint256 locked = _lockedValue();
+        if (total <= locked) return 0;
+        return total - locked;
     }
 
     function approveToAdapter(address adapter, address approveToken, uint256 amount) external {
@@ -491,7 +498,7 @@ contract RedeemBatchQATest is Test {
     // -----------------------------------------------------------------------
 
     function test_ProcessRedeemBatch_Success() public {
-        _logCase("test_ProcessRedeemBatch_Success", unicode"processRedeemBatch 正常处理批次");
+        _logCase("test_ProcessRedeemBatch_Success", unicode"`processRedeemBatch` 正常处理批次");
 
         _step("[Step 1] UserA deposits 600, userB deposits 600 (provides buffer)");
         _depositToVault(userB, 600e18);
@@ -533,7 +540,7 @@ contract RedeemBatchQATest is Test {
     // -----------------------------------------------------------------------
 
     function test_ProcessRedeemBatch_RevertDuplicate() public {
-        _logCase("test_ProcessRedeemBatch_RevertDuplicate", unicode"相同批次不能重复 processRedeemBatch");
+        _logCase("test_ProcessRedeemBatch_RevertDuplicate", unicode"相同批次不能重复 `processRedeemBatch`");
 
         _step("[Step 1] Setup and process batch via real flow");
         (uint256[] memory ids,) = _setupRedeemRequests(userA, 600e18, 3);
@@ -561,7 +568,7 @@ contract RedeemBatchQATest is Test {
     // -----------------------------------------------------------------------
 
     function test_FinalizeRedeemBatch_RevertNotProcessed() public {
-        _logCase("test_FinalizeRedeemBatch_RevertNotProcessed", unicode"finalizeRedeemBatch 前必须先 process");
+        _logCase("test_FinalizeRedeemBatch_RevertNotProcessed", unicode"`finalizeRedeemBatch` 前必须先 process");
 
         _step("[Step 1] Setup redeem requests but skip processRedeemBatch");
         (uint256[] memory ids, uint256 sharesPerReq) = _setupRedeemRequests(userA, 600e18, 3);
@@ -578,7 +585,7 @@ contract RedeemBatchQATest is Test {
         vm.prank(bot);
         vm.expectRevert(
             abi.encodeWithSelector(
-                StrategyController.InvalidRequestState.selector,
+                IMantleYieldVault.Vault__InvalidState.selector,
                 ids[0],
                 IMantleYieldVault.RequestStatus.PENDING
             )
@@ -593,7 +600,7 @@ contract RedeemBatchQATest is Test {
     // -----------------------------------------------------------------------
 
     function test_FinalizeRedeemBatch_Success() public {
-        _logCase("test_FinalizeRedeemBatch_Success", unicode"finalizeRedeemBatch 成功完成已 processing 批次");
+        _logCase("test_FinalizeRedeemBatch_Success", unicode"`finalizeRedeemBatch` 成功完成已 processing 批次");
 
         _step("[Step 1] UserB deposits to provide buffer, userA deposits and creates requests");
         _depositToVault(userB, 600e18);
@@ -666,7 +673,7 @@ contract RedeemBatchQATest is Test {
 
         _step("[Step 3] processRedeemBatch with unsorted IDs via OperatorExecutor");
         vm.prank(bot);
-        vm.expectRevert(StrategyController.IdsNotSorted.selector);
+        vm.expectRevert(StrategyController.Controller__IdsNotSorted.selector);
         executor.executeProcessRedeemBatch(address(controller), unsortedIds);
         _step("  PASS: processRedeemBatch reverted with IdsNotSorted");
 
@@ -680,7 +687,7 @@ contract RedeemBatchQATest is Test {
         settled[1] = 200e18;
         settled[2] = 200e18;
         vm.prank(bot);
-        vm.expectRevert(StrategyController.IdsNotSorted.selector);
+        vm.expectRevert(StrategyController.Controller__IdsNotSorted.selector);
         executor.executeFinalizeRedeemBatch(address(controller), unsortedIds, settled);
         _step("  PASS: finalizeRedeemBatch also reverted with IdsNotSorted");
         _logPass();
@@ -691,7 +698,7 @@ contract RedeemBatchQATest is Test {
     // -----------------------------------------------------------------------
 
     function test_FinalizeRedeemBatch_RevertInsufficientBalance() public {
-        _logCase("test_FinalizeRedeemBatch_RevertInsufficientBalance", unicode"物理余额不足时 finalize 失败，补足后成功");
+        _logCase("test_FinalizeRedeemBatch_RevertInsufficientBalance", unicode"异步赎回最终释放资金时，以 Vault 中真实可点数的 USDC 为准，而不是仅依赖链下结算口径");
 
         _step("[Step 1] UserA deposits 600, rebalance invests most into adapter");
         _depositToVault(userA, 600e18);
@@ -727,10 +734,10 @@ contract RedeemBatchQATest is Test {
 
         vm.prank(bot);
         vm.expectRevert(
-            abi.encodeWithSelector(StrategyController.InsufficientCashForReady.selector, totalSettled, vaultBalance)
+            abi.encodeWithSelector(IERC20Errors.ERC20InsufficientBalance.selector, address(vault), vaultBalance, assetPerReq)
         );
         executor.executeFinalizeRedeemBatch(address(controller), ids, settled);
-        _step("  PASS: reverted with InsufficientCashForReady");
+        _step("  PASS: reverted with ERC20InsufficientBalance (vault lacks physical cash)");
 
         _step("[Step 5] Adapter returns funds to vault (simulating settleAdapter -> sweepToVault)");
         uint256 adapterBalance = asset.balanceOf(address(asyncAdapter));
@@ -759,7 +766,7 @@ contract RedeemBatchQATest is Test {
     // -----------------------------------------------------------------------
 
     function test_ProcessRedeemBatch_TriggersdivestOnShortfall() public {
-        _logCase("test_ProcessRedeemBatch_TriggersdivestOnShortfall", unicode"processRedeemBatch 在现金不足时触发 _divest(shortfall)");
+        _logCase("test_ProcessRedeemBatch_TriggersdivestOnShortfall", unicode"`processRedeemBatch` 在现金不足时触发 `_divest(shortfall)`");
 
         _step("[Step 1] UserA deposits 600, rebalance invests most into adapter");
         _depositToVault(userA, 600e18);
@@ -807,7 +814,7 @@ contract RedeemBatchQATest is Test {
     // -----------------------------------------------------------------------
 
     function test_FinalizeRedeemBatch_ChecksPhysicalBalance() public {
-        _logCase("test_FinalizeRedeemBatch_ChecksPhysicalBalance", unicode"finalizeRedeemBatch 校验物理余额而非 freeCash");
+        _logCase("test_FinalizeRedeemBatch_ChecksPhysicalBalance", unicode"`finalizeRedeemBatch` 校验物理余额而非 `freeCash`");
 
         _step("[Step 1] UserA deposits 600 and creates 3 redeem requests");
         (uint256[] memory ids, uint256 sharesPerReq) = _setupRedeemRequests(userA, 600e18, 3);
@@ -854,7 +861,7 @@ contract RedeemBatchQATest is Test {
     // -----------------------------------------------------------------------
 
     function test_FinalizeRedeemBatch_RevertDuplicate() public {
-        _logCase("test_FinalizeRedeemBatch_RevertDuplicate", unicode"相同批次不能重复 finalizeRedeemBatch");
+        _logCase("test_FinalizeRedeemBatch_RevertDuplicate", unicode"相同批次不能重复 `finalizeRedeemBatch`");
 
         _step("[Step 1] Full flow: deposit -> requestRedeem -> process -> finalize");
         _depositToVault(userB, 600e18);
@@ -875,7 +882,7 @@ contract RedeemBatchQATest is Test {
         vm.prank(bot);
         vm.expectRevert(
             abi.encodeWithSelector(
-                StrategyController.InvalidRequestState.selector,
+                IMantleYieldVault.Vault__InvalidState.selector,
                 ids[0],
                 IMantleYieldVault.RequestStatus.DONE
             )
@@ -890,7 +897,7 @@ contract RedeemBatchQATest is Test {
     // -----------------------------------------------------------------------
 
     function test_FinalizeRedeemBatch_RevertLengthMismatch() public {
-        _logCase("test_FinalizeRedeemBatch_RevertLengthMismatch", unicode"finalizeRedeemBatch ids 与 settledAssets 长度不一致");
+        _logCase("test_FinalizeRedeemBatch_RevertLengthMismatch", unicode"`finalizeRedeemBatch` 的 `ids` 与 `settledAssets` 数组长度不一致");
 
         _step("[Step 1] Setup and process batch");
         (uint256[] memory ids,) = _setupRedeemRequests(userA, 600e18, 3);
@@ -903,7 +910,7 @@ contract RedeemBatchQATest is Test {
 
         _step("[Step 3] Finalize via OperatorExecutor - expect ClaimInputsLengthMismatch");
         vm.prank(bot);
-        vm.expectRevert(StrategyController.ClaimInputsLengthMismatch.selector);
+        vm.expectRevert(StrategyController.Controller__ClaimInputsLengthMismatch.selector);
         executor.executeFinalizeRedeemBatch(address(controller), ids, settled);
         _step("  PASS: reverted with ClaimInputsLengthMismatch");
         _logPass();
@@ -914,7 +921,7 @@ contract RedeemBatchQATest is Test {
     // -----------------------------------------------------------------------
 
     function test_ProcessRedeemBatch_DependsOnExchangeRate() public {
-        _logCase("test_ProcessRedeemBatch_DependsOnExchangeRate", unicode"processRedeemBatch batchTotalAsset 依赖当前 exchangeRate");
+        _logCase("test_ProcessRedeemBatch_DependsOnExchangeRate", unicode"`processRedeemBatch` 的 `batchTotalAsset` 依赖当前 `exchangeRate`");
 
         _step("[Step 1] UserA deposits 600 at 1:1 rate, create 3 requests");
         (uint256[] memory ids, uint256 sharesPerReq) = _setupRedeemRequests(userA, 600e18, 3);
@@ -946,7 +953,7 @@ contract RedeemBatchQATest is Test {
     // -----------------------------------------------------------------------
 
     function test_RedeemBatch_PaginatedProcessing() public {
-        _logCase("test_RedeemBatch_PaginatedProcessing", unicode"运营方分页处理批次不破坏整体队列一致性");
+        _logCase("test_RedeemBatch_PaginatedProcessing", unicode"大量异步赎回请求积压时，运营方可分页处理批次且不破坏整体队列一致性");
 
         _step("[Step 0] Third depositor provides buffer so vault has enough freeCash");
         address userC = makeAddr("userC");
@@ -1015,7 +1022,7 @@ contract RedeemBatchQATest is Test {
     // -----------------------------------------------------------------------
 
     function test_ProcessRedeemBatch_ZeroBatchTotalAsset() public {
-        _logCase("test_ProcessRedeemBatch_ZeroBatchTotalAsset", unicode"processRedeemBatch batchTotalAsset 为 0 的边界行为");
+        _logCase("test_ProcessRedeemBatch_ZeroBatchTotalAsset", unicode"`processRedeemBatch` 链上计算 `batchTotalAsset` 为 0 的边界行为");
 
         _step("[Step 1] Deposit minimal amount and create requests with tiny shares");
         // Deposit 3 wei of asset => 3 wei of shares at 1:1
@@ -1060,7 +1067,7 @@ contract RedeemBatchQATest is Test {
     function test_ProcessRedeemBatch_RejectProcessingToProcessing() public {
         _logCase(
             "test_ProcessRedeemBatch_RejectProcessingToProcessing",
-            unicode"[N-16] Vault rejects PROCESSING -> PROCESSING transition"
+            unicode"Vault `updateRequestBatch` 拒绝 PROCESSING\u2192PROCESSING 转换，从而保证 processRedeemBatch 幂等"
         );
 
         _step("[Step 1] Deposit and create 2 requests");
@@ -1097,7 +1104,7 @@ contract RedeemBatchQATest is Test {
     function test_FinalizeRedeemBatch_RejectDoneToDone() public {
         _logCase(
             "test_FinalizeRedeemBatch_RejectDoneToDone",
-            unicode"[N-17] Vault rejects DONE -> DONE (duplicate finalize)"
+            unicode"Vault `markRequestsDone` 拒绝 DONE\u2192DONE 转换，从而保证 finalizeRedeemBatch 幂等"
         );
 
         _step("[Step 1] Deposit, create requests, and process");
@@ -1121,7 +1128,7 @@ contract RedeemBatchQATest is Test {
         _step("[Step 3] Attempt duplicate finalize -> Controller rejects DONE requests");
         vm.expectRevert(
             abi.encodeWithSelector(
-                StrategyController.InvalidRequestState.selector,
+                IMantleYieldVault.Vault__InvalidState.selector,
                 ids[0],
                 IMantleYieldVault.RequestStatus.DONE
             )
@@ -1138,7 +1145,7 @@ contract RedeemBatchQATest is Test {
     function test_MarkRequestsDone_RejectPendingDirect() public {
         _logCase(
             "test_MarkRequestsDone_RejectPendingDirect",
-            unicode"[N-18] Vault rejects PENDING -> DONE (skip PROCESSING)"
+            unicode"Vault `markRequestsDone` 拒绝 PENDING 请求（未经 process 直接 finalize）"
         );
 
         _step("[Step 1] Deposit and create requests (remain PENDING)");
@@ -1158,7 +1165,7 @@ contract RedeemBatchQATest is Test {
         settled[1] = assetPerReq;
         vm.expectRevert(
             abi.encodeWithSelector(
-                StrategyController.InvalidRequestState.selector,
+                IMantleYieldVault.Vault__InvalidState.selector,
                 ids[0],
                 IMantleYieldVault.RequestStatus.PENDING
             )

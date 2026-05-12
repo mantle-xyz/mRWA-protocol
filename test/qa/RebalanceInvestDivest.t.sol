@@ -764,7 +764,10 @@ contract RebalanceInvestDivestQATest is Test {
                 maxRedemptionFeeBps: 500,
                 redemptionFeeBps: 100,
                 minRedeemAmount: 0,
-                minDepositAmount: 0
+                minDepositAmount: 0,
+                maxSettlementDeviationBps: 0,
+                depositDailyRemaining: type(uint256).max,
+                redeemDailyRemaining: type(uint256).max
             }))
         )));
 
@@ -870,7 +873,7 @@ contract RebalanceInvestDivestQATest is Test {
     function test_InvestWhenFreeCashExceedsTarget() public {
         _logCase(
             "test_InvestWhenFreeCashExceedsTarget",
-            unicode"freeCash > targetCash + threshold 时触发投资"
+            unicode"`idealCash > targetCash + threshold` 时触发投资，金额 = `min(idealCash - targetCash, freeCash)`"
         );
 
         _step("[Step 1] Deposit 10000 USDC");
@@ -924,7 +927,7 @@ contract RebalanceInvestDivestQATest is Test {
     function test_DivestWhenFreeCashBelowTarget() public {
         _logCase(
             "test_DivestWhenFreeCashBelowTarget",
-            unicode"freeCash + threshold < targetCash 时触发撤资"
+            unicode"`idealCash + threshold < targetCash` 且 `!hasPendingRequest` 时触发撤资"
         );
 
         _step("[Step 1] Deposit 10000 and invest most to adapter");
@@ -1038,7 +1041,7 @@ contract RebalanceInvestDivestQATest is Test {
 
         _step("[Step 3] Immediate second rebalance should revert");
         vm.prank(bot);
-        vm.expectRevert(StrategyController.CooldownNotElapsed.selector);
+        vm.expectRevert(StrategyController.Controller__CooldownNotElapsed.selector);
         executor.executeRebalance(address(controller));
         _step("  reverted with CooldownNotElapsed");
 
@@ -1058,7 +1061,7 @@ contract RebalanceInvestDivestQATest is Test {
     function test_InvestFollowsStrategyOrder() public {
         _logCase(
             "test_InvestFollowsStrategyOrder",
-            unicode"投资时按 strategyOrder 顺序填补缺口"
+            unicode"投资时按 `strategyOrder` 顺序填补缺口"
         );
 
         _step("[Step 1] Deploy two adapters with 50%/50% weight");
@@ -1118,7 +1121,7 @@ contract RebalanceInvestDivestQATest is Test {
     function test_DivestFollowsStrategyOrderSyncAsync() public {
         _logCase(
             "test_DivestFollowsStrategyOrderSyncAsync",
-            unicode"撤资时按 strategyOrder 顺序逐个处理，每个策略按自身 isAsync 决定走同步或异步路径"
+            unicode"撤资时按 `strategyOrder` 顺序，`isAsync` 决定 sync/async 路径"
         );
 
         _step("[Step 1] Deploy sync adapterA and async adapterB (separate posToken)");
@@ -1309,7 +1312,7 @@ contract RebalanceInvestDivestQATest is Test {
     function test_DivestIncompleteWhenInsufficient() public {
         _logCase(
             "test_DivestIncompleteWhenInsufficient",
-            unicode"所有策略合计流动性仍不足时记录 DivestIncomplete"
+            unicode"所有策略合计流动性仍不足时记录 `DivestIncomplete`"
         );
 
         _step("[Step 1] Deploy normal adapter + trapped adapter (withdrawSync reverts)");
@@ -1405,7 +1408,7 @@ contract RebalanceInvestDivestQATest is Test {
     function test_PendingInFlightDeductedFromInvest() public {
         _logCase(
             "test_PendingInFlightDeductedFromInvest",
-            unicode"投资时扣除 pending invest in-flight，避免对同一策略重复投资"
+            unicode"投资时扣除 pending invest in-flight，避免重复投资"
         );
 
         _step("[Step 1] Deposit and invest to create pending in-flight");
@@ -1449,7 +1452,7 @@ contract RebalanceInvestDivestQATest is Test {
     function test_SyncDivestCreatesRedeemInFlight() public {
         _logCase(
             "test_SyncDivestCreatesRedeemInFlight",
-            unicode"同步撤资（withdrawSync）自动创建 redeem in-flight 记录"
+            unicode"同步撤资（`withdrawSync`）自动创建 redeem in-flight 记录"
         );
 
         _step("[Step 1] Deposit and invest heavily");
@@ -1507,7 +1510,7 @@ contract RebalanceInvestDivestQATest is Test {
     function test_EmptyStrategyOrderIsNoOp() public {
         _logCase(
             "test_EmptyStrategyOrderIsNoOp",
-            unicode"strategyOrder 为空时 rebalance 为 no-op"
+            unicode"`strategyOrder` 为空时 rebalance 为 no-op"
         );
 
         _step("[Step 1] Deploy fresh controller with no strategies registered");
@@ -1551,7 +1554,7 @@ contract RebalanceInvestDivestQATest is Test {
     function test_TotalValueRevertDoesNotBreakRebalance() public {
         _logCase(
             "test_TotalValueRevertDoesNotBreakRebalance",
-            unicode"adapter totalValue() 异常时 rebalance 不中断"
+            unicode"adapter `totalValue()` 异常时 rebalance 不中断"
         );
 
         _step("[Step 1] Deploy reverting adapter (totalValue reverts) + normal adapter");
@@ -1598,7 +1601,7 @@ contract RebalanceInvestDivestQATest is Test {
     function test_Divest_CashDeficitIncreasesTargetCash() public {
         _logCase(
             "test_Divest_CashDeficitIncreasesTargetCash",
-            unicode"vault 存在 cashDeficit 时 targetCash 增大；M-10 下 rebalance HOLD，processRedeemBatch 走 shortfall 路径触发 divest"
+            unicode"vault 存在 cashDeficit 时 targetCash 增大，触发更大金额的 divest"
         );
 
         _step("[Step 1] Deposit and invest most USDC to adapter");
@@ -1708,7 +1711,7 @@ contract RebalanceInvestDivestQATest is Test {
     function test_Divest_PendingRedeemCoverageSkipsNewRequest() public {
         _logCase(
             "test_Divest_PendingRedeemCoverageSkipsNewRequest",
-            unicode"adapter 已有 pending redeem in-flight 时，divest 不再发起重复的 redeem 请求"
+            unicode"adapter 已有 pending redeem in-flight 时，divest 仅依据 adapter settled value (`totalValue()`) 判断可回收金额，不再考虑 pending in-flight 覆盖"
         );
 
         _step("[Step 1] Deploy async adapter and register");
@@ -1785,7 +1788,7 @@ contract RebalanceInvestDivestQATest is Test {
     function test_Divest_SettledPlusPendingCoverage() public {
         _logCase(
             "test_Divest_SettledPlusPendingCoverage",
-            unicode"divest 同时考虑 adapter settled value 和 pending redeem coverage，只对 settled 部分发起新请求"
+            unicode"divest 仅依据 adapter settled value (`totalValue()`) 决定请求金额，不再扣除 pending redeem coverage"
         );
 
         _step("[Step 1] Deploy async adapter and register");
@@ -1852,7 +1855,7 @@ contract RebalanceInvestDivestQATest is Test {
     function test_Divest_PendingFullyCoversDemand() public {
         _logCase(
             "test_Divest_PendingFullyCoversDemand",
-            unicode"pending redeem 完全覆盖 divest 需求时，不发起任何新的 redeem 请求"
+            unicode"即使已有大额 pending redeem in-flight，只要 adapter 仍有 settled value (`totalValue() > 0`)，divest 仍会发起新请求。pending in-flight 不构成覆盖"
         );
 
         _step("[Step 1] Deploy async adapter");
@@ -1979,7 +1982,7 @@ contract RebalanceInvestDivestQATest is Test {
     function test_ProcessRedeemBatch_DivestWithPendingCoverage() public {
         _logCase(
             "test_ProcessRedeemBatch_DivestWithPendingCoverage",
-            unicode"processRedeemBatch 触发 _divest 时，pending redeem coverage 逻辑也生效"
+            unicode"processRedeemBatch 触发 _divest 时，divest 仅依据 adapter settled value 判断，与 rebalance divest 逻辑一致"
         );
 
         _step("[Step 1] Deploy async adapter");
@@ -2194,7 +2197,7 @@ contract RebalanceInvestDivestQATest is Test {
 
     function test_IdealCash_ReducesDivestDemand() public {
         _logCase("test_IdealCash_ReducesDivestDemand",
-            unicode"[N-1] idealCash = freeCash + totalRedeemInFlight 减少 divest 需求");
+            unicode"`idealCash = freeCash + totalRedeemInFlight` 在 divest 判断中生效：当 redeemInFlight 大于 0 时，divest 金额 = `targetCash - idealCash` 而非 `targetCash - freeCash`");
 
         _step("[Step 1] Deposit 10000, invest via async adapter, then settle");
         MockAsyncAdapter_RB asyncAdp = new MockAsyncAdapter_RB(address(usdc), address(posToken), address(vault));
@@ -2214,9 +2217,9 @@ contract RebalanceInvestDivestQATest is Test {
         uint256 posOnAdp = posToken.balanceOf(address(asyncAdp));
         _settleAsyncInvest(address(asyncAdp), ifId, posOnAdp);
 
-        _step("[Step 2] Create user redeem request larger than freeCash -> triggers divest in processRedeemBatch");
+        _step("[Step 2] Create large user redeem (80% shares) -> triggers big divest in processRedeemBatch");
         uint256 shares = vault.balanceOf(depositor);
-        uint256 redeemShares = shares * 10 / 100; // ~1000 USDC worth, >> freeCash of ~200
+        uint256 redeemShares = shares * 80 / 100; // ~8000 USDC worth, >> freeCash of ~200
         vm.prank(depositor);
         uint256 reqId = gateway.requestRedeem(redeemShares);
         uint256[] memory ids = new uint256[](1); ids[0] = reqId;
@@ -2226,23 +2229,36 @@ contract RebalanceInvestDivestQATest is Test {
         _step(string.concat("  totalRedeemInFlight = ", vm.toString(totalRedeemIF)));
         assertGt(totalRedeemIF, 0, "should have redeemInFlight");
 
-        _step("[Step 3] Restore buffer=10%, verify idealCash covers target -> no divest");
-        vm.prank(admin); controller.setRiskParams(1000, 200, 0);
+        _step("[Step 3] Set buffer to trigger divest, verify divest amount uses idealCash");
+        vm.prank(admin); controller.setRiskParams(500, 100, 0);
         (,uint256 freeCash, uint256 idealCash,, uint256 targetCash, uint256 threshold, bool hasPending) = controller.getRebalanceState();
         _step(string.concat("  freeCash=", vm.toString(freeCash), " idealCash=", vm.toString(idealCash)));
         _step(string.concat("  targetCash=", vm.toString(targetCash), " threshold=", vm.toString(threshold)));
         assertEq(idealCash, freeCash + totalRedeemIF, "idealCash = freeCash + totalRedeemInFlight");
         assertFalse(hasPending, "hasPendingRequest should be false after processRedeemBatch");
 
+        // Precondition: divest condition must be met (so we can measure divest amount)
+        assertTrue(idealCash + threshold < targetCash, "precondition: divest condition should be met");
+        // Precondition: idealCash > freeCash (redeemInFlight makes a difference)
+        assertGt(idealCash, freeCash, "precondition: idealCash > freeCash due to redeemInFlight");
+
+        uint256 expectedDivestAmount = targetCash - idealCash;
+        uint256 wouldBeDivestWithoutIF = targetCash - freeCash;
+        _step(string.concat("  expected divest (with idealCash)=", vm.toString(expectedDivestAmount)));
+        _step(string.concat("  would-be divest (freeCash only)=", vm.toString(wouldBeDivestWithoutIF)));
+
         uint256 redeemIFBefore = vault.totalRedeemInFlight();
         vm.warp(block.timestamp + 1);
         vm.prank(bot); executor.executeRebalance(address(controller));
         uint256 redeemIFAfter = vault.totalRedeemInFlight();
+        uint256 actualDivest = redeemIFAfter - redeemIFBefore;
 
-        if (idealCash + threshold >= targetCash) {
-            assertEq(redeemIFAfter, redeemIFBefore, "no divest when idealCash covers target");
-            _step("  PASS: idealCash covers target, no additional divest");
-        }
+        // Core assertion: divest amount equals targetCash - idealCash (not targetCash - freeCash)
+        assertEq(actualDivest, expectedDivestAmount, "divest amount = targetCash - idealCash");
+        // This proves idealCash reduces divest demand
+        assertLt(actualDivest, wouldBeDivestWithoutIF, "divest with idealCash < divest with freeCash only");
+        _step(string.concat("  actual divest=", vm.toString(actualDivest)));
+        _step("  PASS: idealCash reduces divest demand, divest amount = targetCash - idealCash");
         _logPass();
     }
 
@@ -2252,7 +2268,7 @@ contract RebalanceInvestDivestQATest is Test {
 
     function test_Invest_IdealCashJudgment_FreeCashCap() public {
         _logCase("test_Invest_IdealCashJudgment_FreeCashCap",
-            unicode"[N-2] invest 使用 idealCash 判断但金额 cap 到 freeCash");
+            unicode"invest 判断使用 `idealCash`，金额 cap 到 `freeCash`：当 `totalRedeemInFlight > 0` 时，`idealCash > freeCash`，surplus 基于 idealCash 但实际投资额不超过 freeCash");
 
         _step("[Step 1] Deposit to get freeCash");
         _deposit(10_000e6);
@@ -2281,7 +2297,7 @@ contract RebalanceInvestDivestQATest is Test {
 
     function test_LargeRedeemInFlight_RebalanceNoOp() public {
         _logCase("test_LargeRedeemInFlight_RebalanceNoOp",
-            unicode"[N-3] totalRedeemInFlight 很大时 rebalance 为 no-op");
+            unicode"当 `totalRedeemInFlight` 很大时，`idealCash = freeCash + totalRedeemInFlight >= targetCash + threshold`，rebalance 为 no-op 而非 divest");
 
         _step("[Step 1] Setup: async adapter, deposit, invest, settle");
         MockAsyncAdapter_RB asyncAdp = new MockAsyncAdapter_RB(address(usdc), address(posToken), address(vault));
@@ -2295,47 +2311,43 @@ contract RebalanceInvestDivestQATest is Test {
         vm.stopPrank();
 
         _deposit(10_000e6);
-        vm.prank(admin); controller.setRiskParams(0, 0, 0); // invest everything
+        vm.prank(admin); controller.setRiskParams(200, 0, 0); // buffer=2% -> invest 98%
         vm.prank(bot); executor.executeRebalance(address(controller));
         uint256 ifId = vault.nextInFlightId() - 1;
         uint256 posOnAdp = posToken.balanceOf(address(asyncAdp));
         _settleAsyncInvest(address(asyncAdp), ifId, posOnAdp);
 
-        _step("[Step 2] Create large redeem via processRedeemBatch");
-        uint256 shares = vault.balanceOf(depositor);
-        vm.prank(depositor);
-        uint256 reqId = gateway.requestRedeem(shares * 80 / 100);
-        uint256[] memory ids = new uint256[](1); ids[0] = reqId;
-        vm.prank(bot); executor.executeProcessRedeemBatch(address(controller), ids);
+        _step("[Step 2] Trigger large divest via regular rebalance (no locked shares, no cashDeficit)");
+        // Set buffer=90% to trigger a big divest; divest creates totalRedeemInFlight without locked shares
+        vm.prank(admin); controller.setRiskParams(9000, 0, 0);
+        vm.warp(block.timestamp + 1);
+        vm.prank(bot); executor.executeRebalance(address(controller));
 
         uint256 totalRedeemIF = vault.totalRedeemInFlight();
         _step(string.concat("  totalRedeemInFlight=", vm.toString(totalRedeemIF)));
+        assertGt(totalRedeemIF, 0, "should have redeemInFlight from divest");
 
-        _step("[Step 3] Set buffer=10%, rebalance -> no additional divest");
+        _step("[Step 3] Set buffer=10%, threshold=2%, verify idealCash covers target -> no-op");
         vm.prank(admin); controller.setRiskParams(1000, 200, 0);
         (,uint256 fc, uint256 ic,, uint256 tc, uint256 th,) = controller.getRebalanceState();
         _step(string.concat("  freeCash=", vm.toString(fc), " idealCash=", vm.toString(ic)));
         _step(string.concat("  targetCash=", vm.toString(tc), " threshold=", vm.toString(th)));
+
+        // Precondition: large redeemInFlight must make idealCash cover target + threshold (spec: "no-op")
+        assertTrue(ic + th >= tc, "precondition: idealCash + threshold >= targetCash for no-op");
+        // Also verify freeCash alone would NOT cover target (redeemInFlight is what makes the difference)
+        assertTrue(fc + th < tc, "precondition: freeCash alone would NOT cover target");
 
         uint256 redeemIFBefore = vault.totalRedeemInFlight();
         vm.warp(block.timestamp + 1);
         vm.prank(bot); executor.executeRebalance(address(controller));
         uint256 redeemIFAfter = vault.totalRedeemInFlight();
 
-        // Key assertion: no LARGE divest, at most a tiny rounding artifact
-        // The idealCash already covers targetCash, so divest should not happen
+        // Core assertion: no divest at all
         uint256 delta = redeemIFAfter > redeemIFBefore ? redeemIFAfter - redeemIFBefore : 0;
-        // If idealCash >= targetCash + threshold, no divest at all; otherwise small rounding
-        if (ic + th >= tc) {
-            // Divest blocked by threshold band or invest path reached
-            _step(string.concat("  redeemIF delta=", vm.toString(delta)));
-            _step("  PASS: large redeemInFlight prevents unnecessary divest (idealCash in threshold band)");
-        } else {
-            // Even if divest triggered, idealCash makes it much smaller than without redeemInFlight
-            assertLt(delta, tc / 10, "divest is small relative to targetCash when redeemInFlight is large");
-            _step(string.concat("  redeemIF delta=", vm.toString(delta), " (small vs targetCash=", vm.toString(tc), ")"));
-            _step("  PASS: idealCash significantly reduces divest demand");
-        }
+        assertEq(delta, 0, "no divest when large redeemInFlight makes idealCash cover target");
+        _step(string.concat("  redeemIF delta=", vm.toString(delta)));
+        _step("  PASS: large redeemInFlight prevents unnecessary divest (rebalance is no-op)");
         _logPass();
     }
 
@@ -2345,25 +2357,75 @@ contract RebalanceInvestDivestQATest is Test {
 
     function test_Divest_TotalValueZero_SkipsAdapter() public {
         _logCase("test_Divest_TotalValueZero_SkipsAdapter",
-            unicode"[N-5] adapter totalValue=0 时 divest 跳过该 adapter");
+            unicode"当 adapter settled value 已被完全消耗时（`totalValue()=0`），divest 跳过该 adapter");
 
-        _step("[Step 1] Deposit and invest, then drain adapter");
+        _step("[Step 1] Setup two adapters: emptyAdp (never invested, totalValue=0) and valueAdp (has funds)");
+        // Create two sync adapters; emptyAdp will have totalValue=0 because it was never invested into
+        MockSyncAdapter_RB emptyAdp = new MockSyncAdapter_RB(address(usdc), address(posToken), address(vault));
+        MockSyncAdapter_RB valueAdp = new MockSyncAdapter_RB(address(usdc), address(posToken), address(vault));
+
+        vm.startPrank(admin);
+        // Register both new adapters (weights must sum to 10000 after order update)
+        controller.registerStrategy(address(valueAdp), 9_000, 1, false);
+        controller.activateStrategy(address(valueAdp));
+        controller.registerStrategy(address(emptyAdp), 1_000, 1, false);
+        controller.activateStrategy(address(emptyAdp));
+        // Set order to exclude default adapter, then deactivate it
+        address[] memory order = new address[](2);
+        order[0] = address(valueAdp);
+        order[1] = address(emptyAdp);
+        controller.setStrategyOrder(order);
+        controller.deactivateStrategy(address(adapter));
+        vm.stopPrank();
+
         _deposit(10_000e6);
-        _rebalanceWithParams(500, 200, 0);
-        uint256 adapterVal = adapter.totalValue();
-        _step(string.concat("  adapter totalValue before drain: ", vm.toString(adapterVal)));
-        _rebalanceWithParams(10000, 0, 0); // buffer=100% -> divest everything
-        uint256 adapterValAfter = adapter.totalValue();
-        _step(string.concat("  adapter totalValue after drain: ", vm.toString(adapterValAfter)));
+        // Invest into valueAdp (buffer=10%, invest=90%)
+        // valueAdp.targetBalance = 10000 * 9000/10000 = 9000, shortfall=9000, absorbs all excessCash
+        // emptyAdp is never reached (remaining=0 after valueAdp)
+        _rebalanceWithParams(1000, 200, 0);
 
-        _step("[Step 2] Lower buffer, verify no additional divest from empty adapter");
-        vm.prank(admin); controller.setRiskParams(500, 0, 0);
+        uint256 valueAdpVal = valueAdp.totalValue();
+        uint256 emptyAdpVal = emptyAdp.totalValue();
+        _step(string.concat("  valueAdp totalValue=", vm.toString(valueAdpVal)));
+        _step(string.concat("  emptyAdp totalValue=", vm.toString(emptyAdpVal)));
+        assertGt(valueAdpVal, 0, "valueAdp should have funds");
+        assertEq(emptyAdpVal, 0, "emptyAdp should have zero value");
+
+        _step("[Step 2] Change order: emptyAdp first, then valueAdp. Set buffer=100% to force divest");
+        vm.startPrank(admin);
+        order[0] = address(emptyAdp);
+        order[1] = address(valueAdp);
+        controller.setStrategyOrder(order);
+        controller.setRiskParams(10000, 0, 0); // buffer=100% -> divest everything
+        vm.stopPrank();
+
+        // Verify divest condition is met
+        (,, uint256 ic,, uint256 tc, uint256 th,) = controller.getRebalanceState();
+        assertTrue(ic + th < tc, "precondition: divest condition should be met");
+
+        _step("[Step 3] Rebalance -> divest should skip emptyAdp, process valueAdp");
         vm.warp(block.timestamp + 1);
-        uint256 redeemIFBefore = vault.totalRedeemInFlight();
+        vm.recordLogs();
         vm.prank(bot); executor.executeRebalance(address(controller));
-        uint256 redeemIFAfter = vault.totalRedeemInFlight();
-        _step(string.concat("  redeemIF delta=", vm.toString(redeemIFAfter - redeemIFBefore)));
-        _step("  PASS: adapter with totalValue=0 is skipped in divest");
+
+        // Verify via DivestCoverageRead events: emptyAdp should NOT emit (skipped at settledValue=0)
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        bytes32 divestCoverageSig = keccak256("DivestCoverageRead(address,uint256,uint256,uint256)");
+        bool emptyAdpCovered = false;
+        bool valueAdpCovered = false;
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].topics.length > 1 && logs[i].topics[0] == divestCoverageSig) {
+                address coveredAdapter = address(uint160(uint256(logs[i].topics[1])));
+                if (coveredAdapter == address(emptyAdp)) emptyAdpCovered = true;
+                if (coveredAdapter == address(valueAdp)) valueAdpCovered = true;
+            }
+        }
+        assertFalse(emptyAdpCovered, "emptyAdp with totalValue=0 should NOT emit DivestCoverageRead");
+        assertTrue(valueAdpCovered, "valueAdp with funds should emit DivestCoverageRead");
+
+        // Additional: emptyAdp balance should remain 0
+        assertEq(emptyAdp.totalValue(), 0, "emptyAdp should still have zero value after divest");
+        _step("  PASS: adapter with totalValue=0 is skipped in divest (verified via DivestCoverageRead events)");
         _logPass();
     }
 
@@ -2373,7 +2435,7 @@ contract RebalanceInvestDivestQATest is Test {
 
     function test_Invest_PreviewDepositFails_SkipsAdapter() public {
         _logCase("test_Invest_PreviewDepositFails_SkipsAdapter",
-            unicode"[N-6] previewDeposit ok=false 跳过 invest");
+            unicode"invest 时先调用 `adapter.previewDeposit(alloc)`，若返回 `ok=false` 或 `executableAsset=0`，则跳过该 adapter");
 
         _step("[Step 1] Replace default adapter with previewFail adapter");
         MockPreviewFailAdapter_RB pfAdp = new MockPreviewFailAdapter_RB(address(usdc), address(posToken), address(vault));
@@ -2411,7 +2473,7 @@ contract RebalanceInvestDivestQATest is Test {
 
     function test_Invest_PreviewDeposit_StepAlignment() public {
         _logCase("test_Invest_PreviewDeposit_StepAlignment",
-            unicode"[N-7] previewDeposit 步进对齐，invest 使用 executableAsset");
+            unicode"`previewDeposit` 返回 `executableAsset < alloc` 时（如 floor to 最小申购单位），实际 invest 使用 `executableAsset`");
 
         _step("[Step 1] Deploy step adapter with depositStep=1000e6");
         MockStepAdapter_RB stepAdp = new MockStepAdapter_RB(address(usdc), address(posToken), address(vault));
@@ -2443,7 +2505,7 @@ contract RebalanceInvestDivestQATest is Test {
 
     function test_Divest_PreviewRedeemFails_SkipsAdapter() public {
         _logCase("test_Divest_PreviewRedeemFails_SkipsAdapter",
-            unicode"[N-8] previewRedeem ok=false 跳过 divest");
+            unicode"divest 时先调用 `adapter.previewRedeem(requestAsset)`，若返回 `ok=false` 或 `executableRedeem=0`，则跳过该 adapter");
 
         _step("[Step 1] Deploy previewFail adapter, deposit, invest");
         MockPreviewFailAdapter_RB pfAdp = new MockPreviewFailAdapter_RB(address(usdc), address(posToken), address(vault));
@@ -2484,7 +2546,7 @@ contract RebalanceInvestDivestQATest is Test {
 
     function test_Divest_PreviewRedeem_StepAlignment() public {
         _logCase("test_Divest_PreviewRedeem_StepAlignment",
-            unicode"[N-9] previewRedeem 步进对齐，divest 使用调整后金额");
+            unicode"`previewRedeem` 返回 `executableRedeem < requestAsset` 时，实际 divest 使用调整后金额");
 
         _step("[Step 1] Deploy step adapter with redeemStep=1000e6");
         MockStepAdapter_RB stepAdp = new MockStepAdapter_RB(address(usdc), address(posToken), address(vault));
@@ -2520,7 +2582,7 @@ contract RebalanceInvestDivestQATest is Test {
 
     function test_BaseAdapter_DefaultPreview_Passthrough() public {
         _logCase("test_BaseAdapter_DefaultPreview_Passthrough",
-            unicode"[N-10] BaseAdapter 默认 previewDeposit/previewRedeem 直通");
+            unicode"BaseAdapter 的默认 previewDeposit/previewRedeem 实现为直通：`ok = amount > 0`, `executableAssetAmount = amount`, `expectedPosAmount = 0`");
 
         (bool ok1, uint256 exec1, uint256 pos1) = adapter.previewDeposit(1000e6);
         assertTrue(ok1); assertEq(exec1, 1000e6); assertEq(pos1, 0);
@@ -2540,7 +2602,7 @@ contract RebalanceInvestDivestQATest is Test {
 
     function test_CashDeficit_IdealCash_JointDivest() public {
         _logCase("test_CashDeficit_IdealCash_JointDivest",
-            unicode"[N-11] cashDeficit + idealCash 共同决定 divest 金额");
+            unicode"cashDeficit 增大 targetCash，idealCash 减少 divest 需求，两者共同决定最终 divest 金额");
 
         _step("[Step 1] Setup async adapter, deposit, invest, settle");
         MockAsyncAdapter_RB asyncAdp = new MockAsyncAdapter_RB(address(usdc), address(posToken), address(vault));
@@ -2587,7 +2649,7 @@ contract RebalanceInvestDivestQATest is Test {
 
     function test_AsyncDivest_RequestRedeemAsync_PosAmount() public {
         _logCase("test_AsyncDivest_RequestRedeemAsync_PosAmount",
-            unicode"[N-14] async requestRedeemAsync 参数为 posAmount");
+            unicode"async adapter 的 `requestRedeemAsync` 参数语义为 posAmount（position 数量），由 Controller 通过 `previewRedeem` 或 `_estimatePosAmount` 将 assetAmount 转换为 posAmount");
 
         _step("[Step 1] Setup async adapter with price=2e18");
         MockAsyncAdapter_RB asyncAdp = new MockAsyncAdapter_RB(address(usdc), address(posToken), address(vault));
@@ -2626,7 +2688,7 @@ contract RebalanceInvestDivestQATest is Test {
 
     function test_SyncDivest_WithdrawSync_PosAmount() public {
         _logCase("test_SyncDivest_WithdrawSync_PosAmount",
-            unicode"[N-15] sync withdrawSync 参数为 shares (posAmount)");
+            unicode"sync adapter 的 `withdrawSync` 参数语义为 shares（position 数量），由 Controller 通过 `previewRedeem` 获取");
 
         _deposit(10_000e6);
         _rebalanceWithParams(500, 200, 0);
@@ -2649,7 +2711,7 @@ contract RebalanceInvestDivestQATest is Test {
 
     function test_RebalanceEvaluated_EventFields() public {
         _logCase("test_RebalanceEvaluated_EventFields",
-            unicode"[N-21] RebalanceEvaluated 事件字段验证");
+            unicode"`RebalanceEvaluated` 事件移除 `lockedLiabilities`，新增 `idealCash`，字段顺序为 `(totalCash, freeCash, idealCash, netAssets, targetCash, threshold)`");
 
         _deposit(10_000e6);
         (uint256 totalCash, uint256 freeCash, uint256 idealCash, uint256 netAssets,
@@ -2668,7 +2730,7 @@ contract RebalanceInvestDivestQATest is Test {
 
     function test_DivestCoverageRead_EventPerAdapter() public {
         _logCase("test_DivestCoverageRead_EventPerAdapter",
-            unicode"[N-22] DivestCoverageRead 每次评估 adapter 时 emit");
+            unicode"`_readDivestCoverage` 每次评估 adapter 时 emit `DivestCoverageRead(adapter, remaining, settledValue, requestAsset)`");
 
         _deposit(10_000e6);
         _rebalanceWithParams(500, 200, 0);
@@ -2698,7 +2760,7 @@ contract RebalanceInvestDivestQATest is Test {
 
     function test_Divest_TotalValueReverts_AdapterSkipped() public {
         _logCase("test_Divest_TotalValueReverts_AdapterSkipped",
-            unicode"[N-23] adapter.totalValue() revert 时 divest 跳过");
+            unicode"当 `adapter.totalValue()` revert 时，`_readDivestCoverage` 返回 0 且不 emit 事件");
 
         MockRevertingAdapter_RB rvAdp = new MockRevertingAdapter_RB(
             address(usdc), address(posToken), address(vault), false, true, false);
@@ -2725,11 +2787,16 @@ contract RebalanceInvestDivestQATest is Test {
 
         Vm.Log[] memory logs = vm.getRecordedLogs();
         bytes32 sig = keccak256("DivestCoverageRead(address,uint256,uint256,uint256)");
+        uint256 divestEventCount = 0;
         for (uint256 i = 0; i < logs.length; i++) {
             if (logs[i].topics[0] == sig) {
+                divestEventCount++;
                 assertTrue(address(uint160(uint256(logs[i].topics[1]))) != address(rvAdp));
             }
         }
+        // With 2 adapters (1 normal + 1 reverting), only the normal adapter emits DivestCoverageRead.
+        // The reverting adapter is skipped (no event). Verify the event is only from the normal adapter.
+        assertEq(divestEventCount, 1, "only normal adapter should emit DivestCoverageRead (reverting adapter skipped)");
         _step("  PASS: totalValue() revert -> no DivestCoverageRead, adapter skipped");
         _logPass();
     }
@@ -2740,7 +2807,7 @@ contract RebalanceInvestDivestQATest is Test {
 
     function test_Invest_AllocBasedOnTotalAssets() public {
         _logCase("test_Invest_AllocBasedOnTotalAssets",
-            unicode"[N-24] invest alloc 基于 vault.totalAssets()");
+            unicode"`_invest` 使用 `vault.totalAssets()` 作为 totalAssets 计算每个 adapter 的 `alloc = totalAssets * weight / 10000 - currentAdapterValue`。因为 `vault.totalAssets()` 扣除了 `floatingLocked`，所以有 locked shares 时 alloc 会比旧逻辑更小");
 
         _deposit(10_000e6);
         uint256 shares = vault.balanceOf(depositor);
@@ -2763,7 +2830,7 @@ contract RebalanceInvestDivestQATest is Test {
 
     function test_Divest_AsyncRevert_RemainingUnchanged() public {
         _logCase("test_Divest_AsyncRevert_RemainingUnchanged",
-            unicode"[N-26] async requestRedeemAsync revert -> remaining 不扣减");
+            unicode"async adapter `requestRedeemAsync` revert 时，remaining 保持不变；下一个 adapter 仍能获得完整 remaining 进行 divest");
 
         MockPosToken_RB posToken2 = new MockPosToken_RB();
         MockRevertAsyncAdapter_RB rvAsync = new MockRevertAsyncAdapter_RB(address(usdc), address(posToken2), address(vault));
@@ -2814,7 +2881,7 @@ contract RebalanceInvestDivestQATest is Test {
 
     function test_Invest_PosAmountFallback_UsesExpectedPos() public {
         _logCase("test_Invest_PosAmountFallback_UsesExpectedPos",
-            unicode"[N-39] deposit()=0 时 fallback 使用 previewDeposit.expectedPos");
+            unicode"`_invest` 中 `deposit()` 返回 `sharesOrPos=0` 时，使用 `previewDeposit` 返回的 `expectedPos` 作为 fallback。若 `expectedPos` 也为 0，则 revert `InvestPosAmountUnavailable`");
 
         MockPreviewFailAdapter_RB fallbackAdp = new MockPreviewFailAdapter_RB(address(usdc), address(posToken), address(vault));
         fallbackAdp.setDepositReturnsZero(true);
@@ -2844,7 +2911,7 @@ contract RebalanceInvestDivestQATest is Test {
 
     function test_Invest_PosAmountZero_RevertsInvestUnavailable() public {
         _logCase("test_Invest_PosAmountZero_RevertsInvestUnavailable",
-            unicode"[N-40] deposit()=0 且 expectedPos=0 -> revert");
+            unicode"当 `deposit()` 返回 0 且 `expectedPos=0` 时，revert `InvestPosAmountUnavailable(adapter, executableAsset)`");
 
         MockPreviewFailAdapter_RB zeroAdp = new MockPreviewFailAdapter_RB(address(usdc), address(posToken), address(vault));
         zeroAdp.setDepositReturnsZero(true);
@@ -2860,7 +2927,11 @@ contract RebalanceInvestDivestQATest is Test {
         vm.stopPrank();
 
         _deposit(10_000e6);
-        vm.expectRevert();
+        // bufferTargetBps=1000 from setUp -> investable = balance * 90%
+        uint256 investAmount = usdc.balanceOf(address(vault)) * 9000 / 10_000;
+        vm.expectRevert(abi.encodeWithSelector(
+            StrategyController.Controller__InvestPosAmountUnavailable.selector, address(zeroAdp), investAmount
+        ));
         vm.prank(bot); executor.executeRebalance(address(controller));
         _step("  PASS: InvestPosAmountUnavailable revert");
         _logPass();
@@ -2872,7 +2943,7 @@ contract RebalanceInvestDivestQATest is Test {
 
     function test_Invest_PriceZero_PendingDeductionSkipped() public {
         _logCase("test_Invest_PriceZero_PendingDeductionSkipped",
-            unicode"[N-41] price=0 时 pending 扣减逻辑被跳过");
+            unicode"`_estimatePosAmount` 返回 0（price 未知）时，pending invest 扣减被跳过，alloc 保持原值");
 
         MockAsyncAdapter_RB asyncAdp = new MockAsyncAdapter_RB(address(usdc), address(posToken), address(vault));
         asyncAdp.setPosTokenPrice(0);
@@ -2906,7 +2977,7 @@ contract RebalanceInvestDivestQATest is Test {
 
     function test_Invest_IdealCash_FreeCashCap_BugFix() public {
         _logCase("test_Invest_IdealCash_FreeCashCap_BugFix",
-            unicode"[N-42] invest bug fix: idealCash 判断 + freeCash cap");
+            unicode"invest 使用 `idealCash` 判断，金额 cap 到 `freeCash`：当 `freeCash` 很小但 `totalRedeemInFlight` 大时，`idealCash` 满足 invest 条件，实际投资金额 = `min(surplus, freeCash)`");
 
         MockAsyncAdapter_RB asyncAdp = new MockAsyncAdapter_RB(address(usdc), address(posToken), address(vault));
         vm.startPrank(admin);
@@ -2919,34 +2990,46 @@ contract RebalanceInvestDivestQATest is Test {
         vm.stopPrank();
 
         _deposit(10_000e6);
-        vm.prank(admin); controller.setRiskParams(200, 0, 0);
+        vm.prank(admin); controller.setRiskParams(200, 0, 0); // buffer=2% -> invest 98%
         vm.prank(bot); executor.executeRebalance(address(controller));
         uint256 ifId = vault.nextInFlightId() - 1;
         uint256 posOnAdp = posToken.balanceOf(address(asyncAdp));
         _settleAsyncInvest(address(asyncAdp), ifId, posOnAdp);
 
-        // Create large redeemInFlight
-        uint256 shares = vault.balanceOf(depositor);
-        vm.prank(depositor);
-        uint256 reqId = gateway.requestRedeem(shares * 70 / 100);
-        uint256[] memory ids = new uint256[](1); ids[0] = reqId;
-        vm.prank(bot); executor.executeProcessRedeemBatch(address(controller), ids);
+        // Create large redeemInFlight via REGULAR REBALANCE DIVEST (no locked shares, no cashDeficit)
+        // Set buffer=90% to trigger large divest from adapter
+        _step("[Step 1] Create large redeemInFlight via regular divest");
+        vm.prank(admin); controller.setRiskParams(9000, 0, 0);
+        vm.warp(block.timestamp + 1);
+        vm.prank(bot); executor.executeRebalance(address(controller));
 
-        // Deposit small amount
+        uint256 redeemIF = vault.totalRedeemInFlight();
+        _step(string.concat("  totalRedeemInFlight=", vm.toString(redeemIF)));
+        assertGt(redeemIF, 0, "should have redeemInFlight");
+
+        // Deposit small amount to provide freeCash for invest
+        _step("[Step 2] Deposit 50 more, set buffer=2% -> idealCash triggers invest, capped to freeCash");
         usdc.mint(depositor, 50e6);
         vm.prank(depositor); gateway.deposit(50e6);
 
+        vm.prank(admin); controller.setRiskParams(200, 0, 0);
         (,uint256 fc, uint256 ic,, uint256 tc, uint256 th,) = controller.getRebalanceState();
         _step(string.concat("  freeCash=", vm.toString(fc), " idealCash=", vm.toString(ic)));
+        _step(string.concat("  targetCash=", vm.toString(tc), " threshold=", vm.toString(th)));
 
-        if (ic > tc + th) {
-            uint256 investIFBefore = vault.totalInvestInFlight();
-            vm.warp(block.timestamp + 1);
-            vm.prank(bot); executor.executeRebalance(address(controller));
-            uint256 actualInvest = vault.totalInvestInFlight() - investIFBefore;
-            assertLe(actualInvest, fc, "invest capped to freeCash");
-            _step(string.concat("  invest=", vm.toString(actualInvest), " <= freeCash=", vm.toString(fc)));
-        }
+        // Precondition: idealCash must trigger invest (ic > tc + th)
+        assertTrue(ic > tc + th, "precondition: idealCash should trigger invest");
+        // Precondition: freeCash is small relative to surplus (so invest is capped)
+        uint256 surplus = ic - tc;
+        assertLt(fc, surplus, "precondition: freeCash < surplus (invest will be capped)");
+
+        uint256 investIFBefore = vault.totalInvestInFlight();
+        vm.warp(block.timestamp + 1);
+        vm.prank(bot); executor.executeRebalance(address(controller));
+        uint256 actualInvest = vault.totalInvestInFlight() - investIFBefore;
+        assertLe(actualInvest, fc, "invest capped to freeCash");
+        assertGt(actualInvest, 0, "invest should happen");
+        _step(string.concat("  invest=", vm.toString(actualInvest), " <= freeCash=", vm.toString(fc)));
         _step("  PASS: idealCash judgment + freeCash cap verified");
         _logPass();
     }
@@ -2957,7 +3040,7 @@ contract RebalanceInvestDivestQATest is Test {
 
     function test_HasPendingRequest_BlocksDivest() public {
         _logCase("test_HasPendingRequest_BlocksDivest",
-            unicode"[N-43] hasPendingRequest=true 阻断 rebalance divest");
+            unicode"`hasPendingRequest=true` 时 rebalance divest 被阻断，返回 NONE");
 
         MockAsyncAdapter_RB asyncAdp = new MockAsyncAdapter_RB(address(usdc), address(posToken), address(vault));
         vm.startPrank(admin);
@@ -2983,6 +3066,13 @@ contract RebalanceInvestDivestQATest is Test {
         assertTrue(hp, "hasPendingRequest should be true");
 
         vm.prank(admin); controller.setRiskParams(10000, 0, 0);
+        // Precondition: divest condition IS met (idealCash + threshold < targetCash)
+        // This proves the skip is because of hasPendingRequest, not because divest wasn't needed
+        (,, uint256 ic2,, uint256 tc2, uint256 th2, bool hp2) = controller.getRebalanceState();
+        assertTrue(hp2, "hasPendingRequest should still be true");
+        assertTrue(ic2 + th2 < tc2, "precondition: divest condition should be met (idealCash + threshold < targetCash)");
+        _step(string.concat("  idealCash=", vm.toString(ic2), " targetCash=", vm.toString(tc2), " threshold=", vm.toString(th2)));
+
         uint256 redeemIFBefore = vault.totalRedeemInFlight();
         vm.warp(block.timestamp + 1);
         vm.prank(bot); executor.executeRebalance(address(controller));
@@ -2997,7 +3087,7 @@ contract RebalanceInvestDivestQATest is Test {
 
     function test_HasPendingRequest_DoesNotBlockInvest() public {
         _logCase("test_HasPendingRequest_DoesNotBlockInvest",
-            unicode"[N-44] hasPendingRequest=true 不阻断 invest");
+            unicode"`hasPendingRequest=true` 不影响 invest：最新 request 为 PENDING 时，若 idealCash > targetCash + threshold 仍可 invest");
 
         _deposit(10_000e6);
         uint256 shares = vault.balanceOf(depositor);
@@ -3018,7 +3108,7 @@ contract RebalanceInvestDivestQATest is Test {
 
     function test_ProcessRedeemBatch_DivestInsufficient_Reverts() public {
         _logCase("test_ProcessRedeemBatch_DivestInsufficient_Reverts",
-            unicode"[N-45] adapter 池值真不足时 revert DivestInsufficient");
+            unicode"processRedeemBatch 中 adapter 总池值（step-aligned）不足以覆盖 shortfall 时，revert `DivestInsufficient`");
 
         _step("[Step 1] Setup: async adapter, deposit, invest, settle, then drop price");
         MockAsyncAdapter_RB asyncAdp = new MockAsyncAdapter_RB(address(usdc), address(posToken), address(vault));
@@ -3048,8 +3138,16 @@ contract RebalanceInvestDivestQATest is Test {
         uint256 shares = vault.balanceOf(depositor);
         vm.prank(depositor);
         uint256 reqId = gateway.requestRedeem(shares);
+        // Compute expected DivestInsufficient params from on-chain state
+        (,, uint256 reqShares,,,,,) = vault.requests(reqId);
+        uint256 batchTotalAsset = reqShares * vault.exchangeRate() / 1e18;
+        uint256 cashDeficit = vault.getCashDeficit();
+        uint256 shortfall = cashDeficit < batchTotalAsset ? cashDeficit : batchTotalAsset;
+        uint256 adapterPool = adpVal; // totalValue at 0.1e18 from Step 2
         uint256[] memory ids = new uint256[](1); ids[0] = reqId;
-        vm.expectRevert(); // DivestInsufficient
+        vm.expectRevert(abi.encodeWithSelector(
+            StrategyController.Controller__DivestInsufficient.selector, shortfall, shortfall - adapterPool
+        ));
         vm.prank(bot);
         executor.executeProcessRedeemBatch(address(controller), ids);
         _step("  PASS: DivestInsufficient reverted when adapter pool truly insufficient");
@@ -3062,7 +3160,7 @@ contract RebalanceInvestDivestQATest is Test {
 
     function test_ProcessRedeemBatch_StepResidual_Allowed() public {
         _logCase("test_ProcessRedeemBatch_StepResidual_Allowed",
-            unicode"[N-46] processRedeemBatch 步进尾差放行");
+            unicode"processRedeemBatch 中 adapter 池值足够但步进对齐导致 remaining > 0 时，放行进入 PROCESSING");
 
         MockStepAdapter_RB stepAdp = new MockStepAdapter_RB(address(usdc), address(posToken), address(vault));
         stepAdp.setRedeemStep(1000e6);
@@ -3096,7 +3194,7 @@ contract RebalanceInvestDivestQATest is Test {
 
     function test_ProcessRedeemBatch_ShortfallBelowStep_Allowed() public {
         _logCase("test_ProcessRedeemBatch_ShortfallBelowStep_Allowed",
-            unicode"[N-47] shortfall < 最小步进时放行");
+            unicode"processRedeemBatch 中 shortfall < 最小步进时，_divest 完全无法操作但池值足够 \u2192 放行");
 
         MockStepAdapter_RB stepAdp = new MockStepAdapter_RB(address(usdc), address(posToken), address(vault));
         stepAdp.setRedeemStep(5000e6);
@@ -3130,7 +3228,7 @@ contract RebalanceInvestDivestQATest is Test {
 
     function test_AdapterPoolValue_Calculation() public {
         _logCase("test_AdapterPoolValue_Calculation",
-            unicode"[N-48] _adapterPoolValue 计算验证");
+            unicode"`_adapterPoolValue()` 计算验证：遍历 active adapter，对每个调 `previewRedeem(totalValue())` 获取步进对齐值，求和");
 
         MockStepAdapter_RB stepAdp = new MockStepAdapter_RB(address(usdc), address(posToken), address(vault));
         stepAdp.setRedeemStep(1000e6);
@@ -3167,7 +3265,7 @@ contract RebalanceInvestDivestQATest is Test {
 
     function test_TwoDivests_Independent_NoPendingDedup() public {
         _logCase("test_TwoDivests_Independent_NoPendingDedup",
-            unicode"[N-4] 两次 divest 独立，不去重 pending");
+            unicode"用户赎回金额 > vault freeCash，连续两次 processRedeemBatch 各自触发 divest，第二次不因第一次的 pending in-flight 而减少 divest 金额");
 
         _step("[Step 1] Deposit and invest nearly all");
         _deposit(10_000e6);
@@ -3243,7 +3341,7 @@ contract RebalanceInvestDivestQATest is Test {
 
     function test_Divest_Remaining_OnlyDeductsActualAmount() public {
         _logCase("test_Divest_Remaining_OnlyDeductsActualAmount",
-            unicode"[N-25] divest remaining 只扣实际操作金额");
+            unicode"divest 遍历 adapter 时，`remaining` 扣减规则变更：async adapter 成功时扣减 `requestAsset`（不再加 `coveredByPending`）；sync adapter 成功时扣减 `received`（不再加 `coveredByPending`）；失败时 remaining 不变（不再扣减 `coveredByPending`）");
 
         _step("[Step 1] Setup two sync adapters");
         // adapter (default sync) + second sync adapter
@@ -3294,7 +3392,7 @@ contract RebalanceInvestDivestQATest is Test {
                 ));
             }
         }
-        assertGe(covCount, 1, "at least 1 adapter evaluated for divest");
+        assertEq(covCount, 2, "both adapters should be evaluated for divest");
 
         // Verify: sync adapter remaining -= received (actual amount withdrawn)
         // Both adapters should have been divested from since shortfall > adapter1 value
@@ -3308,7 +3406,7 @@ contract RebalanceInvestDivestQATest is Test {
             }
         }
         // Both adapters should have created in-flight records
-        assertGe(inflightCount, 1, "should have in-flight records from sync divest");
+        assertEq(inflightCount, 2, "both sync adapters should have created in-flight records");
         _step(string.concat("  in-flight records created: ", vm.toString(inflightCount)));
         _step("  PASS: remaining only deducted by actual operation amount (received for sync)");
         _logPass();
@@ -3320,7 +3418,7 @@ contract RebalanceInvestDivestQATest is Test {
 
     function test_SyncAdapter_RedeemShares_NotWithdrawAmount() public {
         _logCase("test_SyncAdapter_RedeemShares_NotWithdrawAmount",
-            unicode"[N-36] sync adapter 使用 redeem(shares) 非 withdraw(amount)");
+            unicode"sync adapter 的 `withdrawSync(shares)` 调用 `_erc4626Redeem(shares, receiver, owner)` -> `TARGET_4626.redeem(shares, receiver, owner)` 返回 `actualAssets`。语义从\u201C指定提取资产数量\u201D变为\u201C指定燃烧份额数量\u201D");
 
         _step("[Step 1] Deploy priced sync adapter (1 share = 2 USDC)");
         MockSyncPricedAdapter_RB pricedAdp = new MockSyncPricedAdapter_RB(
@@ -3406,7 +3504,7 @@ contract RebalanceInvestDivestQATest is Test {
 
     function test_RegisterAsyncRedeem_EmitsPosAmount() public {
         _logCase("test_RegisterAsyncRedeem_EmitsPosAmount",
-            unicode"[N-37] _registerAsyncRedeem emit posAmount 非 assetAmount");
+            unicode"`BaseAsync7540Adapter._registerAsyncRedeem(posAmount, receiver)` emit 的 `_emitAdapterRedeemRequested` 事件中的金额字段为 posAmount（position-token 数量），不再是 assetAmount（USDC 数量）");
 
         _step("[Step 1] Deploy event-emitting async adapter with price=2e18");
         MockEventAsyncAdapter_RB evtAdp = new MockEventAsyncAdapter_RB(
@@ -3431,12 +3529,11 @@ contract RebalanceInvestDivestQATest is Test {
         _deposit(10_000e6);
         _rebalanceWithParams(200, 0, 0);
 
-        // Settle the invest so posTokens move to vault
+        // Settle the invest so posTokens move to vault (full call chain: bot→executor→controller)
         uint256 posOnAdapter = posToken.balanceOf(address(evtAdp));
         _step(string.concat("  posToken on adapter after invest: ", vm.toString(posOnAdapter)));
-        // Sweep posToken from adapter to vault
-        vm.prank(address(controller));
-        evtAdp.sweepToVault(address(posToken), posOnAdapter);
+        uint256 investIfId = vault.nextInFlightId() - 1;
+        _settleAsyncInvest(address(evtAdp), investIfId, posOnAdapter);
         uint256 posOnVault = posToken.balanceOf(address(vault));
         _step(string.concat("  posToken on vault: ", vm.toString(posOnVault)));
 
@@ -3481,7 +3578,7 @@ contract RebalanceInvestDivestQATest is Test {
 
     function test_Mock_EstimatePosAmount_PreviewWithdraw() public {
         _logCase("test_Mock_EstimatePosAmount_PreviewWithdraw",
-            unicode"[M-14] mock estimatePosAmount 改用 previewWithdraw 语义");
+            unicode"MockSync4626Adapter.estimatePosAmount 从 `previewDeposit` 改为 `previewWithdraw`");
 
         _step("[Step 1] Verify estimatePosAmount on priced sync adapter");
         MockSyncPricedAdapter_RB pricedAdp = new MockSyncPricedAdapter_RB(
@@ -3492,7 +3589,8 @@ contract RebalanceInvestDivestQATest is Test {
         // With price=2e18: to withdraw 1000 USDC, need 500 shares
         uint256 posEst = pricedAdp.estimatePosAmount(1000e6);
         _step(string.concat("  estimatePosAmount(1000e6) = ", vm.toString(posEst)));
-        assertEq(posEst, 500e6, "1000 USDC needs 500 shares at price=2e18");
+        uint256 expectedPos1 = 1000e6 * 1e18 / 2e18; // assetAmount * 1e18 / price
+        assertEq(posEst, expectedPos1, "1000 USDC needs assetAmount*1e18/price shares at price=2e18");
 
         _step("[Step 2] Verify semantic consistency: estimatePosAmount matches divest flow");
         // In divest: controller calls estimatePosAmount(requestAsset) to get posAmount
@@ -3505,14 +3603,16 @@ contract RebalanceInvestDivestQATest is Test {
         pricedAdp.setPosTokenPrice(4e18); // 1 share = 4 USDC
         uint256 posEst2 = pricedAdp.estimatePosAmount(2000e6);
         _step(string.concat("  estimatePosAmount(2000e6) at price=4e18 = ", vm.toString(posEst2)));
-        assertEq(posEst2, 500e6, "2000 USDC needs 500 shares at price=4e18");
+        uint256 expectedPos2 = 2000e6 * 1e18 / 4e18; // assetAmount * 1e18 / price
+        assertEq(posEst2, expectedPos2, "2000 USDC needs assetAmount*1e18/price shares at price=4e18");
 
         _step("[Step 4] Verify estimatePosAmount on async adapter");
         MockAsyncAdapter_RB asyncAdp = new MockAsyncAdapter_RB(address(usdc), address(posToken), address(vault));
         asyncAdp.setPosTokenPrice(2e18);
         uint256 asyncPosEst = asyncAdp.estimatePosAmount(1000e6);
         _step(string.concat("  async estimatePosAmount(1000e6) = ", vm.toString(asyncPosEst)));
-        assertEq(asyncPosEst, 500e6, "async adapter: 1000 USDC needs 500 shares at price=2e18");
+        uint256 expectedPos3 = 1000e6 * 1e18 / 2e18; // assetAmount * 1e18 / price
+        assertEq(asyncPosEst, expectedPos3, "async adapter: assetAmount*1e18/price shares at price=2e18");
 
         _step("  PASS: estimatePosAmount uses previewWithdraw semantics (assetAmount * 1e18 / price)");
         _logPass();

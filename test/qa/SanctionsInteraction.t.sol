@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import {SanctionsOracle} from "../../src/compliance/SanctionsOracle.sol";
+import {SanctionsOracleFactory} from "../../src/compliance/SanctionsOracleFactory.sol";
 import {ISanctionsOracle} from "../../src/interfaces/compliance/ISanctionsOracle.sol";
 import {IStrategyControllerExecutor} from "../../src/interfaces/strategy/IStrategyControllerExecutor.sol";
 import {IMantleYieldVault} from "../../src/interfaces/vault/IMantleYieldVault.sol";
@@ -49,26 +51,6 @@ contract MockPosToken_SI is ERC20 {
     function mint(address to, uint256 amount) external {
         _mint(to, amount);
     }
-}
-
-contract MockSanctionsOracle_SI is ISanctionsOracle {
-    mapping(address => bool) private _sanctioned;
-    mapping(address => bool) private _whitelisted;
-
-    function initialize(address, address) external {}
-    function isSanctioned(address account) external view returns (bool) { return _sanctioned[account]; }
-    function isWhitelisted(address account) external view returns (bool) { return _whitelisted[account]; }
-    function totalSanctionedCount() external pure returns (uint256) { return 0; }
-    function totalWhitelistedCount() external pure returns (uint256) { return 0; }
-    function lastUpdateTimestamp() external pure returns (uint256) { return 0; }
-    function batchNonce() external pure returns (uint256) { return 0; }
-    function MAX_BATCH_SIZE() external pure returns (uint256) { return 200; }
-    function setSanctioned(address account, bool status) external { _sanctioned[account] = status; }
-    function setWhitelisted(address account, bool status) external { _whitelisted[account] = status; }
-    function updateSanctionStatus(address, bool) external {}
-    function updateSanctionStatusBatch(address[] calldata, bool) external {}
-    function updateWhitelistStatus(address, bool) external {}
-    function updateWhitelistStatusBatch(address[] calldata, bool) external {}
 }
 
 /// @dev Adapter with real fund transfers for E2E testing
@@ -131,7 +113,7 @@ contract MockAdapterSI is IStrategyAdapter {
 contract SanctionsInteractionQATest is Test {
     MockUSDC_SI internal usdc;
     MockPosToken_SI internal posToken;
-    MockSanctionsOracle_SI internal oracle;
+    SanctionsOracle internal oracle;
     MantleYieldVault internal vault;
     MantleVaultGateway internal gateway;
     Accountant internal accountant;
@@ -141,6 +123,7 @@ contract SanctionsInteractionQATest is Test {
 
     address internal admin = makeAddr("admin");
     address internal bot = makeAddr("bot");
+    address internal complianceBot = makeAddr("complianceBot");
     address internal manager = makeAddr("manager");
     address internal treasury = makeAddr("treasury");
     address internal sanctionSafe = makeAddr("sanctionSafe");
@@ -154,7 +137,10 @@ contract SanctionsInteractionQATest is Test {
     function setUp() public {
         usdc = new MockUSDC_SI();
         posToken = new MockPosToken_SI();
-        oracle = new MockSanctionsOracle_SI();
+        SanctionsOracle oracleImpl = new SanctionsOracle();
+        SanctionsOracleFactory oracleFactory = new SanctionsOracleFactory(address(oracleImpl), admin);
+        vm.prank(admin);
+        oracle = SanctionsOracle(oracleFactory.deployAndInitOracle(admin, complianceBot));
 
         // 1. Deploy vault + gateway via factory
         MantleYieldVault vaultImpl = new MantleYieldVault();
@@ -184,7 +170,10 @@ contract SanctionsInteractionQATest is Test {
             asset: IERC20(address(usdc)), name: "mRWA Vault", symbol: "mRWA", admin: admin,
             gateway: gatewayAddr, controller: address(executor),
             accountant: address(accountant), treasury: treasury,
-            maxRedemptionFeeBps: 500, redemptionFeeBps: FEE_BPS, minRedeemAmount: 0, minDepositAmount: 0
+            maxRedemptionFeeBps: 500, redemptionFeeBps: FEE_BPS, minRedeemAmount: 0, minDepositAmount: 0,
+            maxSettlementDeviationBps: 0,
+            depositDailyRemaining: type(uint256).max,
+            redeemDailyRemaining: type(uint256).max
         }));
 
         // 5. Deploy real StrategyController
@@ -275,6 +264,11 @@ contract SanctionsInteractionQATest is Test {
         requestId = gateway.requestRedeem(shares);
     }
 
+    function _updateSanctionStatus(address user, bool sanctioned) internal {
+        vm.prank(complianceBot);
+        oracle.updateSanctionStatus(user, sanctioned);
+    }
+
     /// @dev Bot -> OperatorExecutor -> Controller -> Vault (real chain)
     function _processRedeemBatch(uint256[] memory ids) internal {
         vm.prank(bot);
@@ -311,7 +305,7 @@ contract SanctionsInteractionQATest is Test {
         _step(string.concat("  redeemed assets = ", vm.toString(assets)));
 
         _step("[Step 3] Sanction userA");
-        oracle.setSanctioned(userA, true);
+        _updateSanctionStatus(userA, true);
         assertTrue(gateway.isSanctioned(userA), "userA should be sanctioned");
 
         _step("[Step 4] UserA tries deposit - should fail");
@@ -332,15 +326,14 @@ contract SanctionsInteractionQATest is Test {
 
         _step("[Step 6] UserA tries requestRedeem - routes to sanctionSafe");
         uint256 remainingShares = vault.balanceOf(userA);
-        if (remainingShares > 0) {
-            safeBefore = vault.balanceOf(sanctionSafe);
-            vm.prank(userA);
-            uint256 reqId = gateway.requestRedeem(remainingShares);
-            assertEq(reqId, 0, "sanctioned requestRedeem returns requestId=0");
-            safeAfter = vault.balanceOf(sanctionSafe);
-            assertEq(safeAfter - safeBefore, remainingShares, "remaining shares routed to sanctionSafe");
-            _step("  requestRedeem routed shares to sanctionSafe");
-        }
+        assertGt(remainingShares, 0, "precondition: userA should have remaining shares for requestRedeem test");
+        safeBefore = vault.balanceOf(sanctionSafe);
+        vm.prank(userA);
+        uint256 reqId = gateway.requestRedeem(remainingShares);
+        assertEq(reqId, 0, "sanctioned requestRedeem returns requestId=0");
+        safeAfter = vault.balanceOf(sanctionSafe);
+        assertEq(safeAfter - safeBefore, remainingShares, "remaining shares routed to sanctionSafe");
+        _step("  requestRedeem routed shares to sanctionSafe");
 
         _step("  PASS: before-sanction operations succeed, after-sanction operations blocked/routed");
         _logPass();
@@ -366,7 +359,7 @@ contract SanctionsInteractionQATest is Test {
         _processRedeemBatch(_singleArr(requestId));
 
         _step("[Step 3] Sanction userA BEFORE finalize");
-        oracle.setSanctioned(userA, true);
+        _updateSanctionStatus(userA, true);
         assertTrue(gateway.isSanctioned(userA));
         _step("  userA is now sanctioned");
 
@@ -411,36 +404,36 @@ contract SanctionsInteractionQATest is Test {
         _step(string.concat("  reqIdA = ", vm.toString(reqIdA)));
         _step(string.concat("  reqIdB = ", vm.toString(reqIdB)));
 
-        _step("[Step 2] Process both via real chain");
-        _processRedeemBatch(_singleArr(reqIdA));
-        _processRedeemBatch(_singleArr(reqIdB));
+        _step("[Step 2] Process both requestIds together in one real batch");
+        uint256[] memory ids = new uint256[](2);
+        ids[0] = reqIdA;
+        ids[1] = reqIdB;
+        _processRedeemBatch(ids);
 
         _step("[Step 3] Sanction userB only");
-        oracle.setSanctioned(userB, true);
+        _updateSanctionStatus(userB, true);
         assertFalse(gateway.isSanctioned(userA));
         assertTrue(gateway.isSanctioned(userB));
 
-        _step("[Step 4] Finalize each request and verify routing");
+        _step("[Step 4] Finalize the same multi-id batch and verify mixed routing");
         (,,,, uint256 estA,,,) = vault.requests(reqIdA);
         (,,,, uint256 estB,,,) = vault.requests(reqIdB);
+        uint256[] memory settled = new uint256[](2);
+        settled[0] = estA;
+        settled[1] = estB;
 
-        // Finalize userA request via real chain - normal path
         uint256 userABefore = usdc.balanceOf(userA);
-        _finalizeRedeemBatch(_singleArr(reqIdA), _singleArr(estA));
-
-        uint256 userAAfter = usdc.balanceOf(userA);
-        assertEq(userAAfter - userABefore, estA, "userA receives assets normally");
-        _step(string.concat("  userA received USDC = ", vm.toString(userAAfter - userABefore)));
-
-        // Finalize userB request via real chain - sanctioned path
         uint256 safeBefore = usdc.balanceOf(sanctionSafe);
         uint256 userBBefore = usdc.balanceOf(userB);
-        _finalizeRedeemBatch(_singleArr(reqIdB), _singleArr(estB));
+        _finalizeRedeemBatch(ids, settled);
 
+        uint256 userAAfter = usdc.balanceOf(userA);
         uint256 safeAfter = usdc.balanceOf(sanctionSafe);
         uint256 userBAfter = usdc.balanceOf(userB);
+        assertEq(userAAfter - userABefore, estA, "userA receives assets normally");
         assertEq(safeAfter - safeBefore, estB, "sanctioned user assets to sanctionSafe");
         assertEq(userBAfter, userBBefore, "userB receives nothing");
+        _step(string.concat("  userA received USDC = ", vm.toString(userAAfter - userABefore)));
         _step(string.concat("  sanctionSafe received USDC = ", vm.toString(safeAfter - safeBefore)));
 
         _step("  PASS: same batch, different sanctions status => different routing");
@@ -465,18 +458,17 @@ contract SanctionsInteractionQATest is Test {
         uint256 reqIdA = _requestRedeemViaGateway(userA, sharesA / 2);
 
         _step("[Step 3] Mid-flight: sanction userA");
-        oracle.setSanctioned(userA, true);
+        _updateSanctionStatus(userA, true);
         _step("  userA sanctioned mid-process");
 
         _step("[Step 4] UserB does sync redeem (not sanctioned)");
         uint256 maxR = vault.maxRedeem(userB);
         uint256 redeemSharesB = maxR > sharesB / 2 ? sharesB / 2 : maxR;
-        if (redeemSharesB > 0) {
-            vm.prank(userB);
-            uint256 paid = gateway.redeem(redeemSharesB);
-            assertGt(paid, 0);
-            _step(string.concat("  userB sync redeemed = ", vm.toString(paid)));
-        }
+        assertGt(redeemSharesB, 0, "precondition: userB should be able to sync redeem (freeCash > 0)");
+        vm.prank(userB);
+        uint256 paid = gateway.redeem(redeemSharesB);
+        assertGt(paid, 0);
+        _step(string.concat("  userB sync redeemed = ", vm.toString(paid)));
 
         _step("[Step 5] Process and finalize userA request via real chain");
         _processRedeemBatch(_singleArr(reqIdA));
@@ -514,7 +506,7 @@ contract SanctionsInteractionQATest is Test {
 
         _step("[Step 1] UserA deposits, gets sanctioned, shares route to sanctionSafe");
         uint256 shares = _depositViaGateway(userA, 10_000e6);
-        oracle.setSanctioned(userA, true);
+        _updateSanctionStatus(userA, true);
 
         uint256 routeShares = shares / 2;
         vm.prank(userA);
@@ -533,17 +525,16 @@ contract SanctionsInteractionQATest is Test {
 
         uint256 maxR = vault.maxRedeem(sanctionSafe);
         _step(string.concat("  maxRedeem(sanctionSafe) = ", vm.toString(maxR)));
+        assertGt(maxR, 0, "precondition: sanctionSafe should be able to redeem (maxRedeem > 0)");
 
-        if (maxR > 0) {
-            uint256 redeemAmount = maxR < safeShares ? maxR : safeShares;
-            uint256 safeBefore = usdc.balanceOf(sanctionSafe);
-            vm.prank(sanctionSafe);
-            uint256 assets = gateway.redeem(redeemAmount);
-            uint256 safeAfter = usdc.balanceOf(sanctionSafe);
-            assertGt(assets, 0, "sanctionSafe should receive USDC");
-            assertEq(safeAfter - safeBefore, assets);
-            _step(string.concat("  sanctionSafe redeemed USDC = ", vm.toString(assets)));
-        }
+        uint256 redeemAmount = maxR < safeShares ? maxR : safeShares;
+        uint256 safeBefore = usdc.balanceOf(sanctionSafe);
+        vm.prank(sanctionSafe);
+        uint256 assets = gateway.redeem(redeemAmount);
+        uint256 safeAfter = usdc.balanceOf(sanctionSafe);
+        assertGt(assets, 0, "sanctionSafe should receive USDC");
+        assertEq(safeAfter - safeBefore, assets);
+        _step(string.concat("  sanctionSafe redeemed USDC = ", vm.toString(assets)));
 
         _step("[Step 4] Verify bookkeeping is correct");
         uint256 totalAssets = vault.totalAssets();
@@ -567,7 +558,7 @@ contract SanctionsInteractionQATest is Test {
         gateway.setWhitelistEnabled(true);
 
         _step("[Step 2] UserA is sanctioned AND not whitelisted");
-        oracle.setSanctioned(userA, true);
+        _updateSanctionStatus(userA, true);
         // userA is NOT whitelisted (default)
         assertFalse(gateway.isWhitelisted(userA));
         assertTrue(gateway.isSanctioned(userA));
@@ -598,7 +589,7 @@ contract SanctionsInteractionQATest is Test {
         _step("[Step 2] Enable whitelist and sanction userA (not whitelisted)");
         vm.prank(admin);
         gateway.setWhitelistEnabled(true);
-        oracle.setSanctioned(userA, true);
+        _updateSanctionStatus(userA, true);
         assertFalse(gateway.isWhitelisted(userA));
         assertTrue(gateway.isSanctioned(userA));
 
@@ -643,7 +634,7 @@ contract SanctionsInteractionQATest is Test {
 
         // --- Path 2: Pre-sanctioned user (userB) ---
         _step("[Path 2] UserB: sanctioned BEFORE requestRedeem - shares routed to sanctionSafe");
-        oracle.setSanctioned(userB, true);
+        _updateSanctionStatus(userB, true);
 
         uint256 safeBefore = vault.balanceOf(sanctionSafe);
         vm.prank(userB);
@@ -663,7 +654,7 @@ contract SanctionsInteractionQATest is Test {
         _processRedeemBatch(_singleArr(reqIdC));
 
         // NOW sanction userC
-        oracle.setSanctioned(userC, true);
+        _updateSanctionStatus(userC, true);
         _step("  userC sanctioned after request creation");
 
         // Finalize via real chain - USDC should go to sanctionSafe
@@ -696,7 +687,7 @@ contract SanctionsInteractionQATest is Test {
     function test_SanctionSafeIn_TokenIsAsset_NotVault() public {
         _logCase(
             "test_SanctionSafeIn_TokenIsAsset_NotVault",
-            unicode"[N-20] SanctionSafeIn 事件的 token 参数使用 asset() 而非 address(vault)"
+            unicode"Vault 的 SanctionSafeIn 事件参数中的 token 字段使用 asset() 而非 address(this)"
         );
 
         // --- Step 1: User deposits and creates an async redeem request ---
@@ -711,7 +702,7 @@ contract SanctionsInteractionQATest is Test {
 
         // --- Step 3: Sanction userA AFTER processing ---
         _step("[Step 3] Sanction userA after processing (before finalize)");
-        oracle.setSanctioned(userA, true);
+        _updateSanctionStatus(userA, true);
 
         // --- Step 4: Finalize and capture SanctionSafeIn event ---
         _step("[Step 4] Finalize redeem batch - verify SanctionSafeIn event parameters");

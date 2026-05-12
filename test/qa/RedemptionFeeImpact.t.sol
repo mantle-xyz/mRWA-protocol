@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import {Accountant} from "../../src/accountant/Accountant.sol";
 import {ISanctionsOracle} from "../../src/interfaces/compliance/ISanctionsOracle.sol";
 import {IStrategyAdapter} from "../../src/interfaces/adapters/IStrategyAdapter.sol";
 import {IStrategyControllerExecutor} from "../../src/interfaces/strategy/IStrategyControllerExecutor.sol";
@@ -61,35 +62,6 @@ contract MockSanctionsOracle is ISanctionsOracle {
     function updateSanctionStatusBatch(address[] calldata, bool) external override {}
     function updateWhitelistStatus(address, bool) external override {}
     function updateWhitelistStatusBatch(address[] calldata, bool) external override {}
-}
-
-contract MockAccountant {
-    bool public pauseStatus;
-    uint256 public exchangeRate = 1e18;
-    uint32 public managementFeeRate = 100;
-
-    error EnforcedPause();
-
-    function getRate() external view returns (uint256) {
-        return exchangeRate;
-    }
-
-    function getRateSafe() external view returns (uint256) {
-        if (pauseStatus) revert EnforcedPause();
-        return exchangeRate;
-    }
-
-    function setPauseStatus(bool paused_) external {
-        pauseStatus = paused_;
-    }
-
-    function setExchangeRate(uint256 newRate) external {
-        exchangeRate = newRate;
-    }
-
-    function setManagementFeeRate(uint256 newRate) external {
-        managementFeeRate = uint32(newRate);
-    }
 }
 
 /// @dev Minimal adapter mock for StrategyController registration.
@@ -162,7 +134,7 @@ contract RedemptionFeeImpactQATest is Test {
     MockUSDC internal usdc;
     MockUSDC internal posToken;
     MockSanctionsOracle internal oracle;
-    MockAccountant internal mockAccountant;
+    Accountant internal accountant;
     MantleYieldVault internal vault;
     MantleVaultGateway internal gateway;
     OperatorExecutor internal executor;
@@ -188,7 +160,6 @@ contract RedemptionFeeImpactQATest is Test {
         usdc = new MockUSDC();
         posToken = new MockUSDC();
         oracle = new MockSanctionsOracle();
-        mockAccountant = new MockAccountant();
 
         // 1. Deploy vault + gateway via factory
         MantleYieldVault impl = new MantleYieldVault();
@@ -216,14 +187,26 @@ contract RedemptionFeeImpactQATest is Test {
                 admin: admin,
                 gateway: gatewayAddr,
                 controller: address(executor), // placeholder, updated below
-                accountant: address(mockAccountant),
+                accountant: address(1), // placeholder, replaced below
                 treasury: treasuryAddr,
                 maxRedemptionFeeBps: 500,
                 redemptionFeeBps: INITIAL_FEE_BPS,
                 minRedeemAmount: 0,
-                minDepositAmount: 0
+                minDepositAmount: 0,
+                maxSettlementDeviationBps: 0,
+                depositDailyRemaining: type(uint256).max,
+                redeemDailyRemaining: type(uint256).max
             })
         );
+
+        // Deploy real Accountant
+        Accountant acctImpl = new Accountant();
+        accountant = Accountant(address(new ERC1967Proxy(
+            address(acctImpl),
+            abi.encodeCall(Accountant.initialize, (vaultAddr, uint64(1e18), 0, admin))
+        )));
+        vm.prank(admin);
+        vault.setAccountant(address(accountant));
 
         // 4. Deploy real StrategyController
         StrategyController controllerImpl = new StrategyController();
@@ -355,7 +338,7 @@ contract RedemptionFeeImpactQATest is Test {
         );
 
         uint256 redeemShares = 5000e6;
-        uint256 rate = mockAccountant.exchangeRate();
+        uint256 rate = accountant.getRate();
 
         _step("[Step 1] userA creates async redeem request at fee=1%");
         uint256 treasurySharesBefore = vault.balanceOf(treasuryAddr);
@@ -415,7 +398,7 @@ contract RedemptionFeeImpactQATest is Test {
         );
 
         uint256 redeemShares = 5000e6;
-        uint256 rate = mockAccountant.exchangeRate();
+        uint256 rate = accountant.getRate();
 
         _step("[Step 1] userA creates async redeem request at fee=1%");
         uint256 treasurySharesBefore = vault.balanceOf(treasuryAddr);
@@ -465,7 +448,7 @@ contract RedemptionFeeImpactQATest is Test {
         );
 
         uint256 redeemShares = 5000e6;
-        uint256 rate = mockAccountant.exchangeRate();
+        uint256 rate = accountant.getRate();
         uint256 grossAssets = (redeemShares * rate) / 1e18;
 
         _step("[Step 1] userA creates old request at fee=1%");
@@ -507,7 +490,7 @@ contract RedemptionFeeImpactQATest is Test {
         );
 
         uint256 redeemShares = 5000e6;
-        uint256 rate = mockAccountant.exchangeRate();
+        uint256 rate = accountant.getRate();
         uint256 grossAssets = (redeemShares * rate) / 1e18;
 
         _step("[Step 1] userA creates old async request at fee=1%");
@@ -567,7 +550,7 @@ contract RedemptionFeeImpactQATest is Test {
         _step("  Raised fee to 3% (300 bps)");
 
         uint256 redeemShares = 5000e6;
-        uint256 rate = mockAccountant.exchangeRate();
+        uint256 rate = accountant.getRate();
         uint256 grossAssets = (redeemShares * rate) / 1e18;
 
         _step("[Step 2] userA creates request at fee=3%");
@@ -621,7 +604,7 @@ contract RedemptionFeeImpactQATest is Test {
         );
 
         uint256 redeemShares = 5000e6;
-        uint256 rate = mockAccountant.exchangeRate();
+        uint256 rate = accountant.getRate();
         uint256 grossAssets = (redeemShares * rate) / 1e18;
         uint256 expectedTreasuryShares = _ceilDiv(redeemShares * INITIAL_FEE_BPS, FEE_BASIS);
         uint256 expectedFee = _ceilDiv(grossAssets * INITIAL_FEE_BPS, FEE_BASIS);
@@ -807,7 +790,7 @@ contract RedemptionFeeImpactQATest is Test {
 
         _step("[Step 2] userA performs sync redeem with fee=0");
         uint256 redeemShares = 5000e6;
-        uint256 rate = mockAccountant.exchangeRate();
+        uint256 rate = accountant.getRate();
         uint256 grossAssets = (redeemShares * rate) / 1e18;
 
         uint256 userAUsdcBefore = usdc.balanceOf(userA);
@@ -913,7 +896,7 @@ contract RedemptionFeeImpactQATest is Test {
         );
 
         uint256 redeemShares = 5000e6;
-        uint256 originalRate = mockAccountant.exchangeRate(); // 1e18
+        uint256 originalRate = accountant.getRate(); // 1e18
 
         _step("[Step 1] userA creates request at rate=1e18, fee=1%");
         uint256 reqId = _requestRedeem(userA, redeemShares);
@@ -934,7 +917,8 @@ contract RedemptionFeeImpactQATest is Test {
         _step("[Step 4] Exchange rate drops slightly (e.g. strategy incurred small loss)");
         // Accountant updates rate from 1e18 to 0.99e18 (1% NAV decline)
         uint256 newRate = 0.99e18;
-        mockAccountant.setExchangeRate(newRate);
+        vm.prank(admin);
+        accountant.emergencyRateUpdate(uint64(newRate));
         _step(string.concat("  new exchangeRate = ", vm.toString(newRate)));
 
         _step("[Step 5] Process via real chain");
@@ -945,7 +929,7 @@ contract RedemptionFeeImpactQATest is Test {
         uint256 actualSettled = (netShares * newRate) / 1e18;
         _step(string.concat("  estOriginal (old rate) = ", vm.toString(estOriginal)));
         _step(string.concat("  actualSettled (new rate) = ", vm.toString(actualSettled)));
-        assertTrue(actualSettled != estOriginal, "settlement should differ from estimate due to rate change");
+        assertLt(actualSettled, estOriginal, "settlement at lower rate (0.99) should be less than original estimate (1.0)");
 
         // Expect adjustment event since settledAssets != estimatedAssets
         uint256 userUsdcBefore = usdc.balanceOf(userA);

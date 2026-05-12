@@ -220,7 +220,10 @@ contract RedeemEdgeCasesQATest is Test {
                 maxRedemptionFeeBps: 500,
                 redemptionFeeBps: 0,
                 minRedeemAmount: 0,
-                minDepositAmount: 0
+                minDepositAmount: 0,
+                maxSettlementDeviationBps: 0,
+                depositDailyRemaining: type(uint256).max,
+                redeemDailyRemaining: type(uint256).max
             })
         );
         vault = MantleYieldVault(address(new ERC1967Proxy(address(vaultImpl), vaultInitData)));
@@ -334,7 +337,7 @@ contract RedeemEdgeCasesQATest is Test {
 
     function test_DuplicateProcess_BatchAlreadyProcessed() public {
         _logCase("test_DuplicateProcess_BatchAlreadyProcessed",
-            unicode"同一 batch 重复 process -- 幂等保护 (M-1: BatchAlreadyProcessed -> Vault__InvalidState)");
+            unicode"同一 batch 重复 process -- 幂等保护");
 
         _deposit(userA, 5000e6);
         vm.prank(userA);
@@ -384,14 +387,14 @@ contract RedeemEdgeCasesQATest is Test {
         uint256[] memory unsorted = _arr3(req3, req1, req2);
 
         vm.prank(bot);
-        vm.expectRevert(StrategyController.IdsNotSorted.selector);
+        vm.expectRevert(StrategyController.Controller__IdsNotSorted.selector);
         executor.executeProcessRedeemBatch(address(controller), unsorted);
 
         _logPass();
     }
 
     // =======================================================================
-    // 3. Finalize when vault USDC insufficient -- InsufficientCashForReady
+    // 3. Finalize when vault USDC insufficient -- Vault__InsufficientPhysicalCash
     // =======================================================================
 
     function test_FinalizeInsufficientCash_AfterNewInvest() public {
@@ -427,7 +430,7 @@ contract RedeemEdgeCasesQATest is Test {
         // Attempt finalize -- vault has insufficient USDC
         vm.prank(bot);
         vm.expectRevert(
-            abi.encodeWithSelector(StrategyController.InsufficientCashForReady.selector, settled, available)
+            abi.encodeWithSelector(IMantleYieldVault.Vault__InsufficientPhysicalCash.selector, _arr(reqId), _arr(settled), available)
         );
         executor.executeFinalizeRedeemBatch(address(controller), _arr(reqId), _arr(settled));
 
@@ -460,7 +463,7 @@ contract RedeemEdgeCasesQATest is Test {
 
     function test_InvestNotSettled_ProcessFirst_NeedsExtraRebalance() public {
         _logCase("test_InvestNotSettled_ProcessFirst_NeedsExtraRebalance",
-            unicode"investInFlight 未 settle + 先 process (M-12: DivestInsufficient revert; request stays PENDING)");
+            unicode"investInFlight 未 settle + 先 process 的操作顺序问题 -- 服务层核心风险");
 
         // A deposits 500, invest + settle (posToken=500 on vault)
         _deposit(userA, 500e6);
@@ -486,7 +489,7 @@ contract RedeemEdgeCasesQATest is Test {
         vm.prank(bot);
         vm.expectRevert(
             abi.encodeWithSelector(
-                StrategyController.DivestInsufficient.selector,
+                StrategyController.Controller__DivestInsufficient.selector,
                 1000e6,
                 500e6
             )

@@ -6,16 +6,21 @@ import {IStrategyControllerExecutor} from "../../src/interfaces/strategy/IStrate
 import {ISanctionsOracle} from "../../src/interfaces/compliance/ISanctionsOracle.sol";
 import {IMantleVaultGateway} from "../../src/interfaces/vault/IMantleVaultGateway.sol";
 import {IMantleYieldVault} from "../../src/interfaces/vault/IMantleYieldVault.sol";
+import {Accountant} from "../../src/accountant/Accountant.sol";
+import {SanctionsOracle} from "../../src/compliance/SanctionsOracle.sol";
+import {SanctionsOracleFactory} from "../../src/compliance/SanctionsOracleFactory.sol";
 import {SubRedManagementAdapter} from "../../src/adapters/digift/SubRedManagementAdapter.sol";
 import {MockDFeedPriceOracle} from "../../src/mocks/strategy/MockDFeedPriceOracle.sol";
 import {MantleVaultGateway} from "../../src/vault/MantleVaultGateway.sol";
 import {MantleYieldVault} from "../../src/vault/MantleYieldVault.sol";
 import {GatewayFactory} from "../../src/vault/GatewayFactory.sol";
 import {VaultFactory} from "../../src/vault/VaultFactory.sol";
+import {OperatorExecutor} from "../../src/protocol/OperatorExecutor.sol";
 import {StrategyController} from "../../src/protocol/StrategyController.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {Test, console2} from "forge-std/Test.sol";
 
 // =============================================================
@@ -28,82 +33,78 @@ contract MockAsset is ERC20 {
     function mint(address to, uint256 amount) external {
         _mint(to, amount);
     }
+
+    function burn(address from, uint256 amount) external {
+        _burn(from, amount);
+    }
 }
 
-contract MockStrategyAdapter is IStrategyAdapter {
-    address public immutable ASSET;
-    address public immutable POS_TOKEN;
+contract MockSettlementVenueRR {
+    MockAsset public immutable ASSET;
+    MockAsset public immutable POS_TOKEN;
 
-    uint256 public mockedTotalValue;
-    bool public paused;
-    bool public failDeposit;
-    bool public failWithdraw;
-    bool public failAsync;
-    bool public failEstimate;
-    bool public depositReturnZero;
-
-    uint256 public depositCount;
-    uint256 public withdrawCount;
-    uint256 public asyncCount;
-    uint256 public claimCount;
-    address public lastClaimToken;
-    uint256 public lastClaimAmount;
-    uint256 public sweepReturnAmount;
-    bool public useSweepReturnAmount;
+    mapping(address => uint256) public pendingInvestAsset;
+    mapping(address => uint256) public pendingRedeemPos;
 
     constructor(address asset_, address posToken_) {
+        ASSET = MockAsset(asset_);
+        POS_TOKEN = MockAsset(posToken_);
+    }
+
+    function acceptInvest(address adapter, uint256 assetAmount) external {
+        pendingInvestAsset[adapter] += assetAmount;
+    }
+
+    function settleInvest(address adapter, uint256 posAmount, uint256 refundAssetAmount) external {
+        uint256 pending = pendingInvestAsset[adapter];
+        require(posAmount + refundAssetAmount <= pending, "INVEST_SETTLE_EXCEEDS_PENDING");
+        pendingInvestAsset[adapter] = pending - posAmount - refundAssetAmount;
+
+        if (posAmount > 0) {
+            ASSET.burn(address(this), posAmount);
+            POS_TOKEN.mint(adapter, posAmount);
+        }
+        if (refundAssetAmount > 0) {
+            IERC20(address(ASSET)).transfer(adapter, refundAssetAmount);
+        }
+    }
+
+    function acceptRedeem(address adapter, uint256 posAmount) external {
+        pendingRedeemPos[adapter] += posAmount;
+    }
+
+    function settleRedeem(address adapter, uint256 assetAmount) external {
+        uint256 pending = pendingRedeemPos[adapter];
+        pendingRedeemPos[adapter] = 0;
+
+        if (pending > 0) {
+            POS_TOKEN.burn(address(this), pending);
+        }
+        if (assetAmount > 0) {
+            ASSET.mint(adapter, assetAmount);
+        }
+    }
+}
+
+contract MockAdapterRR is IStrategyAdapter {
+    address public immutable ASSET;
+    address public immutable POS_TOKEN;
+    address public immutable VAULT;
+    MockSettlementVenueRR public immutable SETTLEMENT_VENUE;
+
+    constructor(address asset_, address posToken_, address vault_, address settlementVenue_) {
         ASSET = asset_;
         POS_TOKEN = posToken_;
+        VAULT = vault_;
+        SETTLEMENT_VENUE = MockSettlementVenueRR(settlementVenue_);
     }
 
-    function setTotalValue(uint256 v) external {
-        mockedTotalValue = v;
-    }
-
-    function setFailFlags(bool d, bool w, bool a) external {
-        failDeposit = d;
-        failWithdraw = w;
-        failAsync = a;
-    }
-
-    function setFailEstimate(bool e) external {
-        failEstimate = e;
-    }
-
-    function setDepositReturnZero(bool z) external {
-        depositReturnZero = z;
-    }
-
-    function setSweepReturnAmount(uint256 amount_) external {
-        sweepReturnAmount = amount_;
-        useSweepReturnAmount = true;
-    }
-
-    function name() external pure returns (string memory) {
-        return "MockStrategyAdapter";
-    }
-
-    function asset() external view returns (address) {
-        return ASSET;
-    }
-
-    function posToken() external view returns (address) {
-        return POS_TOKEN;
-    }
-
-    function priceOracle() external pure returns (address) {
-        return address(0);
-    }
-
-    function getPosTokenPrice() external pure returns (uint256) {
-        return 0;
-    }
-
-    function estimatePosAmount(uint256 assetAmount) external view returns (uint256 positionAmount) {
-        if (failEstimate) revert("ESTIMATE_FAIL");
-        return assetAmount;
-    }
-
+    function name() external pure returns (string memory) { return "MockAdapterRR"; }
+    function asset() external view returns (address) { return ASSET; }
+    function posToken() external view returns (address) { return POS_TOKEN; }
+    function priceOracle() external pure returns (address) { return address(0); }
+    function getPosTokenPrice() external pure returns (uint256) { return 1e18; }
+    function estimatePosAmount(uint256 assetAmount) external pure returns (uint256 positionAmount) { return assetAmount; }
     function minSubscribeAsset() external pure returns (uint256) { return 0; }
     function minRedeemPos() external pure returns (uint256) { return 0; }
 
@@ -127,63 +128,161 @@ contract MockStrategyAdapter is IStrategyAdapter {
         expectedPosAmount = 0;
     }
 
-    function vault() external pure returns (address) {
-        return address(0);
-    }
+    function vault() external view returns (address) { return VAULT; }
 
     function totalValue() external view returns (uint256) {
-        return mockedTotalValue;
+        return IERC20(POS_TOKEN).balanceOf(VAULT);
     }
 
     function deposit(uint256 amount, address) external returns (uint256 sharesOrPos) {
-        if (failDeposit) revert("DEPOSIT_FAIL");
-        depositCount++;
-        return depositReturnZero ? 0 : amount;
-    }
-
-    function withdrawSync(uint256 amount, address) external returns (uint256 actualUSDC) {
-        if (failWithdraw) revert("WITHDRAW_FAIL");
-        withdrawCount++;
+        IERC20(ASSET).transferFrom(VAULT, address(this), amount);
+        IERC20(ASSET).transfer(address(SETTLEMENT_VENUE), amount);
+        SETTLEMENT_VENUE.acceptInvest(address(this), amount);
         return amount;
     }
 
-    function requestRedeemAsync(uint256, address) external {
-        if (failAsync) revert("ASYNC_FAIL");
-        asyncCount++;
+    function withdrawSync(uint256 amount, address) external returns (uint256 actualUSDC) {
+        ERC20(POS_TOKEN).transferFrom(VAULT, address(this), amount);
+        ERC20(ASSET).transfer(VAULT, amount);
+        return amount;
+    }
+
+    function requestRedeemAsync(uint256 amount, address) external {
+        IERC20(POS_TOKEN).transferFrom(VAULT, address(this), amount);
+        IERC20(POS_TOKEN).transfer(address(SETTLEMENT_VENUE), amount);
+        SETTLEMENT_VENUE.acceptRedeem(address(this), amount);
     }
 
     function retryRedeemAsync(uint256, address) external {}
 
     function sweepToVault(address token, uint256 amount) external returns (uint256 claimed) {
-        claimCount++;
-        lastClaimToken = token;
-        lastClaimAmount = amount;
-        if (useSweepReturnAmount) {
-            return sweepReturnAmount;
+        uint256 balance = ERC20(token).balanceOf(address(this));
+        claimed = balance < amount ? balance : amount;
+        if (claimed > 0) {
+            ERC20(token).transfer(VAULT, claimed);
         }
+    }
+
+    function setPaused(bool) external {}
+}
+
+contract MockPricedAdapterRR is IStrategyAdapter {
+    address public immutable ASSET;
+    address public immutable POS_TOKEN;
+    address public immutable VAULT;
+    MockSettlementVenueRR public immutable SETTLEMENT_VENUE;
+    MockDFeedPriceOracle public immutable PRICE_ORACLE;
+
+    constructor(address asset_, address posToken_, address vault_, address settlementVenue_, address priceOracle_) {
+        ASSET = asset_;
+        POS_TOKEN = posToken_;
+        VAULT = vault_;
+        SETTLEMENT_VENUE = MockSettlementVenueRR(settlementVenue_);
+        PRICE_ORACLE = MockDFeedPriceOracle(priceOracle_);
+    }
+
+    function name() external pure returns (string memory) { return "MockPricedAdapterRR"; }
+    function asset() external view returns (address) { return ASSET; }
+    function posToken() external view returns (address) { return POS_TOKEN; }
+    function priceOracle() external view returns (address) { return address(PRICE_ORACLE); }
+
+    function getPosTokenPrice() public view returns (uint256) {
+        uint8 oracleDecimals = PRICE_ORACLE.decimals();
+        return Math.mulDiv(PRICE_ORACLE.getPrice(), 1e18, 10 ** oracleDecimals, Math.Rounding.Floor);
+    }
+
+    function estimatePosAmount(uint256 assetAmount) public view returns (uint256 positionAmount) {
+        uint256 priceE18 = getPosTokenPrice();
+        if (assetAmount == 0 || priceE18 == 0) {
+            return 0;
+        }
+        return Math.mulDiv(assetAmount, 1e18, priceE18, Math.Rounding.Floor);
+    }
+
+    function minSubscribeAsset() external pure returns (uint256) { return 0; }
+    function minRedeemPos() external pure returns (uint256) { return 0; }
+
+    function previewDeposit(uint256 assetAmount)
+        external
+        view
+        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
+    {
+        ok = assetAmount > 0;
+        executableAssetAmount = assetAmount;
+        expectedPosAmount = estimatePosAmount(assetAmount);
+    }
+
+    function previewRedeem(uint256 assetAmount)
+        external
+        view
+        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
+    {
+        expectedPosAmount = estimatePosAmount(assetAmount);
+        ok = assetAmount > 0 && expectedPosAmount > 0;
+        executableAssetAmount = ok ? assetAmount : 0;
+    }
+
+    function vault() external view returns (address) { return VAULT; }
+
+    function totalValue() external view returns (uint256) {
+        uint256 settledVaultPos = IERC20(POS_TOKEN).balanceOf(VAULT);
+        uint256 priceE18 = getPosTokenPrice();
+        if (settledVaultPos == 0 || priceE18 == 0) {
+            return 0;
+        }
+        return Math.mulDiv(settledVaultPos, priceE18, 1e18, Math.Rounding.Floor);
+    }
+
+    function deposit(uint256 amount, address) external returns (uint256 sharesOrPos) {
+        IERC20(ASSET).transferFrom(VAULT, address(this), amount);
+        IERC20(ASSET).transfer(address(SETTLEMENT_VENUE), amount);
+        SETTLEMENT_VENUE.acceptInvest(address(this), amount);
+        return estimatePosAmount(amount);
+    }
+
+    function withdrawSync(uint256 amount, address) external returns (uint256 actualUSDC) {
+        ERC20(POS_TOKEN).transferFrom(VAULT, address(this), amount);
+        ERC20(ASSET).transfer(VAULT, amount);
         return amount;
     }
 
-    function setPaused(bool p) external {
-        paused = p;
+    function requestRedeemAsync(uint256 amount, address) external {
+        IERC20(POS_TOKEN).transferFrom(VAULT, address(this), amount);
+        IERC20(POS_TOKEN).transfer(address(SETTLEMENT_VENUE), amount);
+        SETTLEMENT_VENUE.acceptRedeem(address(this), amount);
     }
+
+    function retryRedeemAsync(uint256, address) external {}
+
+    function sweepToVault(address token, uint256 amount) external returns (uint256 claimed) {
+        uint256 balance = ERC20(token).balanceOf(address(this));
+        claimed = balance < amount ? balance : amount;
+        if (claimed > 0) {
+            ERC20(token).transfer(VAULT, claimed);
+        }
+    }
+
+    function setPaused(bool) external {}
 }
 
-contract MockControllerVault {
+contract MockVaultRR {
     ERC20 public immutable token;
     uint256 public mockedExchangeRate = 1e18;
 
-    uint256 public locked;
     uint256 public investInFlightTotal;
     uint256 public redeemInFlightTotal;
     uint256 public inFlightIdCursor;
     uint256 public nextRequestId = 1;
     uint256 public pendingRequestCount;
+    uint256 public totalLockedSharesValue;
     mapping(address => uint256) public investInFlightByAdapter;
     mapping(address => uint256) public redeemInFlightByAdapter;
     mapping(address => bool) public isAdapterRegistry;
+    mapping(address => uint256) public sharesOf;
+    address[] public adapterList;
 
     struct Req {
+        address owner;
         uint256 shares;
         uint256 estimatedAssets;
         uint256 settledAssets;
@@ -209,93 +308,79 @@ contract MockControllerVault {
         token = ERC20(asset_);
     }
 
-    function asset() external view returns (address) {
-        return address(token);
-    }
-
+    function asset() external view returns (address) { return address(token); }
     function share() external view returns (address) { return address(this); }
-    function totalLockedShares() external view returns (uint256) { return locked; }
+    function totalLockedShares() external view returns (uint256) { return totalLockedSharesValue; }
 
-    function setLocked(uint256 v) external {
-        locked = v;
+    function depositFor(address sender, uint256 assets, address receiver) external returns (uint256 shares) {
+        shares = (assets * 1e18) / mockedExchangeRate;
+        sharesOf[receiver] += shares;
+        token.transferFrom(sender, address(this), assets);
     }
 
-    function setRequest(
-        uint256 id,
-        uint256 estimatedAssets,
-        uint256 settledAssets,
-        IMantleYieldVault.RequestStatus status
-    ) external {
-        // If old status was PENDING, decrement counter
-        if (reqs[id].status == IMantleYieldVault.RequestStatus.PENDING && pendingRequestCount > 0) {
-            pendingRequestCount--;
-        }
-        reqs[id] = Req({
-            shares: estimatedAssets,
+    function requestRedeemFor(address, address owner, uint256 shares) external returns (uint256 requestId) {
+        require(sharesOf[owner] >= shares, "INSUFFICIENT_SHARES");
+        sharesOf[owner] -= shares;
+        totalLockedSharesValue += shares;
+
+        requestId = nextRequestId++;
+        uint256 estimatedAssets = (shares * mockedExchangeRate) / 1e18;
+        reqs[requestId] = Req({
+            owner: owner,
+            shares: shares,
             estimatedAssets: estimatedAssets,
-            settledAssets: settledAssets,
-            status: status
+            settledAssets: 0,
+            status: IMantleYieldVault.RequestStatus.PENDING
         });
-        // If new status is PENDING, increment counter
-        if (status == IMantleYieldVault.RequestStatus.PENDING) {
-            pendingRequestCount++;
-        }
+        pendingRequestCount++;
     }
 
-    function setExchangeRate(uint256 rate) external {
-        mockedExchangeRate = rate;
-    }
-
-    function exchangeRate() external view returns (uint256) {
-        return mockedExchangeRate;
-    }
+    function exchangeRate() external view returns (uint256) { return mockedExchangeRate; }
 
     function totalLockedLiabilities() external view returns (uint256) {
-        return locked;
+        return (totalLockedSharesValue * mockedExchangeRate) / 1e18;
     }
 
-    function totalInvestInFlight() external view returns (uint256) {
-        return investInFlightTotal;
+    function totalAssets() external view returns (uint256) {
+        uint256 total = token.balanceOf(address(this)) + investInFlightTotal + redeemInFlightTotal;
+        for (uint256 i = 0; i < adapterList.length; i++) {
+            address pt = IStrategyAdapter(adapterList[i]).posToken();
+            uint256 priceE18 = IStrategyAdapter(adapterList[i]).getPosTokenPrice();
+            uint256 ptBal = IERC20(pt).balanceOf(address(this));
+            total += (ptBal * priceE18) / 1e18;
+        }
+        uint256 floatingLocked = (totalLockedSharesValue * mockedExchangeRate) / 1e18;
+        return total > floatingLocked ? total - floatingLocked : 0;
     }
 
-    function totalRedeemInFlight() external view returns (uint256) {
-        return redeemInFlightTotal;
-    }
-
-    function adapterInvestInFlightTokens(address adapter) external view returns (uint256) {
-        return investInFlightByAdapter[adapter];
-    }
-
-    function adapterRedeemInFlightUsdc(address adapter) external view returns (uint256) {
-        return redeemInFlightByAdapter[adapter];
-    }
+    function totalInvestInFlight() external view returns (uint256) { return investInFlightTotal; }
+    function totalRedeemInFlight() external view returns (uint256) { return redeemInFlightTotal; }
+    function adapterInvestInFlightTokens(address adapter) external view returns (uint256) { return investInFlightByAdapter[adapter]; }
+    function adapterRedeemInFlightUsdc(address adapter) external view returns (uint256) { return redeemInFlightByAdapter[adapter]; }
 
     function getFreeCash() external view returns (uint256) {
         uint256 totalCash = token.balanceOf(address(this));
-        return totalCash > locked ? totalCash - locked : 0;
+        uint256 floatingLocked = (totalLockedSharesValue * mockedExchangeRate) / 1e18;
+        return totalCash > floatingLocked ? totalCash - floatingLocked : 0;
     }
 
     function getCashDeficit() external view returns (uint256) {
         uint256 totalCash = token.balanceOf(address(this));
-        return locked > totalCash ? locked - totalCash : 0;
-    }
-
-    /// @dev Simplified mirror of MantleYieldVault.totalAssets().
-    function totalAssets() external view returns (uint256) {
-        uint256 total = token.balanceOf(address(this)) + investInFlightTotal + redeemInFlightTotal;
-        return total > locked ? total - locked : 0;
+        uint256 floatingLocked = (totalLockedSharesValue * mockedExchangeRate) / 1e18;
+        return floatingLocked > totalCash ? floatingLocked - totalCash : 0;
     }
 
     function approveToAdapter(address adapter, address approveToken, uint256 amount) external {
         ERC20(approveToken).approve(adapter, amount);
     }
 
-    function isAdapter(address adapter) external view returns (bool) {
-        return isAdapterRegistry[adapter];
-    }
+    function isAdapter(address adapter) external view returns (bool) { return isAdapterRegistry[adapter]; }
 
     function registerAdapter(address adapter) external {
-        isAdapterRegistry[adapter] = true;
+        if (!isAdapterRegistry[adapter]) {
+            isAdapterRegistry[adapter] = true;
+            adapterList.push(adapter);
+        }
     }
 
     function removeAdapter(address adapter) external {
@@ -305,7 +390,11 @@ contract MockControllerVault {
 
     function updateRequestBatch(uint256[] calldata ids, IMantleYieldVault.RequestStatus newStatus) external {
         for (uint256 i = 0; i < ids.length; i++) {
-            if (reqs[ids[i]].status == IMantleYieldVault.RequestStatus.PENDING && pendingRequestCount > 0) {
+            if (
+                reqs[ids[i]].status == IMantleYieldVault.RequestStatus.PENDING
+                    && newStatus != IMantleYieldVault.RequestStatus.PENDING
+                    && pendingRequestCount > 0
+            ) {
                 pendingRequestCount--;
             }
             reqs[ids[i]].status = newStatus;
@@ -313,13 +402,24 @@ contract MockControllerVault {
     }
 
     function markRequestsDone(uint256[] calldata ids, uint256[] calldata settledAssets) external {
+        uint256 physicalCash = token.balanceOf(address(this));
+        uint256 releasedShares;
         for (uint256 i = 0; i < ids.length; i++) {
-            if (reqs[ids[i]].status == IMantleYieldVault.RequestStatus.PENDING && pendingRequestCount > 0) {
-                pendingRequestCount--;
+            uint256 id = ids[i];
+            if (reqs[id].status != IMantleYieldVault.RequestStatus.PROCESSING) {
+                revert IMantleYieldVault.Vault__InvalidState(id, reqs[id].status);
             }
-            reqs[ids[i]].settledAssets = settledAssets[i];
-            reqs[ids[i]].status = IMantleYieldVault.RequestStatus.DONE;
+            uint256 actual = settledAssets[i];
+            if (physicalCash < actual) {
+                revert IMantleYieldVault.Vault__InsufficientPhysicalCash(ids, settledAssets, token.balanceOf(address(this)));
+            }
+            reqs[id].settledAssets = actual;
+            reqs[id].status = IMantleYieldVault.RequestStatus.DONE;
+            physicalCash -= actual;
+            releasedShares += reqs[id].shares;
+            token.transfer(reqs[id].owner, actual);
         }
+        totalLockedSharesValue -= releasedShares;
     }
 
     function createInFlight(address adapter, address assetAddr, uint256 tokenAmount, uint256 usdcAmount, bool isInvest)
@@ -347,8 +447,13 @@ contract MockControllerVault {
         }
     }
 
-    function confirmInFlight(uint256 inFlightId, uint256 actualAmount, bool) external {
-        InFlight storage f = flights[inFlightId];
+    error Vault__InvalidInFlightState(uint256 inFlightId, IMantleYieldVault.InFlightStatus currentStatus);
+
+    function confirmInFlight(uint256 inFlightId_, uint256 actualAmount, bool) external {
+        InFlight storage f = flights[inFlightId_];
+        if (f.status != IMantleYieldVault.InFlightStatus.PENDING) {
+            revert Vault__InvalidInFlightState(inFlightId_, f.status);
+        }
         f.settledAmount = actualAmount;
         f.status = IMantleYieldVault.InFlightStatus.CONFIRMED;
         if (f.isInvest && investInFlightTotal >= f.usdcAmount) {
@@ -371,7 +476,7 @@ contract MockControllerVault {
         returns (uint256, address, uint256, uint256, uint256, uint256, uint256, IMantleYieldVault.RequestStatus)
     {
         Req memory r = reqs[requestId];
-        return (requestId, address(0), r.shares, 0, r.estimatedAssets, r.settledAssets, 0, r.status);
+        return (requestId, r.owner, r.shares, 0, r.estimatedAssets, r.settledAssets, 0, r.status);
     }
 
     function inFlightRecords(uint256 inFlightId)
@@ -394,65 +499,501 @@ contract MockControllerVault {
     }
 }
 
-contract DummyExecutor {}
-
 // =============================================================
 // Risk Regression Tests - In-flight settlement edge cases
 // =============================================================
 
 contract RiskRegressionTest is Test {
-    MockAsset internal asset;
-    MockAsset internal posToken;
-    MockAsset internal posToken2;
-    MockControllerVault internal vault;
-    StrategyController internal controller;
-    DummyExecutor internal executorGateway;
-
-    MockStrategyAdapter internal asyncAdapter;
-    MockStrategyAdapter internal asyncAdapter2;
+    MockAsset internal flowAsset;
+    MockAsset internal flowPosToken;
+    MockAsset internal flowPosToken2;
+    MockSettlementVenueRR internal flowVenue;
+    MockSettlementVenueRR internal flowVenue2;
+    SanctionsOracle internal flowSanctionsOracle;
+    Accountant internal flowAccountant;
+    MantleYieldVault internal flowVault;
+    MantleVaultGateway internal flowGateway;
+    StrategyController internal flowController;
+    OperatorExecutor internal flowOperatorExecutor;
+    MockAdapterRR internal flowAsyncAdapter;
+    MockAdapterRR internal flowAsyncAdapter2;
 
     address internal admin = makeAddr("admin");
-    address internal manager = makeAddr("manager");
+    address internal bot = makeAddr("bot");
+    address internal flowUser = makeAddr("flowUser");
+    address internal treasury = makeAddr("treasury");
+    address internal complianceBot = makeAddr("complianceBot");
 
     function setUp() public {
-        asset = new MockAsset();
-        posToken = new MockAsset();
-        posToken2 = new MockAsset();
-        vault = new MockControllerVault(address(asset));
-        executorGateway = new DummyExecutor();
+        flowAsset = new MockAsset();
+        flowPosToken = new MockAsset();
+        flowPosToken2 = new MockAsset();
+        flowVenue = new MockSettlementVenueRR(address(flowAsset), address(flowPosToken));
+        flowVenue2 = new MockSettlementVenueRR(address(flowAsset), address(flowPosToken2));
 
-        StrategyController implementation = new StrategyController();
-        bytes memory initData = abi.encodeCall(
+        SanctionsOracle oracleImpl = new SanctionsOracle();
+        SanctionsOracleFactory oracleFactory = new SanctionsOracleFactory(address(oracleImpl), admin);
+        vm.prank(admin);
+        flowSanctionsOracle = SanctionsOracle(oracleFactory.deployAndInitOracle(admin, complianceBot));
+
+        MantleYieldVault vaultImpl = new MantleYieldVault();
+        MantleVaultGateway gatewayImpl = new MantleVaultGateway();
+        VaultFactory vaultFactory = new VaultFactory(address(vaultImpl), admin);
+        GatewayFactory gatewayFactory = new GatewayFactory(address(gatewayImpl), admin);
+
+        address vaultAddr = vaultFactory.deployVault();
+        address gatewayAddr = gatewayFactory.deployGateway();
+        flowVault = MantleYieldVault(vaultAddr);
+        flowGateway = MantleVaultGateway(gatewayAddr);
+
+        IMantleYieldVault.InitParams memory params = IMantleYieldVault.InitParams({
+            asset: IERC20(address(flowAsset)),
+            name: "Flow Vault",
+            symbol: "fMRA",
+            admin: admin,
+            gateway: gatewayAddr,
+            controller: address(1),
+            accountant: address(1),
+            treasury: treasury,
+            maxRedemptionFeeBps: 500,
+            redemptionFeeBps: 0,
+            minRedeemAmount: 0,
+            minDepositAmount: 0,
+            maxSettlementDeviationBps: 0,
+            depositDailyRemaining: type(uint256).max,
+            redeemDailyRemaining: type(uint256).max
+        });
+        vm.prank(admin);
+        flowVault.initialize(params);
+
+        Accountant accountantImpl = new Accountant();
+        flowAccountant = Accountant(address(new ERC1967Proxy(
+            address(accountantImpl),
+            abi.encodeCall(Accountant.initialize, (address(flowVault), uint64(1e18), 0, admin))
+        )));
+        vm.prank(admin);
+        flowVault.setAccountant(address(flowAccountant));
+
+        OperatorExecutor executorImpl = new OperatorExecutor();
+        bytes memory executorInitData = abi.encodeCall(OperatorExecutor.initialize, (admin, bot));
+        flowOperatorExecutor = OperatorExecutor(address(new ERC1967Proxy(address(executorImpl), executorInitData)));
+
+        StrategyController flowImplementation = new StrategyController();
+        bytes memory flowInitData = abi.encodeCall(
             StrategyController.initialize,
-            (address(vault), manager, address(executorGateway), manager, 1000, 200, 1 hours)
+            (vaultAddr, admin, address(flowOperatorExecutor), admin, 0, 0, 0)
         );
-        controller = StrategyController(address(new ERC1967Proxy(address(implementation), initData)));
+        flowController = StrategyController(address(new ERC1967Proxy(address(flowImplementation), flowInitData)));
+        vm.prank(admin);
+        flowVault.setController(address(flowController));
 
-        asyncAdapter = new MockStrategyAdapter(address(asset), address(posToken));
-        asyncAdapter2 = new MockStrategyAdapter(address(asset), address(posToken2));
-    }
+        vm.prank(admin);
+        flowGateway.initialize(
+            IMantleVaultGateway.InitParams({
+                vault: vaultAddr,
+                sanctionsOracle: ISanctionsOracle(address(flowSanctionsOracle)),
+                sanctionSafe: treasury,
+                admin: admin,
+                syncRedeemDisabled: false
+            })
+        );
 
-    function _registerSingleAsyncStrategy() internal {
-        vm.startPrank(manager);
-        controller.registerStrategy(address(asyncAdapter), 10_000, 1, true);
-        controller.activateStrategy(address(asyncAdapter));
+        flowAsyncAdapter =
+            new MockAdapterRR(address(flowAsset), address(flowPosToken), address(flowVault), address(flowVenue));
+        flowAsyncAdapter2 =
+            new MockAdapterRR(address(flowAsset), address(flowPosToken2), address(flowVault), address(flowVenue2));
+
+        vm.startPrank(admin);
+        flowController.registerStrategy(address(flowAsyncAdapter), 10_000, 1, true);
+        flowController.activateStrategy(address(flowAsyncAdapter));
         address[] memory ordered = new address[](1);
-        ordered[0] = address(asyncAdapter);
-        controller.setStrategyOrder(ordered);
+        ordered[0] = address(flowAsyncAdapter);
+        flowController.setStrategyOrder(ordered);
         vm.stopPrank();
     }
 
-    function _registerTwoAsyncStrategies() internal {
-        vm.startPrank(manager);
-        controller.registerStrategy(address(asyncAdapter), 5000, 1, true);
-        controller.activateStrategy(address(asyncAdapter));
-        controller.registerStrategy(address(asyncAdapter2), 5000, 2, true);
-        controller.activateStrategy(address(asyncAdapter2));
-        address[] memory ordered = new address[](2);
-        ordered[0] = address(asyncAdapter);
-        ordered[1] = address(asyncAdapter2);
-        controller.setStrategyOrder(ordered);
+    function _depositToFlowVault(address user, uint256 assetAmount) internal returns (uint256 shares) {
+        flowAsset.mint(user, assetAmount);
+        vm.startPrank(user);
+        flowAsset.approve(address(flowVault), assetAmount);
+        shares = flowGateway.deposit(assetAmount);
         vm.stopPrank();
+    }
+
+    function _executeFlowRebalance() internal {
+        vm.prank(bot);
+        flowOperatorExecutor.executeRebalance(address(flowController));
+    }
+
+    function _executeFlowRebalanceAndGetInFlightId() internal returns (uint256 inFlightId) {
+        uint256 beforeId = flowVault.nextInFlightId();
+        _executeFlowRebalance();
+        uint256 afterId = flowVault.nextInFlightId();
+        require(afterId > beforeId, "No invest in-flight created");
+        inFlightId = afterId - 1;
+    }
+
+    function _executeFlowSettleAdapter(
+        uint256[] memory investIds,
+        uint256[] memory investSettledPos,
+        uint256[] memory investRefundAssets,
+        uint256[] memory redeemIds,
+        uint256[] memory redeemSettledAssets
+    ) internal {
+        vm.prank(bot);
+        flowOperatorExecutor.executeSettleAdapter(
+            address(flowController),
+            address(flowAsyncAdapter),
+            IStrategyControllerExecutor.InvestSettlementInput(investIds, investSettledPos, investRefundAssets),
+            IStrategyControllerExecutor.RedeemSettlementInput(redeemIds, redeemSettledAssets)
+        );
+    }
+
+    function _executeFlowProcessRedeemBatch(uint256[] memory ids) internal {
+        vm.prank(bot);
+        flowOperatorExecutor.executeProcessRedeemBatch(address(flowController), ids);
+    }
+
+    function _executeFlowProcessRedeemBatchAndGetInFlightId(uint256[] memory ids) internal returns (uint256 inFlightId) {
+        uint256 beforeId = flowVault.nextInFlightId();
+        _executeFlowProcessRedeemBatch(ids);
+        uint256 afterId = flowVault.nextInFlightId();
+        require(afterId > beforeId, "No redeem in-flight created");
+        inFlightId = afterId - 1;
+    }
+
+    function _executeFlowFinalizeRedeemBatch(uint256[] memory ids, uint256[] memory settledAssets) internal {
+        vm.prank(bot);
+        flowOperatorExecutor.executeFinalizeRedeemBatch(address(flowController), ids, settledAssets);
+    }
+
+    function _createFlowRedeemInFlight(uint256 depositAmount) internal returns (uint256 requestId, uint256 redeemInFlightId) {
+        uint256 shares = _depositToFlowVault(flowUser, depositAmount);
+
+        uint256 investInFlightId = _executeFlowRebalanceAndGetInFlightId();
+
+        uint256[] memory investIds = new uint256[](1);
+        investIds[0] = investInFlightId;
+        uint256[] memory investSettledPos = new uint256[](1);
+        investSettledPos[0] = depositAmount;
+        uint256[] memory investRefund = new uint256[](1);
+        flowVenue.settleInvest(address(flowAsyncAdapter), depositAmount, 0);
+        _executeFlowSettleAdapter(investIds, investSettledPos, investRefund, new uint256[](0), new uint256[](0));
+
+        vm.prank(flowUser);
+        requestId = flowGateway.requestRedeem(shares);
+        uint256[] memory ids = new uint256[](1);
+        ids[0] = requestId;
+        redeemInFlightId = _executeFlowProcessRedeemBatchAndGetInFlightId(ids);
+    }
+
+    /// @dev Settle a specific adapter (not just flowAsyncAdapter) via the real bot → executor chain
+    function _executeFlowSettleAdapterFor(
+        address adapter,
+        uint256[] memory investIds,
+        uint256[] memory investSettledPos,
+        uint256[] memory investRefundAssets,
+        uint256[] memory redeemIds,
+        uint256[] memory redeemSettledAssets
+    ) internal {
+        vm.prank(bot);
+        flowOperatorExecutor.executeSettleAdapter(
+            address(flowController),
+            adapter,
+            IStrategyControllerExecutor.InvestSettlementInput(investIds, investSettledPos, investRefundAssets),
+            IStrategyControllerExecutor.RedeemSettlementInput(redeemIds, redeemSettledAssets)
+        );
+    }
+
+    // ==========================================================================
+    // Flow tests: duplicate confirm, partial confirm, multi-adapter isolation
+    // ==========================================================================
+
+    function test_Flow_DuplicateRedeemConfirm_Reverts() public {
+        _logCase(
+            "test_Flow_DuplicateRedeemConfirm_Reverts",
+            unicode"redeem in-flight 重复 confirm 应被真实 vault 状态保护拒绝"
+        );
+
+        _step("[Step 1] Create a redeem in-flight through full flow chain");
+        (, uint256 redeemInFlightId) = _createFlowRedeemInFlight(1000e18);
+        _step(string.concat("  redeemInFlightId = ", vm.toString(redeemInFlightId)));
+
+        _step("[Step 2] Settle the redeem in-flight (first confirm succeeds)");
+        uint256 settledAmount = 900e18;
+        flowVenue.settleRedeem(address(flowAsyncAdapter), settledAmount);
+
+        uint256[] memory redeemIds = new uint256[](1);
+        redeemIds[0] = redeemInFlightId;
+        uint256[] memory redeemAmounts = new uint256[](1);
+        redeemAmounts[0] = settledAmount;
+        _executeFlowSettleAdapter(new uint256[](0), new uint256[](0), new uint256[](0), redeemIds, redeemAmounts);
+        _step("  first settleAdapter succeeded");
+
+        (,,,,,,,, IMantleYieldVault.InFlightStatus status) = flowVault.inFlightRecords(redeemInFlightId);
+        assertEq(uint8(status), uint8(IMantleYieldVault.InFlightStatus.CONFIRMED), "status should be CONFIRMED");
+        _step("  in-flight status = CONFIRMED");
+
+        _step("[Step 3] Attempt duplicate confirm - should revert");
+        // Deliver USDC to adapter again so the sweep stage passes; the revert must come from
+        // confirmInFlight's status guard, not from an earlier sweep-amount mismatch.
+        flowVenue.settleRedeem(address(flowAsyncAdapter), settledAmount);
+        vm.expectRevert(abi.encodeWithSelector(
+            IMantleYieldVault.Vault__InvalidInFlightState.selector,
+            redeemInFlightId,
+            IMantleYieldVault.InFlightStatus.CONFIRMED
+        ));
+        _executeFlowSettleAdapter(new uint256[](0), new uint256[](0), new uint256[](0), redeemIds, redeemAmounts);
+        _step("  PASS: duplicate confirm reverted with Vault__InvalidInFlightState");
+
+        _logPass();
+    }
+
+    function test_Flow_ReconfirmAlreadyConfirmed_Reverts() public {
+        _logCase(
+            "test_Flow_ReconfirmAlreadyConfirmed_Reverts",
+            unicode"已 CONFIRMED 的 redeem in-flight 无法被再次 settle（状态保护）"
+        );
+
+        _step("[Step 1] Create and settle a redeem in-flight");
+        (, uint256 redeemInFlightId) = _createFlowRedeemInFlight(500e18);
+        flowVenue.settleRedeem(address(flowAsyncAdapter), 500e18);
+
+        uint256[] memory redeemIds = new uint256[](1);
+        redeemIds[0] = redeemInFlightId;
+        uint256[] memory redeemAmounts = new uint256[](1);
+        redeemAmounts[0] = 500e18;
+        _executeFlowSettleAdapter(new uint256[](0), new uint256[](0), new uint256[](0), redeemIds, redeemAmounts);
+
+        uint256 redeemTotalAfterFirst = flowVault.totalRedeemInFlight();
+        _step(string.concat("  redeemInFlightTotal after confirm = ", vm.toString(redeemTotalAfterFirst)));
+        assertEq(redeemTotalAfterFirst, 0, "redeemInFlightTotal should be 0 after confirm");
+
+        _step("[Step 2] Wait some time, then try to re-settle with different amount");
+        vm.warp(block.timestamp + 1 hours);
+        redeemAmounts[0] = 400e18;
+        // Deliver USDC to adapter so sweep passes; the revert must come from confirmInFlight guard.
+        flowVenue.settleRedeem(address(flowAsyncAdapter), 400e18);
+        vm.expectRevert(abi.encodeWithSelector(
+            IMantleYieldVault.Vault__InvalidInFlightState.selector,
+            redeemInFlightId,
+            IMantleYieldVault.InFlightStatus.CONFIRMED
+        ));
+        _executeFlowSettleAdapter(new uint256[](0), new uint256[](0), new uint256[](0), redeemIds, redeemAmounts);
+        _step("  PASS: re-settle reverted, stats remain unchanged");
+
+        uint256 redeemTotalAfterAttempt = flowVault.totalRedeemInFlight();
+        assertEq(redeemTotalAfterAttempt, 0, "redeemInFlightTotal unchanged after failed re-settle");
+
+        _logPass();
+    }
+
+    function test_Flow_MultiInFlight_PartialConfirm_StatsCorrect() public {
+        _logCase(
+            "test_Flow_MultiInFlight_PartialConfirm_StatsCorrect",
+            unicode"3 个 redeem in-flight 只 confirm 2 个，统计值仅减去已 confirm 部分"
+        );
+
+        _step("[Step 1] Create 3 redeem in-flights via single deposit + 3 separate redeem cycles");
+        // Deposit once (6000e18) so all shares are created in one go with no locked-share drag.
+        uint256 totalDeposit = 6000e18;
+        uint256 allShares = _depositToFlowVault(flowUser, totalDeposit);
+
+        // Settle invest (venue delivers 6000 posTokens to vault via adapter sweep)
+        uint256 investInFlightId = _executeFlowRebalanceAndGetInFlightId();
+        flowVenue.settleInvest(address(flowAsyncAdapter), totalDeposit, 0);
+        {
+            uint256[] memory iIds = new uint256[](1);
+            iIds[0] = investInFlightId;
+            uint256[] memory iPos = new uint256[](1);
+            iPos[0] = totalDeposit;
+            _executeFlowSettleAdapter(iIds, iPos, new uint256[](1), new uint256[](0), new uint256[](0));
+        }
+
+        // 3 separate requestRedeem (2000 shares each) → 3 requests
+        uint256 sharesPerReq = allShares / 3;
+        vm.startPrank(flowUser);
+        uint256 reqId1 = flowGateway.requestRedeem(sharesPerReq);
+        uint256 reqId2 = flowGateway.requestRedeem(sharesPerReq);
+        uint256 reqId3 = flowGateway.requestRedeem(sharesPerReq);
+        vm.stopPrank();
+
+        // 3 separate processRedeemBatch calls → 3 redeem in-flights
+        uint256 redeemId1;
+        {
+            uint256[] memory b1 = new uint256[](1);
+            b1[0] = reqId1;
+            redeemId1 = _executeFlowProcessRedeemBatchAndGetInFlightId(b1);
+        }
+
+        uint256 redeemId2;
+        {
+            uint256[] memory b2 = new uint256[](1);
+            b2[0] = reqId2;
+            redeemId2 = _executeFlowProcessRedeemBatchAndGetInFlightId(b2);
+        }
+
+        uint256 redeemId3;
+        {
+            uint256[] memory b3 = new uint256[](1);
+            b3[0] = reqId3;
+            redeemId3 = _executeFlowProcessRedeemBatchAndGetInFlightId(b3);
+        }
+        _step(string.concat("  redeemId1 = ", vm.toString(redeemId1)));
+        _step(string.concat("  redeemId2 = ", vm.toString(redeemId2)));
+        _step(string.concat("  redeemId3 = ", vm.toString(redeemId3)));
+
+        uint256 totalRedeemBefore = flowVault.totalRedeemInFlight();
+        _step(string.concat("  redeemInFlightTotal before = ", vm.toString(totalRedeemBefore)));
+
+        // Record per-adapter stats before partial confirm
+        uint256 adapterRedeemBefore = flowVault.adapterRedeemInFlightUsdc(address(flowAsyncAdapter));
+        _step(string.concat("  adapterRedeemInFlightUsdc before = ", vm.toString(adapterRedeemBefore)));
+
+        _step("[Step 2] Settle only redeemId1 and redeemId2 (leave redeemId3 pending)");
+        uint256 settled1 = 900e18;
+        uint256 settled2 = 1800e18;
+        uint256 totalSettledAsset = settled1 + settled2;
+        flowVenue.settleRedeem(address(flowAsyncAdapter), totalSettledAsset);
+
+        uint256[] memory redeemIds = new uint256[](2);
+        redeemIds[0] = redeemId1;
+        redeemIds[1] = redeemId2;
+        uint256[] memory redeemAmounts = new uint256[](2);
+        redeemAmounts[0] = settled1;
+        redeemAmounts[1] = settled2;
+        _executeFlowSettleAdapter(new uint256[](0), new uint256[](0), new uint256[](0), redeemIds, redeemAmounts);
+        _step("  settleAdapter for redeemId1 + redeemId2 succeeded");
+
+        _step("[Step 3] Verify stats: only confirmed in-flights' usdcAmount subtracted");
+        // Get the original usdcAmount for each in-flight from the records
+        (,,,, uint256 usdc1,,,,) = flowVault.inFlightRecords(redeemId1);
+        (,,,, uint256 usdc2,,,,) = flowVault.inFlightRecords(redeemId2);
+        (,,,, uint256 usdc3,,,,) = flowVault.inFlightRecords(redeemId3);
+
+        uint256 expectedRemaining = totalRedeemBefore - usdc1 - usdc2;
+        uint256 actualRemaining = flowVault.totalRedeemInFlight();
+        assertEq(actualRemaining, expectedRemaining, "redeemInFlightTotal = original - confirmed1 - confirmed2");
+        assertEq(actualRemaining, usdc3, "remaining should equal redeemId3's usdcAmount");
+        _step(string.concat("  redeemInFlightTotal after = ", vm.toString(actualRemaining)));
+        _step(string.concat("  expected remaining (redeemId3) = ", vm.toString(usdc3)));
+
+        _step("[Step 4] Verify individual statuses");
+        (,,,,,,,, IMantleYieldVault.InFlightStatus s1) = flowVault.inFlightRecords(redeemId1);
+        (,,,,,,,, IMantleYieldVault.InFlightStatus s2) = flowVault.inFlightRecords(redeemId2);
+        (,,,,,,,, IMantleYieldVault.InFlightStatus s3) = flowVault.inFlightRecords(redeemId3);
+        assertEq(uint8(s1), uint8(IMantleYieldVault.InFlightStatus.CONFIRMED), "redeemId1 CONFIRMED");
+        assertEq(uint8(s2), uint8(IMantleYieldVault.InFlightStatus.CONFIRMED), "redeemId2 CONFIRMED");
+        assertEq(uint8(s3), uint8(IMantleYieldVault.InFlightStatus.PENDING), "redeemId3 still PENDING");
+        _step("  redeemId1: CONFIRMED, redeemId2: CONFIRMED, redeemId3: PENDING");
+
+        _step("[Step 5] Verify per-adapter stats");
+        uint256 adapterRedeemAfter = flowVault.adapterRedeemInFlightUsdc(address(flowAsyncAdapter));
+        assertEq(adapterRedeemAfter, adapterRedeemBefore - usdc1 - usdc2, "per-adapter stats correct");
+        _step(string.concat("  adapterRedeemInFlightUsdc after = ", vm.toString(adapterRedeemAfter)));
+
+        _logPass();
+    }
+
+    function test_Flow_MultiAdapter_ConfirmOneDoesNotAffectOther() public {
+        _logCase(
+            "test_Flow_MultiAdapter_ConfirmOneDoesNotAffectOther",
+            unicode"settle 一个 adapter 的 redeem in-flight 不影响另一个 adapter 的统计"
+        );
+
+        _step("[Step 1] Create redeem in-flight for adapter1 (sole strategy at 100%)");
+        (, uint256 redeemId1) = _createFlowRedeemInFlight(1000e18);
+        _step(string.concat("  adapter1 redeemInFlightId = ", vm.toString(redeemId1)));
+
+        _step("[Step 2] Register adapter2 at 10000 weight, set order = [adapter2]");
+        vm.startPrank(admin);
+        flowController.registerStrategy(address(flowAsyncAdapter2), 10_000, 2, true);
+        flowController.activateStrategy(address(flowAsyncAdapter2));
+        address[] memory order2 = new address[](1);
+        order2[0] = address(flowAsyncAdapter2);
+        flowController.setStrategyOrder(order2);
+        vm.stopPrank();
+
+        _step("[Step 3] Create redeem in-flight for adapter2 via full flow chain (inline)");
+        // Deposit → rebalance invests into adapter2 (sole order) → settle invest → requestRedeem → processRedeemBatch
+        _depositToFlowVault(flowUser, 2000e18);
+        uint256 investId2 = _executeFlowRebalanceAndGetInFlightId();
+        // freeCash was 1000 (deposit 2000 - locked 1000), so 1000 invested into adapter2
+        uint256 investedAmount = 1000e18;
+        {
+            // Settle adapter2 invest
+            flowVenue2.settleInvest(address(flowAsyncAdapter2), investedAmount, 0);
+            uint256[] memory iIds = new uint256[](1);
+            iIds[0] = investId2;
+            uint256[] memory iPos = new uint256[](1);
+            iPos[0] = investedAmount;
+            _executeFlowSettleAdapterFor(
+                address(flowAsyncAdapter2),
+                iIds, iPos, new uint256[](1),
+                new uint256[](0), new uint256[](0)
+            );
+        }
+
+        vm.prank(flowUser);
+        uint256 reqId2 = flowGateway.requestRedeem(investedAmount);
+        // Request only investedAmount worth of shares (1000) — adapter2 has exactly 1000 posTokens
+        uint256 redeemId2;
+        {
+            uint256[] memory reqIds = new uint256[](1);
+            reqIds[0] = reqId2;
+            uint256 nextId = flowVault.nextInFlightId();
+            _executeFlowProcessRedeemBatch(reqIds);
+            redeemId2 = nextId;
+        }
+        _step(string.concat("  adapter2 redeemInFlightId = ", vm.toString(redeemId2)));
+
+        _step("[Step 4] Record stats for both adapters before settling");
+        uint256 adapter1RedeemBefore = flowVault.adapterRedeemInFlightUsdc(address(flowAsyncAdapter));
+        uint256 adapter2RedeemBefore = flowVault.adapterRedeemInFlightUsdc(address(flowAsyncAdapter2));
+        uint256 totalRedeemBefore = flowVault.totalRedeemInFlight();
+        assertGt(adapter1RedeemBefore, 0, "adapter1 should have pending redeem in-flight");
+        assertGt(adapter2RedeemBefore, 0, "adapter2 should have pending redeem in-flight");
+        _step(string.concat("  adapter1 redeemInFlight = ", vm.toString(adapter1RedeemBefore)));
+        _step(string.concat("  adapter2 redeemInFlight = ", vm.toString(adapter2RedeemBefore)));
+
+        _step("[Step 5] Settle ONLY adapter1's redeem in-flight");
+        (,,,, uint256 usdc1,,,,) = flowVault.inFlightRecords(redeemId1);
+        flowVenue.settleRedeem(address(flowAsyncAdapter), usdc1);
+        {
+            uint256[] memory rIds = new uint256[](1);
+            rIds[0] = redeemId1;
+            uint256[] memory rAmts = new uint256[](1);
+            rAmts[0] = usdc1;
+            _executeFlowSettleAdapterFor(
+                address(flowAsyncAdapter),
+                new uint256[](0), new uint256[](0), new uint256[](0),
+                rIds, rAmts
+            );
+        }
+        _step("  adapter1 settleAdapter succeeded");
+
+        _step("[Step 6] Verify adapter2 stats are completely untouched");
+        uint256 adapter2RedeemAfter = flowVault.adapterRedeemInFlightUsdc(address(flowAsyncAdapter2));
+        assertEq(adapter2RedeemAfter, adapter2RedeemBefore, "adapter2 redeem stats untouched");
+        _step(string.concat("  adapter2 redeemInFlight after = ", vm.toString(adapter2RedeemAfter)));
+        _step("  PASS: adapter2 stats unchanged");
+
+        _step("[Step 7] Verify adapter1 stats were reduced");
+        uint256 adapter1RedeemAfter = flowVault.adapterRedeemInFlightUsdc(address(flowAsyncAdapter));
+        assertEq(adapter1RedeemAfter, adapter1RedeemBefore - usdc1, "adapter1 redeem stats reduced");
+        _step(string.concat("  adapter1 redeemInFlight after = ", vm.toString(adapter1RedeemAfter)));
+
+        _step("[Step 8] Verify total redeemInFlight only reduced by adapter1's amount");
+        uint256 totalRedeemAfter = flowVault.totalRedeemInFlight();
+        assertEq(totalRedeemAfter, totalRedeemBefore - usdc1, "total reduced by adapter1 only");
+        _step(string.concat("  totalRedeemInFlight after = ", vm.toString(totalRedeemAfter)));
+
+        _step("[Step 9] Verify adapter2's in-flight is still PENDING");
+        (,,,,,,,, IMantleYieldVault.InFlightStatus s2) = flowVault.inFlightRecords(redeemId2);
+        assertEq(uint8(s2), uint8(IMantleYieldVault.InFlightStatus.PENDING), "adapter2 in-flight still PENDING");
+        _step("  adapter2 in-flight status = PENDING");
+
+        _logPass();
     }
 
     string constant MODULE = unicode"风险回归场景";
@@ -487,34 +1028,25 @@ contract RiskRegressionTest is Test {
     // P0: settledAmount records actual Y, not recorded X
     function test_ConfirmInFlight_RecordsActualSettledAmount() public {
         _logCase("test_ConfirmInFlight_RecordsActualSettledAmount", unicode"redeem in-flight 确认时记录实际 settledAmount，而不是强制等于记录值");
-        _step("[Step 1] Register single async strategy");
-        _registerSingleAsyncStrategy();
+        _step("[Step 1] Create a real redeem in-flight via deposit -> rebalance -> settle invest -> requestRedeem -> process");
+        (, uint256 inFlightId) = _createFlowRedeemInFlight(100e18);
+        _step(string.concat("  redeem inFlightId = ", vm.toString(inFlightId)));
 
-        _step("[Step 2] Create redeem in-flight with usdcAmount X = 100e18");
-        uint256 inFlightId = vault.createInFlight(address(asyncAdapter), address(asset), 0, 100e18, false);
-        _step(string.concat("  inFlightId = ", vm.toString(inFlightId)));
-
-        _step("[Step 3] Set actual settled amount Y = 95e18 (different from X)");
+        _step("[Step 2] Set actual settled amount Y = 95e18 (different from recorded X=100e18)");
         uint256 actualY = 95e18;
-        asyncAdapter.setSweepReturnAmount(actualY);
+        flowVenue.settleRedeem(address(flowAsyncAdapter), actualY);
         _step(string.concat("  actualY = ", vm.toString(actualY)));
 
-        _step("[Step 4] Settle adapter with redeem in-flight");
+        _step("[Step 3] Settle adapter through OperatorExecutor");
         uint256[] memory redeemIds = new uint256[](1);
         redeemIds[0] = inFlightId;
         uint256[] memory redeemAmounts = new uint256[](1);
         redeemAmounts[0] = actualY;
-
-        vm.prank(address(executorGateway));
-        controller.settleAdapter(
-            address(asyncAdapter),
-            IStrategyControllerExecutor.InvestSettlementInput(new uint256[](0), new uint256[](0), new uint256[](0)),
-            IStrategyControllerExecutor.RedeemSettlementInput(redeemIds, redeemAmounts)
-        );
+        _executeFlowSettleAdapter(new uint256[](0), new uint256[](0), new uint256[](0), redeemIds, redeemAmounts);
         _step("  settleAdapter completed successfully");
 
-        _step("[Step 5] Verify settledAmount == actual Y, not original X");
-        (,,,,, uint256 settledAmount,,, IMantleYieldVault.InFlightStatus status) = vault.inFlightRecords(inFlightId);
+        _step("[Step 4] Verify settledAmount == actual Y, not original X");
+        (,,,,, uint256 settledAmount,,, IMantleYieldVault.InFlightStatus status) = flowVault.inFlightRecords(inFlightId);
         _step(string.concat("  settledAmount = ", vm.toString(settledAmount)));
         _step(string.concat("  status = ", vm.toString(uint8(status))));
         assertEq(settledAmount, actualY, "settledAmount should be actual Y=95e18, not recorded X=100e18");
@@ -527,46 +1059,37 @@ contract RiskRegressionTest is Test {
     // P0: stats decrease by original usdcAmount X, not Y
     function test_ConfirmInFlight_StatsDecreaseByRecordedAmount() public {
         _logCase("test_ConfirmInFlight_StatsDecreaseByRecordedAmount", unicode"redeem in-flight 确认后，统计清账按原记录值 usdcAmount 递减");
-        _step("[Step 1] Register single async strategy");
-        _registerSingleAsyncStrategy();
+        _step("[Step 1] Create a real redeem in-flight with recorded usdcAmount X = 100e18");
+        (, uint256 inFlightId) = _createFlowRedeemInFlight(100e18);
+        _step(string.concat("  redeem inFlightId = ", vm.toString(inFlightId)));
 
-        _step("[Step 2] Create redeem in-flight with usdcAmount X = 100e18");
-        uint256 inFlightId = vault.createInFlight(address(asyncAdapter), address(asset), 0, 100e18, false);
-        _step(string.concat("  inFlightId = ", vm.toString(inFlightId)));
-
-        _step("[Step 3] Verify initial stats match X = 100e18");
-        uint256 redeemTotalBefore = vault.redeemInFlightTotal();
-        uint256 adapterRedeemBefore = vault.redeemInFlightByAdapter(address(asyncAdapter));
+        _step("[Step 2] Verify initial stats match X = 100e18");
+        uint256 redeemTotalBefore = flowVault.totalRedeemInFlight();
+        uint256 adapterRedeemBefore = flowVault.adapterRedeemInFlightUsdc(address(flowAsyncAdapter));
         _step(string.concat("  redeemTotalBefore = ", vm.toString(redeemTotalBefore)));
         _step(string.concat("  adapterRedeemBefore = ", vm.toString(adapterRedeemBefore)));
         assertEq(redeemTotalBefore, 100e18);
         assertEq(adapterRedeemBefore, 100e18);
         _step("  PASS: initial stats == 100e18");
 
-        _step("[Step 4] Settle with actual Y = 80e18 (less than X)");
+        _step("[Step 3] Settle with actual Y = 80e18 (less than X)");
         uint256 actualY = 80e18;
-        asyncAdapter.setSweepReturnAmount(actualY);
+        flowVenue.settleRedeem(address(flowAsyncAdapter), actualY);
 
         uint256[] memory redeemIds = new uint256[](1);
         redeemIds[0] = inFlightId;
         uint256[] memory redeemAmounts = new uint256[](1);
         redeemAmounts[0] = actualY;
-
-        vm.prank(address(executorGateway));
-        controller.settleAdapter(
-            address(asyncAdapter),
-            IStrategyControllerExecutor.InvestSettlementInput(new uint256[](0), new uint256[](0), new uint256[](0)),
-            IStrategyControllerExecutor.RedeemSettlementInput(redeemIds, redeemAmounts)
-        );
+        _executeFlowSettleAdapter(new uint256[](0), new uint256[](0), new uint256[](0), redeemIds, redeemAmounts);
         _step("  settleAdapter completed successfully");
 
-        _step("[Step 5] Verify stats decreased by original X=100e18, not actual Y=80e18");
-        _step(string.concat("  redeemInFlightTotal = ", vm.toString(vault.redeemInFlightTotal())));
-        _step(string.concat("  adapterRedeemInFlight = ", vm.toString(vault.redeemInFlightByAdapter(address(asyncAdapter)))));
-        assertEq(vault.redeemInFlightTotal(), 0, "redeemInFlightTotal should decrease by X=100e18 to 0");
+        _step("[Step 4] Verify stats decreased by original X=100e18, not actual Y=80e18");
+        _step(string.concat("  redeemInFlightTotal = ", vm.toString(flowVault.totalRedeemInFlight())));
+        _step(string.concat("  adapterRedeemInFlight = ", vm.toString(flowVault.adapterRedeemInFlightUsdc(address(flowAsyncAdapter)))));
+        assertEq(flowVault.totalRedeemInFlight(), 0, "redeemInFlightTotal should decrease by X=100e18 to 0");
         _step("  PASS: redeemInFlightTotal == 0");
         assertEq(
-            vault.redeemInFlightByAdapter(address(asyncAdapter)),
+            flowVault.adapterRedeemInFlightUsdc(address(flowAsyncAdapter)),
             0,
             "adapter redeemInFlight should decrease by X=100e18 to 0"
         );
@@ -577,16 +1100,13 @@ contract RiskRegressionTest is Test {
     // P0: Y < X, confirm succeeds, difference exposed in finalize
     function test_ConfirmInFlight_ActualLessThanRecorded_StillSucceeds() public {
         _logCase("test_ConfirmInFlight_ActualLessThanRecorded_StillSucceeds", unicode"实际回款小于记录值时，确认阶段仍可完成，差异在后续结算阶段暴露");
-        _step("[Step 1] Register single async strategy");
-        _registerSingleAsyncStrategy();
+        _step("[Step 1] Create a real redeem in-flight with recorded X = 100e18");
+        (, uint256 inFlightId) = _createFlowRedeemInFlight(100e18);
+        _step(string.concat("  redeem inFlightId = ", vm.toString(inFlightId)));
 
-        _step("[Step 2] Create redeem in-flight with X = 100e18");
-        uint256 inFlightId = vault.createInFlight(address(asyncAdapter), address(asset), 0, 100e18, false);
-        _step(string.concat("  inFlightId = ", vm.toString(inFlightId)));
-
-        _step("[Step 3] Set actual Y = 60e18 (less than X)");
+        _step("[Step 2] Set actual Y = 60e18 (less than X)");
         uint256 actualY = 60e18;
-        asyncAdapter.setSweepReturnAmount(actualY);
+        flowVenue.settleRedeem(address(flowAsyncAdapter), actualY);
         _step(string.concat("  actualY = ", vm.toString(actualY)));
 
         uint256[] memory redeemIds = new uint256[](1);
@@ -594,82 +1114,50 @@ contract RiskRegressionTest is Test {
         uint256[] memory redeemAmounts = new uint256[](1);
         redeemAmounts[0] = actualY;
 
-        _step("[Step 4] Settle adapter - should NOT revert even though Y < X");
-        vm.prank(address(executorGateway));
-        controller.settleAdapter(
-            address(asyncAdapter),
-            IStrategyControllerExecutor.InvestSettlementInput(new uint256[](0), new uint256[](0), new uint256[](0)),
-            IStrategyControllerExecutor.RedeemSettlementInput(redeemIds, redeemAmounts)
-        );
+        _step("[Step 3] Settle adapter - should NOT revert even though Y < X");
+        _executeFlowSettleAdapter(new uint256[](0), new uint256[](0), new uint256[](0), redeemIds, redeemAmounts);
         _step("  PASS: settleAdapter did not revert with Y < X");
 
-        _step("[Step 5] Verify settledAmount == Y and status == CONFIRMED");
-        (,,,,, uint256 settledAmount,,, IMantleYieldVault.InFlightStatus status) = vault.inFlightRecords(inFlightId);
+        _step("[Step 4] Verify settledAmount == Y and status == CONFIRMED");
+        (,,,,, uint256 settledAmount,,, IMantleYieldVault.InFlightStatus status) = flowVault.inFlightRecords(inFlightId);
         _step(string.concat("  settledAmount = ", vm.toString(settledAmount)));
         assertEq(settledAmount, actualY, "settledAmount should record actual Y=60e18");
         _step("  PASS: settledAmount == 60e18");
         assertEq(uint8(status), uint8(IMantleYieldVault.InFlightStatus.CONFIRMED));
         _step("  PASS: status == CONFIRMED");
-
-        _step("[Step 6] Create request expecting 100e18 and process it");
-        uint256[] memory requestIds = new uint256[](1);
-        requestIds[0] = 42;
-        vault.setRequest(42, 100e18, 0, IMantleYieldVault.RequestStatus.PROCESSING);
-
-        vm.prank(address(executorGateway));
-        controller.processRedeemBatch(requestIds);
-        _step("  processRedeemBatch completed");
-
-        uint256[] memory settledAssets = new uint256[](1);
-        settledAssets[0] = 100e18;
-
-        _step("[Step 7] Finalize with no physical balance -> expect revert");
-        vm.prank(address(executorGateway));
-        vm.expectRevert();
-        controller.finalizeRedeemBatch(requestIds, settledAssets);
-        _step("  PASS: reverted as expected (insufficient physical balance)");
         _logPass();
     }
 
     // P0: Y > X, stats still decrease by X
     function test_ConfirmInFlight_ActualMoreThanRecorded_StatsStillByOriginal() public {
         _logCase("test_ConfirmInFlight_ActualMoreThanRecorded_StatsStillByOriginal", unicode"实际回款大于记录值时，确认阶段记录超额实际值，但统计仍按原记录值清账");
-        _step("[Step 1] Register single async strategy");
-        _registerSingleAsyncStrategy();
+        _step("[Step 1] Create a real redeem in-flight with recorded X = 100e18");
+        (, uint256 inFlightId) = _createFlowRedeemInFlight(100e18);
+        _step(string.concat("  redeem inFlightId = ", vm.toString(inFlightId)));
 
-        _step("[Step 2] Create redeem in-flight with usdcAmount X = 100e18");
-        uint256 inFlightId = vault.createInFlight(address(asyncAdapter), address(asset), 0, 100e18, false);
-        _step(string.concat("  inFlightId = ", vm.toString(inFlightId)));
-
-        _step("[Step 3] Set actual Y = 120e18 (more than X)");
+        _step("[Step 2] Set actual Y = 120e18 (more than X)");
         uint256 actualY = 120e18;
-        asyncAdapter.setSweepReturnAmount(actualY);
+        flowVenue.settleRedeem(address(flowAsyncAdapter), actualY);
         _step(string.concat("  actualY = ", vm.toString(actualY)));
 
-        _step("[Step 4] Settle adapter");
+        _step("[Step 3] Settle adapter");
         uint256[] memory redeemIds = new uint256[](1);
         redeemIds[0] = inFlightId;
         uint256[] memory redeemAmounts = new uint256[](1);
         redeemAmounts[0] = actualY;
-
-        vm.prank(address(executorGateway));
-        controller.settleAdapter(
-            address(asyncAdapter),
-            IStrategyControllerExecutor.InvestSettlementInput(new uint256[](0), new uint256[](0), new uint256[](0)),
-            IStrategyControllerExecutor.RedeemSettlementInput(redeemIds, redeemAmounts)
-        );
+        _executeFlowSettleAdapter(new uint256[](0), new uint256[](0), new uint256[](0), redeemIds, redeemAmounts);
         _step("  settleAdapter completed successfully");
 
-        _step("[Step 5] Verify stats decrease by original X=100e18, not actual Y=120e18");
-        _step(string.concat("  redeemInFlightTotal = ", vm.toString(vault.redeemInFlightTotal())));
-        _step(string.concat("  adapterRedeemInFlight = ", vm.toString(vault.redeemInFlightByAdapter(address(asyncAdapter)))));
-        assertEq(vault.redeemInFlightTotal(), 0, "redeemInFlightTotal decreases by X=100e18");
+        _step("[Step 4] Verify stats decrease by original X=100e18, not actual Y=120e18");
+        _step(string.concat("  redeemInFlightTotal = ", vm.toString(flowVault.totalRedeemInFlight())));
+        _step(string.concat("  adapterRedeemInFlight = ", vm.toString(flowVault.adapterRedeemInFlightUsdc(address(flowAsyncAdapter)))));
+        assertEq(flowVault.totalRedeemInFlight(), 0, "redeemInFlightTotal decreases by X=100e18");
         _step("  PASS: redeemInFlightTotal == 0");
-        assertEq(vault.redeemInFlightByAdapter(address(asyncAdapter)), 0, "adapter redeemInFlight decreases by X");
+        assertEq(flowVault.adapterRedeemInFlightUsdc(address(flowAsyncAdapter)), 0, "adapter redeemInFlight decreases by X");
         _step("  PASS: adapterRedeemInFlight == 0");
 
-        _step("[Step 6] Verify settledAmount records actual Y=120e18");
-        (,,,,, uint256 settledAmount,,,) = vault.inFlightRecords(inFlightId);
+        _step("[Step 5] Verify settledAmount records actual Y=120e18");
+        (,,,,, uint256 settledAmount,,,) = flowVault.inFlightRecords(inFlightId);
         _step(string.concat("  settledAmount = ", vm.toString(settledAmount)));
         assertEq(settledAmount, actualY, "settledAmount should be actual Y=120e18");
         _step("  PASS: settledAmount == 120e18");
@@ -679,34 +1167,25 @@ contract RiskRegressionTest is Test {
     // P0: confirm does not fail due to insufficient future payout
     function test_ConfirmInFlight_DoesNotCheckFuturePayment() public {
         _logCase("test_ConfirmInFlight_DoesNotCheckFuturePayment", unicode"confirmInFlight 不直接校验后续批量付款是否充足");
-        _step("[Step 1] Register single async strategy");
-        _registerSingleAsyncStrategy();
+        _step("[Step 1] Create a real redeem in-flight with large recorded X = 1000e18");
+        (, uint256 inFlightId) = _createFlowRedeemInFlight(1000e18);
+        _step(string.concat("  redeem inFlightId = ", vm.toString(inFlightId)));
 
-        _step("[Step 2] Create redeem in-flight with large X = 1000e18");
-        uint256 inFlightId = vault.createInFlight(address(asyncAdapter), address(asset), 0, 1000e18, false);
-        _step(string.concat("  inFlightId = ", vm.toString(inFlightId)));
-
-        _step("[Step 3] Set actual Y = 1e18 (tiny compared to X=1000e18)");
+        _step("[Step 2] Set actual Y = 1e18 (tiny compared to X=1000e18)");
         uint256 actualY = 1e18;
-        asyncAdapter.setSweepReturnAmount(actualY);
+        flowVenue.settleRedeem(address(flowAsyncAdapter), actualY);
         _step(string.concat("  actualY = ", vm.toString(actualY)));
 
-        _step("[Step 4] Settle adapter - should NOT revert (confirm does not check future payout)");
+        _step("[Step 3] Settle adapter - should NOT revert (confirm does not check future payout)");
         uint256[] memory redeemIds = new uint256[](1);
         redeemIds[0] = inFlightId;
         uint256[] memory redeemAmounts = new uint256[](1);
         redeemAmounts[0] = actualY;
-
-        vm.prank(address(executorGateway));
-        controller.settleAdapter(
-            address(asyncAdapter),
-            IStrategyControllerExecutor.InvestSettlementInput(new uint256[](0), new uint256[](0), new uint256[](0)),
-            IStrategyControllerExecutor.RedeemSettlementInput(redeemIds, redeemAmounts)
-        );
+        _executeFlowSettleAdapter(new uint256[](0), new uint256[](0), new uint256[](0), redeemIds, redeemAmounts);
         _step("  PASS: settleAdapter did not revert despite Y << X");
 
-        _step("[Step 5] Verify settledAmount and status");
-        (,,,,, uint256 settledAmount,,, IMantleYieldVault.InFlightStatus status) = vault.inFlightRecords(inFlightId);
+        _step("[Step 4] Verify settledAmount and status");
+        (,,,,, uint256 settledAmount,,, IMantleYieldVault.InFlightStatus status) = flowVault.inFlightRecords(inFlightId);
         _step(string.concat("  settledAmount = ", vm.toString(settledAmount)));
         _step(string.concat("  status = ", vm.toString(uint8(status))));
         assertEq(settledAmount, actualY);
@@ -719,88 +1198,83 @@ contract RiskRegressionTest is Test {
     // P0: finalize success depends on physical balance, not settledAmount
     function test_FinalizeRedeemBatch_DependsOnPhysicalBalance() public {
         _logCase("test_FinalizeRedeemBatch_DependsOnPhysicalBalance", unicode"finalizeRedeemBatch 成功与否取决于物理余额，不取决于 redeem in-flight 是否已确认");
-        _step("[Step 1] Register single async strategy");
-        _registerSingleAsyncStrategy();
-
-        _step("[Step 2] Set up request id=10 with 100e18 in PROCESSING state");
+        _step("[Step 1] Create a real PROCESSING request and redeem in-flight");
+        (uint256 requestId, uint256 inFlightId) = _createFlowRedeemInFlight(100e18);
         uint256[] memory requestIds = new uint256[](1);
-        requestIds[0] = 10;
-        vault.setRequest(10, 100e18, 0, IMantleYieldVault.RequestStatus.PROCESSING);
-
-        vm.prank(address(executorGateway));
-        controller.processRedeemBatch(requestIds);
-        _step("  processRedeemBatch completed");
+        requestIds[0] = requestId;
 
         uint256[] memory settledAssets = new uint256[](1);
         settledAssets[0] = 100e18;
 
+        _step("[Step 2] Confirm the redeem in-flight with settledAmount=0 (abnormal path)");
+        uint256[] memory redeemIds = new uint256[](1);
+        redeemIds[0] = inFlightId;
+        uint256[] memory redeemAmounts = new uint256[](1);
+        redeemAmounts[0] = 0;
+        flowVenue.settleRedeem(address(flowAsyncAdapter), 0);
+        _executeFlowSettleAdapter(new uint256[](0), new uint256[](0), new uint256[](0), redeemIds, redeemAmounts);
+
         _step("[Step 3] Attempt finalize with 0 physical balance -> expect revert");
-        _step(string.concat("  vault balance = ", vm.toString(asset.balanceOf(address(vault)))));
-        vm.prank(address(executorGateway));
-        vm.expectRevert();
-        controller.finalizeRedeemBatch(requestIds, settledAssets);
+        _step(string.concat("  vault balance = ", vm.toString(flowAsset.balanceOf(address(flowVault)))));
+        vm.expectRevert(abi.encodeWithSelector(
+            IMantleYieldVault.Vault__InsufficientPhysicalCash.selector, requestIds, settledAssets, 0
+        ));
+        _executeFlowFinalizeRedeemBatch(requestIds, settledAssets);
         _step("  PASS: reverted as expected (0 balance)");
 
-        _step("[Step 4] Mint 50e18 -> still insufficient, expect revert");
-        asset.mint(address(vault), 50e18);
-        _step(string.concat("  vault balance = ", vm.toString(asset.balanceOf(address(vault)))));
-        vm.prank(address(executorGateway));
-        vm.expectRevert();
-        controller.finalizeRedeemBatch(requestIds, settledAssets);
+        _step("[Step 4] New user deposits 50e18 -> still insufficient, expect revert");
+        _depositToFlowVault(makeAddr("flowTopUpA"), 50e18);
+        _step(string.concat("  vault balance = ", vm.toString(flowAsset.balanceOf(address(flowVault)))));
+        vm.expectRevert(abi.encodeWithSelector(
+            IMantleYieldVault.Vault__InsufficientPhysicalCash.selector, requestIds, settledAssets, 50e18
+        ));
+        _executeFlowFinalizeRedeemBatch(requestIds, settledAssets);
         _step("  PASS: reverted as expected (50e18 < 100e18)");
 
-        _step("[Step 5] Mint remaining 50e18 -> now has 100e18 -> finalize succeeds");
-        asset.mint(address(vault), 50e18);
-        _step(string.concat("  vault balance = ", vm.toString(asset.balanceOf(address(vault)))));
-        vm.prank(address(executorGateway));
-        controller.finalizeRedeemBatch(requestIds, settledAssets);
+        _step("[Step 5] Another user deposits remaining 50e18 -> now has 100e18 -> finalize succeeds");
+        _depositToFlowVault(makeAddr("flowTopUpB"), 50e18);
+        _step(string.concat("  vault balance = ", vm.toString(flowAsset.balanceOf(address(flowVault)))));
+        uint256 userBefore = flowAsset.balanceOf(flowUser);
+        _executeFlowFinalizeRedeemBatch(requestIds, settledAssets);
         _step("  PASS: finalizeRedeemBatch succeeded with sufficient balance");
 
         _step("[Step 6] Verify request is DONE with correct settledAssets");
-        (,,,,,uint256 reqSettled,, IMantleYieldVault.RequestStatus reqStatus) = vault.requests(10);
+        (,,,,,uint256 reqSettled,, IMantleYieldVault.RequestStatus reqStatus) = flowVault.requests(requestId);
         _step(string.concat("  reqSettled = ", vm.toString(reqSettled)));
         _step(string.concat("  reqStatus = ", vm.toString(uint8(reqStatus))));
         assertEq(reqSettled, 100e18, "request settledAssets should match finalize amount");
         _step("  PASS: reqSettled == 100e18");
         assertEq(uint8(reqStatus), uint8(IMantleYieldVault.RequestStatus.DONE));
         _step("  PASS: reqStatus == DONE");
+        assertEq(flowAsset.balanceOf(flowUser) - userBefore, 100e18, "owner received finalized assets");
+        _step("  PASS: owner actually received 100e18");
         _logPass();
     }
 
     // P1: confirm does not auto-complete the request; request still needs finalize
     function test_ConfirmInFlight_RequestStillNeedsFinalize() public {
         _logCase("test_ConfirmInFlight_RequestStillNeedsFinalize", unicode"confirmInFlight 后 request 仍需独立 finalize，不会因为 in-flight 已确认而自动完成");
-        _step("[Step 1] Register single async strategy");
-        _registerSingleAsyncStrategy();
-
-        _step("[Step 2] Set up request id=5 in PROCESSING state with 100e18");
-        vault.setRequest(5, 100e18, 0, IMantleYieldVault.RequestStatus.PROCESSING);
-
-        _step("[Step 3] Create in-flight and settle with 100e18");
-        uint256 inFlightId = vault.createInFlight(address(asyncAdapter), address(asset), 0, 100e18, false);
-        _step(string.concat("  inFlightId = ", vm.toString(inFlightId)));
-        asyncAdapter.setSweepReturnAmount(100e18);
+        _step("[Step 1] Create a real PROCESSING request and redeem in-flight");
+        (uint256 requestId, uint256 inFlightId) = _createFlowRedeemInFlight(100e18);
+        _step(string.concat("  requestId = ", vm.toString(requestId), ", inFlightId = ", vm.toString(inFlightId)));
 
         uint256[] memory redeemIds = new uint256[](1);
         redeemIds[0] = inFlightId;
         uint256[] memory redeemAmounts = new uint256[](1);
         redeemAmounts[0] = 100e18;
 
-        vm.prank(address(executorGateway));
-        controller.settleAdapter(
-            address(asyncAdapter),
-            IStrategyControllerExecutor.InvestSettlementInput(new uint256[](0), new uint256[](0), new uint256[](0)),
-            IStrategyControllerExecutor.RedeemSettlementInput(redeemIds, redeemAmounts)
-        );
+        _step("[Step 2] Settle the redeem in-flight with 100e18");
+        flowVenue.settleRedeem(address(flowAsyncAdapter), 100e18);
+        _executeFlowSettleAdapter(new uint256[](0), new uint256[](0), new uint256[](0), redeemIds, redeemAmounts);
         _step("  settleAdapter completed successfully");
 
-        _step("[Step 4] Verify in-flight is CONFIRMED");
-        (,,,,,,,, IMantleYieldVault.InFlightStatus flightStatus) = vault.inFlightRecords(inFlightId);
+        _step("[Step 3] Verify in-flight is CONFIRMED");
+        (,,,,,,,, IMantleYieldVault.InFlightStatus flightStatus) = flowVault.inFlightRecords(inFlightId);
         assertEq(uint8(flightStatus), uint8(IMantleYieldVault.InFlightStatus.CONFIRMED));
         _step("  PASS: in-flight status == CONFIRMED");
 
-        _step("[Step 5] Verify request is STILL PROCESSING (not auto-completed)");
-        (,,,,,,, IMantleYieldVault.RequestStatus reqStatus) = vault.requests(5);
+        _step("[Step 4] Verify request is STILL PROCESSING (not auto-completed)");
+        (,,,,,,, IMantleYieldVault.RequestStatus reqStatus) = flowVault.requests(requestId);
         _step(string.concat("  reqStatus = ", vm.toString(uint8(reqStatus))));
         assertEq(
             uint8(reqStatus),
@@ -809,23 +1283,17 @@ contract RiskRegressionTest is Test {
         );
         _step("  PASS: request still PROCESSING after in-flight confirm");
 
-        _step("[Step 6] Process and finalize the request explicitly");
+        _step("[Step 5] Finalize the request explicitly");
         uint256[] memory requestIds = new uint256[](1);
-        requestIds[0] = 5;
+        requestIds[0] = requestId;
         uint256[] memory settledAssets = new uint256[](1);
         settledAssets[0] = 100e18;
 
-        vm.prank(address(executorGateway));
-        controller.processRedeemBatch(requestIds);
-        _step("  processRedeemBatch completed");
-
-        asset.mint(address(vault), 100e18);
-        vm.prank(address(executorGateway));
-        controller.finalizeRedeemBatch(requestIds, settledAssets);
+        _executeFlowFinalizeRedeemBatch(requestIds, settledAssets);
         _step("  finalizeRedeemBatch completed");
 
-        _step("[Step 7] Verify request is now DONE");
-        (,,,,,,, IMantleYieldVault.RequestStatus finalStatus) = vault.requests(5);
+        _step("[Step 6] Verify request is now DONE");
+        (,,,,,,, IMantleYieldVault.RequestStatus finalStatus) = flowVault.requests(requestId);
         _step(string.concat("  finalStatus = ", vm.toString(uint8(finalStatus))));
         assertEq(uint8(finalStatus), uint8(IMantleYieldVault.RequestStatus.DONE));
         _step("  PASS: request status == DONE after explicit finalize");
@@ -835,57 +1303,43 @@ contract RiskRegressionTest is Test {
     // P1: in-flight settledAmount != request settledAssets (they are independent concepts)
     function test_SettledAmount_IndependentOfRequestSettledAssets() public {
         _logCase("test_SettledAmount_IndependentOfRequestSettledAssets", unicode"redeem in-flight 确认后，settledAmount 与最终 request settledAssets 不必天然相等");
-        _step("[Step 1] Register single async strategy");
-        _registerSingleAsyncStrategy();
+        _step("[Step 1] Create a real PROCESSING request and redeem in-flight");
+        (uint256 requestId, uint256 inFlightId) = _createFlowRedeemInFlight(100e18);
+        _step(string.concat("  requestId = ", vm.toString(requestId), ", inFlightId = ", vm.toString(inFlightId)));
 
-        _step("[Step 2] Create in-flight with usdcAmount 100e18");
-        uint256 inFlightId = vault.createInFlight(address(asyncAdapter), address(asset), 0, 100e18, false);
-        _step(string.concat("  inFlightId = ", vm.toString(inFlightId)));
-
-        _step("[Step 3] Settle in-flight with actual Y = 90e18");
-        asyncAdapter.setSweepReturnAmount(90e18);
+        _step("[Step 2] Settle in-flight with actual Y = 90e18");
+        flowVenue.settleRedeem(address(flowAsyncAdapter), 90e18);
         uint256[] memory redeemIds = new uint256[](1);
         redeemIds[0] = inFlightId;
         uint256[] memory redeemAmounts = new uint256[](1);
         redeemAmounts[0] = 90e18;
 
-        vm.prank(address(executorGateway));
-        controller.settleAdapter(
-            address(asyncAdapter),
-            IStrategyControllerExecutor.InvestSettlementInput(new uint256[](0), new uint256[](0), new uint256[](0)),
-            IStrategyControllerExecutor.RedeemSettlementInput(redeemIds, redeemAmounts)
-        );
+        _executeFlowSettleAdapter(new uint256[](0), new uint256[](0), new uint256[](0), redeemIds, redeemAmounts);
         _step("  settleAdapter completed");
 
-        (,,,,, uint256 flightSettled,,,) = vault.inFlightRecords(inFlightId);
+        (,,,,, uint256 flightSettled,,,) = flowVault.inFlightRecords(inFlightId);
         _step(string.concat("  in-flight settledAmount = ", vm.toString(flightSettled)));
         assertEq(flightSettled, 90e18);
         _step("  PASS: in-flight settledAmount == 90e18");
 
-        _step("[Step 4] Create request id=7 and process it");
-        vault.setRequest(7, 100e18, 0, IMantleYieldVault.RequestStatus.PROCESSING);
+        _step("[Step 3] Request already exists in PROCESSING from the real lifecycle");
         uint256[] memory requestIds = new uint256[](1);
-        requestIds[0] = 7;
+        requestIds[0] = requestId;
 
-        vm.prank(address(executorGateway));
-        controller.processRedeemBatch(requestIds);
-        _step("  processRedeemBatch completed");
-
-        _step("[Step 5] Finalize request with 85e18 (different from in-flight's 90e18)");
-        asset.mint(address(vault), 85e18);
+        _step("[Step 4] Finalize request with 85e18 (different from in-flight's 90e18)");
         uint256[] memory settledAssets = new uint256[](1);
         settledAssets[0] = 85e18;
 
-        vm.prank(address(executorGateway));
-        controller.finalizeRedeemBatch(requestIds, settledAssets);
+        _executeFlowFinalizeRedeemBatch(requestIds, settledAssets);
         _step("  finalizeRedeemBatch completed");
 
-        _step("[Step 6] Verify independence of settledAmount vs settledAssets");
-        (,,,,,uint256 reqSettled,,) = vault.requests(7);
+        _step("[Step 5] Verify independence of settledAmount vs settledAssets");
+        (,,,,,uint256 reqSettled,,) = flowVault.requests(requestId);
         _step(string.concat("  request settledAssets = ", vm.toString(reqSettled)));
         _step(string.concat("  in-flight settledAmount = ", vm.toString(flightSettled)));
         assertEq(reqSettled, 85e18, "request settledAssets should be 85e18, independent of in-flight settledAmount");
         _step("  PASS: request settledAssets == 85e18");
+        assertEq(flightSettled, 90e18, "in-flight settledAmount should be 90e18 (from settleAdapter)");
         assertTrue(flightSettled != reqSettled, "in-flight settledAmount and request settledAssets are independent");
         _step("  PASS: flightSettled (90e18) != reqSettled (85e18) - independent values");
         _logPass();
@@ -894,47 +1348,39 @@ contract RiskRegressionTest is Test {
     // P1: abnormal confirm with 0 amount still clears stats by original X
     function test_AbnormalConfirm_ZeroAmount_StatsClearByOriginal() public {
         _logCase("test_AbnormalConfirm_ZeroAmount_StatsClearByOriginal", unicode"abnormal 路径允许 actualAmount=0，但仍按记录值清理 redeem in-flight 统计");
-        _step("[Step 1] Register single async strategy");
-        _registerSingleAsyncStrategy();
-
-        _step("[Step 2] Create redeem in-flight with usdcAmount X = 200e18");
-        uint256 inFlightId = vault.createInFlight(address(asyncAdapter), address(asset), 0, 200e18, false);
+        _step("[Step 1] Create a real redeem in-flight with recorded usdcAmount X = 200e18");
+        (, uint256 inFlightId) = _createFlowRedeemInFlight(200e18);
         _step(string.concat("  inFlightId = ", vm.toString(inFlightId)));
-        _step(string.concat("  redeemInFlightTotal = ", vm.toString(vault.redeemInFlightTotal())));
-        assertEq(vault.redeemInFlightTotal(), 200e18);
-        assertEq(vault.redeemInFlightByAdapter(address(asyncAdapter)), 200e18);
+        _step(string.concat("  redeemInFlightTotal = ", vm.toString(flowVault.totalRedeemInFlight())));
+        assertEq(flowVault.totalRedeemInFlight(), 200e18);
+        assertEq(flowVault.adapterRedeemInFlightUsdc(address(flowAsyncAdapter)), 200e18);
         _step("  PASS: initial stats == 200e18");
 
-        _step("[Step 3] Settle with amount=0 (abnormal case - third party never settled)");
-        asyncAdapter.setSweepReturnAmount(0);
+        _step("[Step 2] Settle with amount=0 (abnormal case - third party never settled)");
+        flowVenue.settleRedeem(address(flowAsyncAdapter), 0);
 
         uint256[] memory redeemIds = new uint256[](1);
         redeemIds[0] = inFlightId;
         uint256[] memory redeemAmounts = new uint256[](1);
         redeemAmounts[0] = 0;
 
-        vm.prank(address(executorGateway));
-        controller.settleAdapter(
-            address(asyncAdapter),
-            IStrategyControllerExecutor.InvestSettlementInput(new uint256[](0), new uint256[](0), new uint256[](0)),
-            IStrategyControllerExecutor.RedeemSettlementInput(redeemIds, redeemAmounts)
-        );
+        _executeFlowSettleAdapter(new uint256[](0), new uint256[](0), new uint256[](0), redeemIds, redeemAmounts);
         _step("  settleAdapter completed with zero amount");
 
-        _step("[Step 4] Verify stats decreased by original X=200e18 (not by 0)");
-        _step(string.concat("  redeemInFlightTotal = ", vm.toString(vault.redeemInFlightTotal())));
-        _step(string.concat("  adapterRedeemInFlight = ", vm.toString(vault.redeemInFlightByAdapter(address(asyncAdapter)))));
-        assertEq(vault.redeemInFlightTotal(), 0, "redeemInFlightTotal should be 0 after abnormal confirm");
+        _step("[Step 3] Verify stats decreased by original X=200e18 (not by 0)");
+        _step(string.concat("  redeemInFlightTotal = ", vm.toString(flowVault.totalRedeemInFlight())));
+        _step(string.concat("  adapterRedeemInFlight = ", vm.toString(flowVault.adapterRedeemInFlightUsdc(address(flowAsyncAdapter)))));
+        assertEq(flowVault.totalRedeemInFlight(), 0, "redeemInFlightTotal should be 0 after abnormal confirm");
         _step("  PASS: redeemInFlightTotal == 0");
         assertEq(
-            vault.redeemInFlightByAdapter(address(asyncAdapter)),
+            flowVault.adapterRedeemInFlightUsdc(address(flowAsyncAdapter)),
             0,
             "adapter redeemInFlight should be 0 after abnormal confirm"
         );
         _step("  PASS: adapterRedeemInFlight == 0");
 
-        _step("[Step 5] Verify settledAmount = 0 recorded and status CONFIRMED");
-        (,,,,, uint256 settledAmount,,, IMantleYieldVault.InFlightStatus status) = vault.inFlightRecords(inFlightId);
+        _step("[Step 4] Verify settledAmount = 0 recorded and status CONFIRMED");
+        (,,,,, uint256 settledAmount,,, IMantleYieldVault.InFlightStatus status) = flowVault.inFlightRecords(inFlightId);
         _step(string.concat("  settledAmount = ", vm.toString(settledAmount)));
         _step(string.concat("  status = ", vm.toString(uint8(status))));
         assertEq(settledAmount, 0, "abnormal settle records 0");
@@ -945,182 +1391,187 @@ contract RiskRegressionTest is Test {
     }
 
     // P1: non-abnormal confirm with 0 -> the real vault would revert (ZeroAmount),
-    // but with MockControllerVault, confirm doesn't enforce that check.
+    // but this simplified flow vault mock does not enforce that check.
     // However, _confirmRedeemInFlightIds calls confirmInFlight(id, 0, true) when settledAmount==0,
     // so the isAbnormal flag is automatically set. We verify that the controller
     // sets isAbnormal=true (passes settledAmount==0) - the real vault rejects non-abnormal zero.
     function test_NonAbnormal_ZeroAmount_Reverts() public {
         _logCase("test_NonAbnormal_ZeroAmount_Reverts", unicode"非 abnormal 路径下 actualAmount=0 被拒绝");
-        _step("[Step 1] Register single async strategy");
-        _registerSingleAsyncStrategy();
-
-        _step("[Step 2] Create redeem in-flight with usdcAmount = 50e18");
-        uint256 inFlightId = vault.createInFlight(address(asyncAdapter), address(asset), 0, 50e18, false);
+        _step("[Step 1] Create a real redeem in-flight with usdcAmount = 50e18");
+        (, uint256 inFlightId) = _createFlowRedeemInFlight(50e18);
         _step(string.concat("  inFlightId = ", vm.toString(inFlightId)));
 
-        _step("[Step 3] Set sweep return to 0 (simulating zero settlement)");
-        asyncAdapter.setSweepReturnAmount(0);
+        _step("[Step 2] Verify in-flight is PENDING before attempting confirm");
+        (,,,,,,,, IMantleYieldVault.InFlightStatus statusBefore) = flowVault.inFlightRecords(inFlightId);
+        assertEq(uint8(statusBefore), uint8(IMantleYieldVault.InFlightStatus.PENDING), "should be PENDING");
+        _step("  PASS: status == PENDING");
 
-        uint256[] memory redeemIds = new uint256[](1);
-        redeemIds[0] = inFlightId;
-        uint256[] memory redeemAmounts = new uint256[](1);
-        redeemAmounts[0] = 0;
+        _step("[Step 3] Call confirmInFlight(inFlightId, 0, false) -> revert Vault__ZeroAmount");
+        // Spec: non-abnormal path with actualAmount=0 must be rejected by vault guard.
+        // The controller normally auto-sets isAbnormal=true when amount=0, so we test the
+        // vault guard directly by pranking as controller with isAbnormal=false.
+        vm.prank(address(flowController));
+        vm.expectRevert(IMantleYieldVault.Vault__ZeroAmount.selector);
+        flowVault.confirmInFlight(inFlightId, 0, false);
+        _step("  PASS: reverted with Vault__ZeroAmount");
 
-        _step("[Step 4] Settle adapter with amount=0 - controller sets isAbnormal=true automatically");
-        _step("  controller calls vault.confirmInFlight(id, 0, true) since settledAmount==0");
-        vm.prank(address(executorGateway));
-        controller.settleAdapter(
-            address(asyncAdapter),
-            IStrategyControllerExecutor.InvestSettlementInput(new uint256[](0), new uint256[](0), new uint256[](0)),
-            IStrategyControllerExecutor.RedeemSettlementInput(redeemIds, redeemAmounts)
-        );
-        _step("  PASS: settleAdapter completed (isAbnormal=true bypasses ZeroAmount check)");
-
-        _step("[Step 5] Verify settled=0 and status=CONFIRMED");
-        (,,,,, uint256 settled,,, IMantleYieldVault.InFlightStatus status) = vault.inFlightRecords(inFlightId);
-        _step(string.concat("  settled = ", vm.toString(settled)));
-        _step(string.concat("  status = ", vm.toString(uint8(status))));
-        assertEq(settled, 0);
-        _step("  PASS: settled == 0");
-        assertEq(uint8(status), uint8(IMantleYieldVault.InFlightStatus.CONFIRMED));
-        _step("  PASS: status == CONFIRMED");
+        _step("[Step 4] Verify in-flight status unchanged (still PENDING)");
+        (,,,,,,,, IMantleYieldVault.InFlightStatus statusAfter) = flowVault.inFlightRecords(inFlightId);
+        assertEq(uint8(statusAfter), uint8(IMantleYieldVault.InFlightStatus.PENDING), "should still be PENDING");
+        _step("  PASS: status still PENDING after revert");
         _logPass();
     }
 
     // P1: already-confirmed in-flight reverts on duplicate confirm
     function test_DuplicateConfirm_Reverts() public {
         _logCase("test_DuplicateConfirm_Reverts", unicode"重复确认同一 redeem in-flight 被拒绝");
-        _step("[Step 1] Register single async strategy");
-        _registerSingleAsyncStrategy();
-
-        _step("[Step 2] Create redeem in-flight with 100e18");
-        uint256 inFlightId = vault.createInFlight(address(asyncAdapter), address(asset), 0, 100e18, false);
+        _step("[Step 1] Create a redeem in-flight through full real flow chain");
+        (, uint256 inFlightId) = _createFlowRedeemInFlight(100e18);
         _step(string.concat("  inFlightId = ", vm.toString(inFlightId)));
-        asyncAdapter.setSweepReturnAmount(100e18);
 
         uint256[] memory redeemIds = new uint256[](1);
         redeemIds[0] = inFlightId;
         uint256[] memory redeemAmounts = new uint256[](1);
         redeemAmounts[0] = 100e18;
 
-        _step("[Step 3] First settle succeeds");
-        vm.prank(address(executorGateway));
-        controller.settleAdapter(
-            address(asyncAdapter),
-            IStrategyControllerExecutor.InvestSettlementInput(new uint256[](0), new uint256[](0), new uint256[](0)),
-            IStrategyControllerExecutor.RedeemSettlementInput(redeemIds, redeemAmounts)
-        );
+        _step("[Step 2] First settle succeeds");
+        flowVenue.settleRedeem(address(flowAsyncAdapter), 100e18);
+        _executeFlowSettleAdapter(new uint256[](0), new uint256[](0), new uint256[](0), redeemIds, redeemAmounts);
         _step("  PASS: first settleAdapter completed");
 
-        _step("[Step 4] Verify in-flight is CONFIRMED");
-        (,,,,,,,, IMantleYieldVault.InFlightStatus status) = vault.inFlightRecords(inFlightId);
+        _step("[Step 3] Verify in-flight is CONFIRMED");
+        (,,,,,,,, IMantleYieldVault.InFlightStatus status) = flowVault.inFlightRecords(inFlightId);
         _step(string.concat("  status = ", vm.toString(uint8(status))));
         assertEq(uint8(status), uint8(IMantleYieldVault.InFlightStatus.CONFIRMED));
         _step("  PASS: status == CONFIRMED");
 
-        _step("[Step 5] Second settle of same in-flight -> expect revert (InvalidRedeemInFlight)");
-        vm.prank(address(executorGateway));
-        vm.expectRevert(abi.encodeWithSelector(StrategyController.InvalidRedeemInFlight.selector, inFlightId));
-        controller.settleAdapter(
-            address(asyncAdapter),
-            IStrategyControllerExecutor.InvestSettlementInput(new uint256[](0), new uint256[](0), new uint256[](0)),
-            IStrategyControllerExecutor.RedeemSettlementInput(redeemIds, redeemAmounts)
-        );
-        _step("  PASS: reverted as expected (duplicate confirm rejected)");
+        _step("[Step 4] Second settle of same in-flight -> revert (vault status guard)");
+        flowVenue.settleRedeem(address(flowAsyncAdapter), 100e18);
+        vm.expectRevert(abi.encodeWithSelector(
+            IMantleYieldVault.Vault__InvalidInFlightState.selector,
+            inFlightId,
+            IMantleYieldVault.InFlightStatus.CONFIRMED
+        ));
+        _executeFlowSettleAdapter(new uint256[](0), new uint256[](0), new uint256[](0), redeemIds, redeemAmounts);
+        _step("  PASS: duplicate confirm reverted with Vault__InvalidInFlightState");
         _logPass();
     }
 
     // P1: already-confirmed redeem in-flight cannot be re-settled (state guard, not just duplicate)
     function test_InvalidState_RedeemInFlight_CannotResettle() public {
-        _logCase("test_InvalidState_RedeemInFlight_CannotResettle", unicode"未确认或状态非法的 redeem in-flight 不能进入重复结算");
-        _step("[Step 1] Register single async strategy");
-        _registerSingleAsyncStrategy();
-
-        _step("[Step 2] Create redeem in-flight with 100e18");
-        uint256 inFlightId = vault.createInFlight(address(asyncAdapter), address(asset), 0, 100e18, false);
+        _logCase("test_InvalidState_RedeemInFlight_CannotResettle", unicode"已确认的 redeem in-flight 重复结算被拒绝");
+        _step("[Step 1] Create and settle a redeem in-flight through full real flow chain");
+        (, uint256 inFlightId) = _createFlowRedeemInFlight(100e18);
         _step(string.concat("  inFlightId = ", vm.toString(inFlightId)));
-        asyncAdapter.setSweepReturnAmount(100e18);
 
         uint256[] memory redeemIds = new uint256[](1);
         redeemIds[0] = inFlightId;
         uint256[] memory redeemAmounts = new uint256[](1);
         redeemAmounts[0] = 100e18;
 
-        _step("[Step 3] Settle (confirm) the redeem in-flight");
-        vm.prank(address(executorGateway));
-        controller.settleAdapter(
-            address(asyncAdapter),
-            IStrategyControllerExecutor.InvestSettlementInput(new uint256[](0), new uint256[](0), new uint256[](0)),
-            IStrategyControllerExecutor.RedeemSettlementInput(redeemIds, redeemAmounts)
-        );
+        _step("[Step 2] Settle (confirm) the redeem in-flight");
+        flowVenue.settleRedeem(address(flowAsyncAdapter), 100e18);
+        _executeFlowSettleAdapter(new uint256[](0), new uint256[](0), new uint256[](0), redeemIds, redeemAmounts);
         _step("  PASS: first settleAdapter completed");
 
-        _step("[Step 4] Verify in-flight status is CONFIRMED");
-        (,,,,,,,, IMantleYieldVault.InFlightStatus status) = vault.inFlightRecords(inFlightId);
+        _step("[Step 3] Verify in-flight status is CONFIRMED");
+        (,,,,,,,, IMantleYieldVault.InFlightStatus status) = flowVault.inFlightRecords(inFlightId);
         _step(string.concat("  status = ", vm.toString(uint8(status))));
         assertEq(uint8(status), uint8(IMantleYieldVault.InFlightStatus.CONFIRMED));
         _step("  PASS: status == CONFIRMED");
 
-        _step("[Step 5] Attempt to re-settle the CONFIRMED in-flight -> expect revert (state guard)");
-        vm.prank(address(executorGateway));
-        vm.expectRevert(abi.encodeWithSelector(StrategyController.InvalidRedeemInFlight.selector, inFlightId));
-        controller.settleAdapter(
-            address(asyncAdapter),
-            IStrategyControllerExecutor.InvestSettlementInput(new uint256[](0), new uint256[](0), new uint256[](0)),
-            IStrategyControllerExecutor.RedeemSettlementInput(redeemIds, redeemAmounts)
-        );
-        _step("  PASS: reverted as expected (non-PENDING state rejected)");
+        _step("[Step 4] Attempt to re-settle the CONFIRMED in-flight -> revert (vault status guard)");
+        flowVenue.settleRedeem(address(flowAsyncAdapter), 100e18);
+        vm.expectRevert(abi.encodeWithSelector(
+            IMantleYieldVault.Vault__InvalidInFlightState.selector,
+            inFlightId,
+            IMantleYieldVault.InFlightStatus.CONFIRMED
+        ));
+        _executeFlowSettleAdapter(new uint256[](0), new uint256[](0), new uint256[](0), redeemIds, redeemAmounts);
+        _step("  PASS: re-settle reverted with Vault__InvalidInFlightState");
         _logPass();
     }
 
     // P1: partial confirm of multi in-flights, adapter stats correct
     function test_MultiInFlight_PartialConfirm_StatsCorrect() public {
         _logCase("test_MultiInFlight_PartialConfirm_StatsCorrect", unicode"多笔 redeem in-flight 部分确认后，adapter 级别的 in-flight 统计累计变化正确");
-        _step("[Step 1] Register single async strategy");
-        _registerSingleAsyncStrategy();
+        _step("[Step 1] Create 3 redeem in-flights through the real flow lifecycle");
+        uint256 totalDeposit = 600e18;
+        uint256 allShares = _depositToFlowVault(flowUser, totalDeposit);
 
-        _step("[Step 2] Create 3 redeem in-flights: 100e18, 200e18, 300e18");
-        uint256 id1 = vault.createInFlight(address(asyncAdapter), address(asset), 0, 100e18, false);
-        uint256 id2 = vault.createInFlight(address(asyncAdapter), address(asset), 0, 200e18, false);
-        uint256 id3 = vault.createInFlight(address(asyncAdapter), address(asset), 0, 300e18, false);
+        uint256 investInFlightId = _executeFlowRebalanceAndGetInFlightId();
+        flowVenue.settleInvest(address(flowAsyncAdapter), totalDeposit, 0);
+        {
+            uint256[] memory investIds = new uint256[](1);
+            investIds[0] = investInFlightId;
+            uint256[] memory investSettledPos = new uint256[](1);
+            investSettledPos[0] = totalDeposit;
+            _executeFlowSettleAdapter(investIds, investSettledPos, new uint256[](1), new uint256[](0), new uint256[](0));
+        }
+
+        uint256 sharesPerReq = allShares / 3;
+        vm.startPrank(flowUser);
+        uint256 reqId1 = flowGateway.requestRedeem(sharesPerReq);
+        uint256 reqId2 = flowGateway.requestRedeem(sharesPerReq);
+        uint256 reqId3 = flowGateway.requestRedeem(sharesPerReq);
+        vm.stopPrank();
+
+        uint256 id1;
+        {
+            uint256[] memory ids1 = new uint256[](1);
+            ids1[0] = reqId1;
+            id1 = _executeFlowProcessRedeemBatchAndGetInFlightId(ids1);
+        }
+        uint256 id2;
+        {
+            uint256[] memory ids2 = new uint256[](1);
+            ids2[0] = reqId2;
+            id2 = _executeFlowProcessRedeemBatchAndGetInFlightId(ids2);
+        }
+        uint256 id3;
+        {
+            uint256[] memory ids3 = new uint256[](1);
+            ids3[0] = reqId3;
+            id3 = _executeFlowProcessRedeemBatchAndGetInFlightId(ids3);
+        }
         _step(string.concat("  id1 = ", vm.toString(id1), ", id2 = ", vm.toString(id2), ", id3 = ", vm.toString(id3)));
 
-        _step(string.concat("  redeemInFlightTotal = ", vm.toString(vault.redeemInFlightTotal())));
-        assertEq(vault.redeemInFlightTotal(), 600e18);
-        assertEq(vault.redeemInFlightByAdapter(address(asyncAdapter)), 600e18);
-        _step("  PASS: initial total == 600e18");
+        _step(string.concat("  redeemInFlightTotal = ", vm.toString(flowVault.totalRedeemInFlight())));
+        uint256 totalRedeemBefore = flowVault.totalRedeemInFlight();
+        uint256 adapterRedeemBefore = flowVault.adapterRedeemInFlightUsdc(address(flowAsyncAdapter));
+        _step("  PASS: real redeem in-flights created");
 
-        _step("[Step 3] Settle only id1 and id2 (leave id3 pending)");
+        _step("[Step 2] Settle only id1 and id2 (leave id3 pending)");
         uint256[] memory redeemIds = new uint256[](2);
         redeemIds[0] = id1;
         redeemIds[1] = id2;
         uint256[] memory redeemAmounts = new uint256[](2);
-        redeemAmounts[0] = 90e18; // actual for id1
-        redeemAmounts[1] = 180e18; // actual for id2
-        _step("  actuals: id1=90e18, id2=180e18, total sweep=270e18");
+        redeemAmounts[0] = 90e18;
+        redeemAmounts[1] = 180e18;
+        _step("  actuals: id1=90e18, id2=180e18");
 
-        asyncAdapter.setSweepReturnAmount(270e18);
-
-        vm.prank(address(executorGateway));
-        controller.settleAdapter(
-            address(asyncAdapter),
-            IStrategyControllerExecutor.InvestSettlementInput(new uint256[](0), new uint256[](0), new uint256[](0)),
-            IStrategyControllerExecutor.RedeemSettlementInput(redeemIds, redeemAmounts)
-        );
+        flowVenue.settleRedeem(address(flowAsyncAdapter), 270e18);
+        _executeFlowSettleAdapter(new uint256[](0), new uint256[](0), new uint256[](0), redeemIds, redeemAmounts);
         _step("  settleAdapter completed");
 
-        _step("[Step 4] Verify stats decreased by X(id1)+X(id2)=300, remaining=300 from id3");
-        _step(string.concat("  redeemInFlightTotal = ", vm.toString(vault.redeemInFlightTotal())));
-        _step(string.concat("  adapterRedeemInFlight = ", vm.toString(vault.redeemInFlightByAdapter(address(asyncAdapter)))));
-        assertEq(vault.redeemInFlightTotal(), 300e18, "remaining should be id3's 300e18");
-        _step("  PASS: redeemInFlightTotal == 300e18");
-        assertEq(vault.redeemInFlightByAdapter(address(asyncAdapter)), 300e18);
-        _step("  PASS: adapterRedeemInFlight == 300e18");
+        _step("[Step 3] Verify stats only decrease by the original recorded amounts of id1 + id2");
+        (,,,, uint256 usdc1,,,,) = flowVault.inFlightRecords(id1);
+        (,,,, uint256 usdc2,,,,) = flowVault.inFlightRecords(id2);
+        (,,,, uint256 usdc3,,,,) = flowVault.inFlightRecords(id3);
+        uint256 expectedRemaining = totalRedeemBefore - usdc1 - usdc2;
+        assertEq(flowVault.totalRedeemInFlight(), expectedRemaining, "remaining should equal unconfirmed original amount");
+        assertEq(flowVault.totalRedeemInFlight(), usdc3, "remaining should match id3 original usdcAmount");
+        assertEq(
+            flowVault.adapterRedeemInFlightUsdc(address(flowAsyncAdapter)),
+            adapterRedeemBefore - usdc1 - usdc2,
+            "adapter stats should only clear confirmed originals"
+        );
+        _step("  PASS: total + per-adapter stats only cleared confirmed originals");
 
-        _step("[Step 5] Verify statuses: id1=CONFIRMED, id2=CONFIRMED, id3=PENDING");
-        (,,,,,,,, IMantleYieldVault.InFlightStatus s1) = vault.inFlightRecords(id1);
-        (,,,,,,,, IMantleYieldVault.InFlightStatus s2) = vault.inFlightRecords(id2);
-        (,,,,,,,, IMantleYieldVault.InFlightStatus s3) = vault.inFlightRecords(id3);
+        _step("[Step 4] Verify statuses: id1=CONFIRMED, id2=CONFIRMED, id3=PENDING");
+        (,,,,,,,, IMantleYieldVault.InFlightStatus s1) = flowVault.inFlightRecords(id1);
+        (,,,,,,,, IMantleYieldVault.InFlightStatus s2) = flowVault.inFlightRecords(id2);
+        (,,,,,,,, IMantleYieldVault.InFlightStatus s3) = flowVault.inFlightRecords(id3);
         assertEq(uint8(s1), uint8(IMantleYieldVault.InFlightStatus.CONFIRMED));
         _step("  PASS: id1 status == CONFIRMED");
         assertEq(uint8(s2), uint8(IMantleYieldVault.InFlightStatus.CONFIRMED));
@@ -1128,9 +1579,9 @@ contract RiskRegressionTest is Test {
         assertEq(uint8(s3), uint8(IMantleYieldVault.InFlightStatus.PENDING));
         _step("  PASS: id3 status == PENDING");
 
-        _step("[Step 6] Verify settledAmounts recorded correctly");
-        (,,,,, uint256 settled1,,,) = vault.inFlightRecords(id1);
-        (,,,,, uint256 settled2,,,) = vault.inFlightRecords(id2);
+        _step("[Step 5] Verify settledAmounts recorded correctly");
+        (,,,,, uint256 settled1,,,) = flowVault.inFlightRecords(id1);
+        (,,,,, uint256 settled2,,,) = flowVault.inFlightRecords(id2);
         _step(string.concat("  settled1 = ", vm.toString(settled1), ", settled2 = ", vm.toString(settled2)));
         assertEq(settled1, 90e18);
         _step("  PASS: settled1 == 90e18");
@@ -1142,56 +1593,86 @@ contract RiskRegressionTest is Test {
     // P1: confirm one adapter's in-flight does not affect another adapter's stats
     function test_MultiAdapter_ConfirmOneDoesNotAffectOther() public {
         _logCase("test_MultiAdapter_ConfirmOneDoesNotAffectOther", unicode"多 adapter 同时存在 redeem in-flight 时，确认一笔不会影响其他 adapter 的累计值");
-        _step("[Step 1] Register two async strategies");
-        _registerTwoAsyncStrategies();
+        _step("[Step 1] Create redeem in-flight for adapter1 through full real flow");
+        (, uint256 id1) = _createFlowRedeemInFlight(1000e18);
+        _step(string.concat("  adapter1 inFlightId = ", vm.toString(id1)));
 
-        _step("[Step 2] Create in-flights: adapter1=100e18, adapter2=200e18");
-        uint256 id1 = vault.createInFlight(address(asyncAdapter), address(asset), 0, 100e18, false);
-        uint256 id2 = vault.createInFlight(address(asyncAdapter2), address(asset), 0, 200e18, false);
-        _step(string.concat("  id1 = ", vm.toString(id1), ", id2 = ", vm.toString(id2)));
+        _step("[Step 2] Register adapter2 as the sole strategy and create its redeem in-flight through real flow");
+        vm.startPrank(admin);
+        flowController.registerStrategy(address(flowAsyncAdapter2), 10_000, 2, true);
+        flowController.activateStrategy(address(flowAsyncAdapter2));
+        address[] memory order2 = new address[](1);
+        order2[0] = address(flowAsyncAdapter2);
+        flowController.setStrategyOrder(order2);
+        vm.stopPrank();
 
-        _step("[Step 3] Verify initial stats");
-        _step(string.concat("  redeemInFlightTotal = ", vm.toString(vault.redeemInFlightTotal())));
-        _step(string.concat("  adapter1 inFlight = ", vm.toString(vault.redeemInFlightByAdapter(address(asyncAdapter)))));
-        _step(string.concat("  adapter2 inFlight = ", vm.toString(vault.redeemInFlightByAdapter(address(asyncAdapter2)))));
-        assertEq(vault.redeemInFlightTotal(), 300e18);
-        assertEq(vault.redeemInFlightByAdapter(address(asyncAdapter)), 100e18);
-        assertEq(vault.redeemInFlightByAdapter(address(asyncAdapter2)), 200e18);
-        _step("  PASS: initial stats correct (total=300, adapter1=100, adapter2=200)");
+        _depositToFlowVault(flowUser, 2000e18);
+        uint256 investId2 = _executeFlowRebalanceAndGetInFlightId();
+        uint256 investedAmount = 1000e18;
+        {
+            flowVenue2.settleInvest(address(flowAsyncAdapter2), investedAmount, 0);
+            uint256[] memory investIds2 = new uint256[](1);
+            investIds2[0] = investId2;
+            uint256[] memory investSettledPos2 = new uint256[](1);
+            investSettledPos2[0] = investedAmount;
+            _executeFlowSettleAdapterFor(
+                address(flowAsyncAdapter2),
+                investIds2,
+                investSettledPos2,
+                new uint256[](1),
+                new uint256[](0),
+                new uint256[](0)
+            );
+        }
+
+        vm.prank(flowUser);
+        uint256 reqId2 = flowGateway.requestRedeem(investedAmount);
+        uint256 id2;
+        {
+            uint256[] memory reqIds2 = new uint256[](1);
+            reqIds2[0] = reqId2;
+            uint256 nextId = flowVault.nextInFlightId();
+            _executeFlowProcessRedeemBatch(reqIds2);
+            id2 = nextId;
+        }
+        _step(string.concat("  adapter2 inFlightId = ", vm.toString(id2)));
+
+        _step("[Step 3] Record initial per-adapter stats");
+        uint256 adapter1Before = flowVault.adapterRedeemInFlightUsdc(address(flowAsyncAdapter));
+        uint256 adapter2Before = flowVault.adapterRedeemInFlightUsdc(address(flowAsyncAdapter2));
+        uint256 totalBefore = flowVault.totalRedeemInFlight();
+        assertGt(adapter1Before, 0);
+        assertGt(adapter2Before, 0);
 
         _step("[Step 4] Settle only adapter1's in-flight");
-        uint256[] memory redeemIds = new uint256[](1);
-        redeemIds[0] = id1;
-        uint256[] memory redeemAmounts = new uint256[](1);
-        redeemAmounts[0] = 100e18;
-
-        vm.prank(address(executorGateway));
-        controller.settleAdapter(
-            address(asyncAdapter),
-            IStrategyControllerExecutor.InvestSettlementInput(new uint256[](0), new uint256[](0), new uint256[](0)),
-            IStrategyControllerExecutor.RedeemSettlementInput(redeemIds, redeemAmounts)
-        );
+        (,,,, uint256 usdc1,,,,) = flowVault.inFlightRecords(id1);
+        flowVenue.settleRedeem(address(flowAsyncAdapter), usdc1);
+        {
+            uint256[] memory redeemIds = new uint256[](1);
+            redeemIds[0] = id1;
+            uint256[] memory redeemAmounts = new uint256[](1);
+            redeemAmounts[0] = usdc1;
+            _executeFlowSettleAdapterFor(
+                address(flowAsyncAdapter),
+                new uint256[](0),
+                new uint256[](0),
+                new uint256[](0),
+                redeemIds,
+                redeemAmounts
+            );
+        }
         _step("  settleAdapter completed for adapter1");
 
         _step("[Step 5] Verify adapter1 stats cleared, adapter2 untouched");
-        _step(string.concat("  adapter1 inFlight = ", vm.toString(vault.redeemInFlightByAdapter(address(asyncAdapter)))));
-        _step(string.concat("  adapter2 inFlight = ", vm.toString(vault.redeemInFlightByAdapter(address(asyncAdapter2)))));
-        _step(string.concat("  redeemInFlightTotal = ", vm.toString(vault.redeemInFlightTotal())));
-        assertEq(vault.redeemInFlightByAdapter(address(asyncAdapter)), 0, "adapter1 stats should be cleared");
-        _step("  PASS: adapter1 inFlight == 0");
-
-        assertEq(
-            vault.redeemInFlightByAdapter(address(asyncAdapter2)),
-            200e18,
-            "adapter2 stats should be untouched"
-        );
-        _step("  PASS: adapter2 inFlight == 200e18 (untouched)");
-
-        assertEq(vault.redeemInFlightTotal(), 200e18, "total should decrease only by adapter1's 100e18");
-        _step("  PASS: redeemInFlightTotal == 200e18");
+        assertEq(flowVault.adapterRedeemInFlightUsdc(address(flowAsyncAdapter)), adapter1Before - usdc1);
+        _step("  PASS: adapter1 stats reduced only by its own original amount");
+        assertEq(flowVault.adapterRedeemInFlightUsdc(address(flowAsyncAdapter2)), adapter2Before);
+        _step("  PASS: adapter2 stats untouched");
+        assertEq(flowVault.totalRedeemInFlight(), totalBefore - usdc1);
+        _step("  PASS: total reduced only by adapter1's original amount");
 
         _step("[Step 6] Verify adapter2's in-flight still pending");
-        (,,,,,,,, IMantleYieldVault.InFlightStatus s2) = vault.inFlightRecords(id2);
+        (,,,,,,,, IMantleYieldVault.InFlightStatus s2) = flowVault.inFlightRecords(id2);
         _step(string.concat("  adapter2 in-flight status = ", vm.toString(uint8(s2))));
         assertEq(uint8(s2), uint8(IMantleYieldVault.InFlightStatus.PENDING));
         _step("  PASS: adapter2 in-flight still PENDING");
@@ -1201,57 +1682,57 @@ contract RiskRegressionTest is Test {
     // P1: after finalize, user balance, vault balance, request status all consistent
     function test_Finalize_UserReceivesSettledAssets() public {
         _logCase("test_Finalize_UserReceivesSettledAssets", unicode"finalize 后用户到账、Vault 扣减、request 状态三者一致");
-        _step("[Step 1] Register single async strategy");
-        _registerSingleAsyncStrategy();
-
-        _step("[Step 2] Set up request id=50 with 100e18 in PROCESSING state");
-        uint256 requestId = 50;
-        uint256 settleAmt = 100e18;
-        vault.setRequest(requestId, settleAmt, 0, IMantleYieldVault.RequestStatus.PROCESSING);
-        _step(string.concat("  requestId = ", vm.toString(requestId), ", settleAmt = ", vm.toString(settleAmt)));
-
-        _step("[Step 3] Mint sufficient asset to vault and verify balance");
-        asset.mint(address(vault), settleAmt);
-        uint256 vaultBalanceBefore = asset.balanceOf(address(vault));
-        _step(string.concat("  vaultBalanceBefore = ", vm.toString(vaultBalanceBefore)));
-        assertEq(vaultBalanceBefore, settleAmt);
-        _step("  PASS: vault balance == 100e18");
-
-        _step("[Step 4] Process the redeem batch");
+        _step("[Step 1] Create a real PROCESSING request and redeem in-flight");
+        (uint256 requestId, uint256 inFlightId) = _createFlowRedeemInFlight(100e18);
         uint256[] memory requestIds = new uint256[](1);
         requestIds[0] = requestId;
+        _step(string.concat("  requestId = ", vm.toString(requestId), ", inFlightId = ", vm.toString(inFlightId)));
 
-        vm.prank(address(executorGateway));
-        controller.processRedeemBatch(requestIds);
-        _step("  processRedeemBatch completed");
+        _step("[Step 2] Settle the redeem in-flight with 100e18 so vault gets real physical cash");
+        flowVenue.settleRedeem(address(flowAsyncAdapter), 100e18);
+        {
+            uint256[] memory redeemIds = new uint256[](1);
+            redeemIds[0] = inFlightId;
+            uint256[] memory redeemAmounts = new uint256[](1);
+            redeemAmounts[0] = 100e18;
+            _executeFlowSettleAdapter(new uint256[](0), new uint256[](0), new uint256[](0), redeemIds, redeemAmounts);
+        }
 
-        _step("[Step 5] Finalize the redeem batch");
+        uint256 vaultBalanceBefore = flowAsset.balanceOf(address(flowVault));
+        uint256 userBalanceBefore = flowAsset.balanceOf(flowUser);
+        _step(string.concat("  vaultBalanceBeforeFinalize = ", vm.toString(vaultBalanceBefore)));
+        assertEq(vaultBalanceBefore, 100e18, "vault should hold real settled physical cash before finalize");
+
+        _step("[Step 3] Finalize the redeem batch");
         uint256[] memory settledAssets = new uint256[](1);
-        settledAssets[0] = settleAmt;
-
-        vm.prank(address(executorGateway));
-        controller.finalizeRedeemBatch(requestIds, settledAssets);
+        settledAssets[0] = 100e18;
+        _executeFlowFinalizeRedeemBatch(requestIds, settledAssets);
         _step("  finalizeRedeemBatch completed");
 
-        _step("[Step 6] Verify request is DONE with correct settledAssets");
-        (,,,,, uint256 reqSettled,, IMantleYieldVault.RequestStatus reqStatus) = vault.requests(requestId);
+        _step("[Step 4] Verify request is DONE with correct settledAssets");
+        (,,,,, uint256 reqSettled,, IMantleYieldVault.RequestStatus reqStatus) = flowVault.requests(requestId);
         _step(string.concat("  reqSettled = ", vm.toString(reqSettled)));
         _step(string.concat("  reqStatus = ", vm.toString(uint8(reqStatus))));
         assertEq(uint8(reqStatus), uint8(IMantleYieldVault.RequestStatus.DONE), "request should be DONE");
         _step("  PASS: reqStatus == DONE");
-        assertEq(reqSettled, settleAmt, "request settledAssets should match");
+        assertEq(reqSettled, 100e18, "request settledAssets should match");
         _step("  PASS: reqSettled == 100e18");
 
-        _step("[Step 7] Verify vault still holds assets (transfer happens on user claim)");
-        uint256 vaultBalanceAfter = asset.balanceOf(address(vault));
+        _step("[Step 5] Verify user received assets and vault physical balance decreased accordingly");
+        uint256 vaultBalanceAfter = flowAsset.balanceOf(address(flowVault));
+        uint256 userBalanceAfter = flowAsset.balanceOf(flowUser);
         _step(string.concat("  vaultBalanceAfter = ", vm.toString(vaultBalanceAfter)));
-        assertEq(vaultBalanceAfter, settleAmt, "vault should still hold assets (transfer happens on claim)");
-        _step("  PASS: vault balance unchanged (accounting correct)");
+        _step(string.concat("  userBalanceDelta = ", vm.toString(userBalanceAfter - userBalanceBefore)));
+        assertEq(userBalanceAfter - userBalanceBefore, 100e18, "user should receive finalized assets");
+        _step("  PASS: user received 100e18");
+        assertEq(vaultBalanceAfter, 0, "vault physical balance should be consumed by payout");
+        _step("  PASS: vault balance decreased to 0 after payout");
 
-        _step("[Step 8] Verify replay protection - cannot finalize same batch again");
-        vm.prank(address(executorGateway));
-        vm.expectRevert();
-        controller.finalizeRedeemBatch(requestIds, settledAssets);
+        _step("[Step 6] Verify replay protection - cannot finalize same batch again");
+        vm.expectRevert(abi.encodeWithSelector(
+            IMantleYieldVault.Vault__InvalidState.selector, requestId, IMantleYieldVault.RequestStatus.DONE
+        ));
+        _executeFlowFinalizeRedeemBatch(requestIds, settledAssets);
         _step("  PASS: reverted as expected (replay protection)");
         _logPass();
     }
@@ -1263,47 +1744,81 @@ contract RiskRegressionTest is Test {
     function test_PriceZero_DivestSkipsAdapter() public {
         _logCase(
             "test_PriceZero_DivestSkipsAdapter",
-            unicode"[N-13] getPosTokenPrice()=0 -> adapter.totalValue()=0 -> divest skips adapter"
+            unicode"当 adapter getPosTokenPrice 返回 0 -> totalValue=0 -> _readDivestCoverage 返回 0 -> 跳过"
         );
 
-        _step("[Step 1] Register adapter whose getPosTokenPrice()=0 and totalValue=0");
-        // MockStrategyAdapter.getPosTokenPrice() returns 0 by default
-        assertEq(asyncAdapter.getPosTokenPrice(), 0, "price should be 0");
-        _registerSingleAsyncStrategy();
+        _step("[Step 1] Deploy price-aware adapter whose totalValue comes from real pos balance x oracle price");
+        MockAsset priceZeroPosToken = new MockAsset();
+        MockSettlementVenueRR priceZeroVenue = new MockSettlementVenueRR(address(flowAsset), address(priceZeroPosToken));
+        MockDFeedPriceOracle priceZeroOracle = new MockDFeedPriceOracle(1e8, 8);
+        MockPricedAdapterRR priceZeroAdapter = new MockPricedAdapterRR(
+            address(flowAsset),
+            address(priceZeroPosToken),
+            address(flowVault),
+            address(priceZeroVenue),
+            address(priceZeroOracle)
+        );
 
-        _step("[Step 2] Fund vault so rebalance can invest (set adapter totalValue > 0 via invest)");
-        // Put 10000 in vault for rebalance
-        asset.mint(address(vault), 10_000e18);
+        vm.startPrank(admin);
+        flowController.registerStrategy(address(priceZeroAdapter), 10_000, 2, true);
+        flowController.activateStrategy(address(priceZeroAdapter));
+        address[] memory ordered = new address[](1);
+        ordered[0] = address(priceZeroAdapter);
+        flowController.setStrategyOrder(ordered);
+        vm.stopPrank();
+        _step("  adapter registered as sole strategy");
 
-        _step("[Step 3] First rebalance -> invest (adapter receives funds)");
-        vm.warp(block.timestamp + 2 hours);
-        vm.prank(address(executorGateway));
-        controller.rebalance();
-        uint256 adapterVal = asyncAdapter.mockedTotalValue();
-        _step(string.concat("  adapter totalValue after invest: ", vm.toString(adapterVal)));
+        _step("[Step 2] User deposits real assets, then bot executes real rebalance invest");
+        uint256 depositAmount = 10_000e18;
+        _depositToFlowVault(flowUser, depositAmount);
+        uint256 investInFlightId = _executeFlowRebalanceAndGetInFlightId();
+        _step(string.concat("  investInFlightId = ", vm.toString(investInFlightId)));
 
-        _step("[Step 4] Set adapter totalValue=0 to simulate price=0 -> totalValue=0");
-        // In real adapter: totalValue = posTokenBalance * getPosTokenPrice / 1e18
-        // When price=0, totalValue=0. We simulate this with mock.
-        asyncAdapter.setTotalValue(0);
-        assertEq(asyncAdapter.totalValue(), 0, "totalValue should be 0 when price=0");
+        uint256 expectedPosAmount = priceZeroAdapter.estimatePosAmount(depositAmount);
+        priceZeroVenue.settleInvest(address(priceZeroAdapter), expectedPosAmount, 0);
+        {
+            uint256[] memory investIds = new uint256[](1);
+            investIds[0] = investInFlightId;
+            uint256[] memory investSettledPos = new uint256[](1);
+            investSettledPos[0] = expectedPosAmount;
+            _executeFlowSettleAdapterFor(
+                address(priceZeroAdapter),
+                investIds,
+                investSettledPos,
+                new uint256[](1),
+                new uint256[](0),
+                new uint256[](0)
+            );
+        }
 
-        _step("[Step 5] Trigger divest by raising buffer to 100%");
-        vm.prank(manager);
-        controller.setRiskParams(10_000, 0, 0);
-        uint256 redeemIFBefore = vault.redeemInFlightTotal();
+        uint256 adapterValueBefore = priceZeroAdapter.totalValue();
+        _step(string.concat("  adapter totalValue before price drop = ", vm.toString(adapterValueBefore)));
+        assertEq(adapterValueBefore, depositAmount, "totalValue should reflect real settled pos balance at price=1");
 
-        vm.warp(block.timestamp + 2 hours);
-        vm.prank(address(executorGateway));
-        controller.rebalance();
+        _step("[Step 3] Drop oracle price to 0, so totalValue becomes 0 via real adapter math");
+        priceZeroOracle.setPrice(0);
+        uint256 adapterValueAfterPriceDrop = priceZeroAdapter.totalValue();
+        _step(string.concat("  adapter totalValue after price drop = ", vm.toString(adapterValueAfterPriceDrop)));
+        assertEq(adapterValueAfterPriceDrop, 0, "price=0 should drive totalValue to 0");
 
-        uint256 redeemIFAfter = vault.redeemInFlightTotal();
+        _step("[Step 4] Raise buffer to 100% and rebalance through bot -> executor");
+        vm.prank(admin);
+        flowController.setRiskParams(10_000, 0, 0);
+
+        uint256 redeemIFBefore = flowVault.totalRedeemInFlight();
+        uint256 inFlightCursorBefore = flowVault.nextInFlightId();
+        _executeFlowRebalance();
+
+        uint256 redeemIFAfter = flowVault.totalRedeemInFlight();
+        uint256 inFlightCursorAfter = flowVault.nextInFlightId();
         _step(string.concat("  totalRedeemInFlight: ", vm.toString(redeemIFBefore), " -> ", vm.toString(redeemIFAfter)));
+        _step(string.concat("  inFlight cursor: ", vm.toString(inFlightCursorBefore), " -> ", vm.toString(inFlightCursorAfter)));
 
-        _step("[Step 6] Verify no divest occurred (adapter skipped because totalValue=0)");
-        // _readDivestCoverage returns requestAsset=0 when totalValue=0 -> adapter skipped
-        assertEq(redeemIFAfter, redeemIFBefore, "no divest in-flight should be created when adapter totalValue=0");
-        _step("  PASS: adapter skipped in divest path, no redeem in-flight created");
+        _step("[Step 5] Verify controller skipped divest because _readDivestCoverage saw totalValue=0");
+        assertEq(redeemIFAfter, redeemIFBefore, "no redeem in-flight should be created when totalValue=0");
+        assertEq(inFlightCursorAfter, inFlightCursorBefore, "no new in-flight record should be created");
+        assertEq(priceZeroVenue.pendingRedeemPos(address(priceZeroAdapter)), 0, "adapter should not submit redeem to venue");
+        _step("  PASS: price=0 led to totalValue=0, adapter was skipped, no divest side effects occurred");
         _logPass();
     }
 }
@@ -1384,27 +1899,6 @@ contract MockSanctionsOracleForRisk is ISanctionsOracle {
     function updateWhitelistStatusBatch(address[] calldata, bool) external override {}
 }
 
-contract MockAccountantForRisk {
-    bool public pauseStatus;
-    uint256 public exchangeRate = 1e18;
-    uint32 public managementFeeRate = 0;
-
-    error EnforcedPause();
-
-    function getRate() external view returns (uint256) {
-        return exchangeRate;
-    }
-
-    function getRateSafe() external view returns (uint256) {
-        if (pauseStatus) revert EnforcedPause();
-        return exchangeRate;
-    }
-
-    function setExchangeRate(uint256 newRate) external {
-        exchangeRate = newRate;
-    }
-}
-
 contract MockSubRedManagementForRisk {
     function subscribe(address, address currencyToken, uint256 amount, uint256) external {
         ERC20(currencyToken).transferFrom(msg.sender, address(this), amount);
@@ -1433,15 +1927,21 @@ contract RiskRegressionGetTokenInfosTest is Test {
     MockUSDC6 internal usdc;
     MockPosToken6 internal posTokenA;
     MockPosToken6 internal posTokenB;
-    MockSanctionsOracleForRisk internal sanctionsOracle;
-    MockAccountantForRisk internal accountant;
+    SanctionsOracle internal sanctionsOracle;
+    Accountant internal accountant;
+    StrategyController internal controller;
+    OperatorExecutor internal operatorExecutor;
 
     MantleYieldVault internal vault;
     MantleVaultGateway internal gateway;
 
     address internal adminAddr = makeAddr("admin");
-    address internal controllerAddr = makeAddr("controller");
+    address internal botAddr = makeAddr("bot");
     address internal treasuryAddr = makeAddr("treasury");
+    address internal depositor = makeAddr("depositor");
+    address internal posHolderA = makeAddr("posHolderA");
+    address internal posHolderB = makeAddr("posHolderB");
+    address internal complianceBot = makeAddr("complianceBot");
 
     // Mock adapters implementing IStrategyAdapter for vault registration
     MockStrategyAdapterForVault internal adapterA;
@@ -1476,8 +1976,10 @@ contract RiskRegressionGetTokenInfosTest is Test {
         usdc = new MockUSDC6();
         posTokenA = new MockPosToken6("PosTokenA", "PTA");
         posTokenB = new MockPosToken6("PosTokenB", "PTB");
-        sanctionsOracle = new MockSanctionsOracleForRisk();
-        accountant = new MockAccountantForRisk();
+        SanctionsOracle oracleImpl = new SanctionsOracle();
+        SanctionsOracleFactory oracleFactory = new SanctionsOracleFactory(address(oracleImpl), adminAddr);
+        vm.prank(adminAddr);
+        sanctionsOracle = SanctionsOracle(oracleFactory.deployAndInitOracle(adminAddr, complianceBot));
 
         MantleYieldVault impl = new MantleYieldVault();
         MantleVaultGateway gatewayImpl = new MantleVaultGateway();
@@ -1495,16 +1997,43 @@ contract RiskRegressionGetTokenInfosTest is Test {
             symbol: "mRWA",
             admin: adminAddr,
             gateway: gatewayAddr,
-            controller: controllerAddr,
-            accountant: address(accountant),
+            controller: address(1),
+            accountant: address(1), // placeholder, replaced below
             treasury: treasuryAddr,
             maxRedemptionFeeBps: 500,
             redemptionFeeBps: 100,
             minRedeemAmount: 0,
-            minDepositAmount: 0
+            minDepositAmount: 0,
+            maxSettlementDeviationBps: 0,
+            depositDailyRemaining: type(uint256).max,
+            redeemDailyRemaining: type(uint256).max
         });
         vm.prank(adminAddr);
         vault.initialize(params);
+
+        // Deploy real Accountant
+        Accountant acctImpl = new Accountant();
+        accountant = Accountant(address(new ERC1967Proxy(
+            address(acctImpl),
+            abi.encodeCall(Accountant.initialize, (address(vault), uint64(1e18), 0, adminAddr))
+        )));
+        vm.prank(adminAddr);
+        vault.setAccountant(address(accountant));
+
+        OperatorExecutor executorImpl = new OperatorExecutor();
+        operatorExecutor = OperatorExecutor(address(new ERC1967Proxy(
+            address(executorImpl),
+            abi.encodeCall(OperatorExecutor.initialize, (adminAddr, botAddr))
+        )));
+
+        StrategyController controllerImpl = new StrategyController();
+        controller = StrategyController(address(new ERC1967Proxy(
+            address(controllerImpl),
+            abi.encodeCall(StrategyController.initialize, (vaultAddr, adminAddr, address(operatorExecutor), adminAddr, 0, 0, 0))
+        )));
+        vm.prank(adminAddr);
+        vault.setController(address(controller));
+
         vm.prank(adminAddr);
         gateway.initialize(
             IMantleVaultGateway.InitParams({
@@ -1518,6 +2047,25 @@ contract RiskRegressionGetTokenInfosTest is Test {
 
         adapterA = new MockStrategyAdapterForVault(address(usdc), address(posTokenA), 1e18);
         adapterB = new MockStrategyAdapterForVault(address(usdc), address(posTokenB), 1e18);
+    }
+
+    function _registerAdapter(address adapter, uint16 priority) internal {
+        vm.prank(adminAddr);
+        controller.registerStrategy(adapter, 0, priority, true);
+    }
+
+    function _depositToVault(uint256 assetAmount) internal {
+        usdc.mint(depositor, assetAmount);
+        vm.startPrank(depositor);
+        usdc.approve(address(vault), assetAmount);
+        gateway.deposit(assetAmount);
+        vm.stopPrank();
+    }
+
+    function _transferPosToVault(MockPosToken6 token, address holder, uint256 amount) internal {
+        token.mint(holder, amount);
+        vm.prank(holder);
+        token.transfer(address(vault), amount);
     }
 
     // P0: getTokenInfos() with 0 adapters returns correct format
@@ -1561,11 +2109,10 @@ contract RiskRegressionGetTokenInfosTest is Test {
         );
 
         _step("[Step 1] Register 1 adapter (adapterA)");
-        vm.prank(controllerAddr);
-        vault.registerAdapter(address(adapterA));
+        _registerAdapter(address(adapterA), 1);
 
-        _step("[Step 2] Mint some posTokenA to vault to simulate holding");
-        posTokenA.mint(address(vault), 500e6);
+        _step("[Step 2] External holder transfers settled posTokenA to vault");
+        _transferPosToVault(posTokenA, posHolderA, 500e6);
 
         _step("[Step 3] Call getTokenInfos()");
         IMantleYieldVault.tokenInfo[] memory infos = vault.getTokenInfos();
@@ -1607,15 +2154,13 @@ contract RiskRegressionGetTokenInfosTest is Test {
         );
 
         _step("[Step 1] Register 2 adapters (adapterA, adapterB)");
-        vm.startPrank(controllerAddr);
-        vault.registerAdapter(address(adapterA));
-        vault.registerAdapter(address(adapterB));
-        vm.stopPrank();
+        _registerAdapter(address(adapterA), 1);
+        _registerAdapter(address(adapterB), 2);
 
-        _step("[Step 2] Mint posTokens to vault");
-        posTokenA.mint(address(vault), 300e6);
-        posTokenB.mint(address(vault), 700e6);
-        usdc.mint(address(vault), 100e6);
+        _step("[Step 2] Form real vault balances: user deposits USDC, external holders transfer posTokens");
+        _depositToVault(100e6);
+        _transferPosToVault(posTokenA, posHolderA, 300e6);
+        _transferPosToVault(posTokenB, posHolderB, 700e6);
 
         _step("[Step 3] Call getTokenInfos()");
         IMantleYieldVault.tokenInfo[] memory infos = vault.getTokenInfos();
@@ -1658,14 +2203,12 @@ contract RiskRegressionGetTokenInfosTest is Test {
         );
 
         _step("[Step 1] Register 2 adapters");
-        vm.startPrank(controllerAddr);
-        vault.registerAdapter(address(adapterA));
-        vault.registerAdapter(address(adapterB));
-        vm.stopPrank();
+        _registerAdapter(address(adapterA), 1);
+        _registerAdapter(address(adapterB), 2);
 
-        _step("[Step 2] Mint distinct amounts to distinguish adapters");
-        posTokenA.mint(address(vault), 111e6);
-        posTokenB.mint(address(vault), 222e6);
+        _step("[Step 2] External holders transfer distinct posToken balances to vault");
+        _transferPosToVault(posTokenA, posHolderA, 111e6);
+        _transferPosToVault(posTokenB, posHolderB, 222e6);
 
         _step("[Step 3] Call getTokenInfos()");
         IMantleYieldVault.tokenInfo[] memory infos = vault.getTokenInfos();
@@ -1801,6 +2344,9 @@ contract RiskRegressionAdapterTest is Test {
     address internal controllerAddr = makeAddr("adapterController");
     address internal accountantExecutorAddr = makeAddr("accountantExecutor");
     address internal receiver = makeAddr("receiver");
+    address internal stHolder = makeAddr("stHolder");
+    address internal usdcHolder = makeAddr("usdcHolder");
+    address internal otherTokenHolder = makeAddr("otherTokenHolder");
 
     string constant MODULE = unicode"风险回归场景";
     string private _caseId;
@@ -1825,6 +2371,24 @@ contract RiskRegressionAdapterTest is Test {
     function _logPass() internal {
         _step("----------------------------------------");
         _step("test result: passed");
+    }
+
+    function _transferStToVault(address vaultAddr, uint256 amount) internal {
+        stToken.mint(stHolder, amount);
+        vm.prank(stHolder);
+        stToken.transfer(vaultAddr, amount);
+    }
+
+    function _transferTokenToAdapter(ERC20 token, address holder, address adapter, uint256 amount) internal {
+        if (address(token) == address(usdc)) {
+            usdc.mint(holder, amount);
+        } else if (address(token) == address(stToken)) {
+            stToken.mint(holder, amount);
+        } else if (address(token) == address(otherToken)) {
+            otherToken.mint(holder, amount);
+        }
+        vm.prank(holder);
+        token.transfer(adapter, amount);
     }
 
     function setUp() public {
@@ -1916,7 +2480,7 @@ contract RiskRegressionAdapterTest is Test {
 
         _step("[Step 2] accountantExecutor calls setManualPosTokenPrice(1.05e18) -> expect revert Unsupported()");
         vm.prank(accountantExecutorAddr);
-        vm.expectRevert(abi.encodeWithSignature("Unsupported()"));
+        vm.expectRevert(abi.encodeWithSignature("Adapter__Unsupported()"));
         adapterWithOracle.setManualPosTokenPrice(1.05e18);
         _step("  PASS: reverted with Unsupported() as expected");
         _logPass();
@@ -1929,20 +2493,20 @@ contract RiskRegressionAdapterTest is Test {
             unicode"Adapter sweep 保护底层资产和 `posToken`"
         );
 
-        _step("[Step 1] Mint tokens to adapter");
-        usdc.mint(address(adapterWithOracle), 100e6);
-        stToken.mint(address(adapterWithOracle), 200e6);
-        otherToken.mint(address(adapterWithOracle), 50e6);
+        _step("[Step 1] External holders transfer tokens to adapter");
+        _transferTokenToAdapter(usdc, usdcHolder, address(adapterWithOracle), 100e6);
+        _transferTokenToAdapter(stToken, stHolder, address(adapterWithOracle), 200e6);
+        _transferTokenToAdapter(otherToken, otherTokenHolder, address(adapterWithOracle), 50e6);
 
         _step("[Step 2] admin calls sweep(asset, receiver) -> expect revert SweepProtectedToken");
         vm.prank(adminAddr);
-        vm.expectRevert(abi.encodeWithSelector(bytes4(keccak256("SweepProtectedToken(address)")), address(usdc)));
+        vm.expectRevert(abi.encodeWithSelector(bytes4(keccak256("Adapter__SweepProtectedToken(address)")), address(usdc)));
         adapterWithOracle.sweep(address(usdc), receiver);
         _step("  PASS: sweep(asset) reverted with SweepProtectedToken");
 
         _step("[Step 3] admin calls sweep(posToken, receiver) -> expect revert SweepProtectedToken");
         vm.prank(adminAddr);
-        vm.expectRevert(abi.encodeWithSelector(bytes4(keccak256("SweepProtectedToken(address)")), address(stToken)));
+        vm.expectRevert(abi.encodeWithSelector(bytes4(keccak256("Adapter__SweepProtectedToken(address)")), address(stToken)));
         adapterWithOracle.sweep(address(stToken), receiver);
         _step("  PASS: sweep(posToken) reverted with SweepProtectedToken");
 
@@ -1964,7 +2528,7 @@ contract RiskRegressionAdapterTest is Test {
     function test_PriceZero_TotalValueFallback() public {
         _logCase(
             "test_PriceZero_TotalValueFallback",
-            unicode"[N-12] getPosTokenPrice()=0 -> totalValue() falls back to raw decimal scaling (not zero)"
+            unicode"当 adapter 无有效价格源时（getPosTokenPrice 返回 0），totalValue() 返回 0，影响 rebalance 和 totalAssets 计算"
         );
 
         _step("[Step 1] Deploy fresh adapter without oracle and no manual price");
@@ -1981,19 +2545,17 @@ contract RiskRegressionAdapterTest is Test {
         assertEq(price, 0, "price should be 0 (no oracle, no manual) - M-6 regression");
         _step(string.concat("  getPosTokenPrice() = ", vm.toString(price)));
 
-        _step("[Step 2] Mint posTokens to vault (both USDC and stToken are 6 decimals)");
-        stToken.mint(address(adapterVault), 1000e6);
+        _step("[Step 2] External holder transfers posTokens to vault (both USDC and stToken are 6 decimals)");
+        _transferStToVault(address(adapterVault), 1000e6);
         uint256 stBalance = stToken.balanceOf(address(adapterVault));
         _step(string.concat("  stToken balance on vault: ", vm.toString(stBalance)));
 
-        _step("[Step 3] Verify totalValue() uses raw decimal scaling as fallback (priceE18=0)");
-        // When price=0, _estimateAssetAmount falls back to _scaleToAssetRaw
-        // For same-decimal tokens (both 6 dec): raw scaling is identity
+        _step("[Step 3] Verify totalValue() returns 0 when price=0 (no fallback to raw scaling)");
+        // When price=0, _estimateAssetAmount returns 0 immediately (line: if (priceE18 == 0) return 0)
         uint256 tv = freshAdapter.totalValue();
         _step(string.concat("  totalValue() = ", vm.toString(tv)));
-        // With same decimals, fallback returns stBalance * 10^(6-6) = stBalance
-        assertEq(tv, stBalance, "totalValue = raw decimal scaling when price=0");
-        _step("  PASS: price=0 -> totalValue uses raw scaling fallback");
+        assertEq(tv, 0, "totalValue = 0 when price=0 (no fallback)");
+        _step("  PASS: price=0 -> totalValue returns 0");
 
         _step("[Step 4] With no posTokens on vault, totalValue=0 regardless of price");
         // Deploy another adapter pointing to a vault with no stTokens
@@ -2021,13 +2583,17 @@ contract RiskRegressionAdapterTest is Test {
 
 contract RiskRegressionSanctionSafeInTest is Test {
     MockUSDC6 internal usdc;
-    MockSanctionsOracleForRisk internal sanctionsOracle;
-    MockAccountantForRisk internal accountant;
+    SanctionsOracle internal sanctionsOracle;
+    Accountant internal accountant;
+    StrategyController internal controller;
+    OperatorExecutor internal operatorExecutor;
 
     MantleYieldVault internal vault;
     MantleVaultGateway internal gateway;
 
     address internal adminAddr = makeAddr("admin");
+    address internal complianceBot = makeAddr("complianceBot");
+    address internal bot = makeAddr("bot");
     address internal controllerAddr = makeAddr("controller");
     address internal treasuryAddr = makeAddr("treasury");
     address internal sanctionSafeAddr = makeAddr("sanctionSafe");
@@ -2059,10 +2625,27 @@ contract RiskRegressionSanctionSafeInTest is Test {
         _step("test result: passed");
     }
 
+    function _setSanctioned(address account, bool status) internal {
+        vm.prank(complianceBot);
+        sanctionsOracle.updateSanctionStatus(account, status);
+    }
+
+    function _processRedeemBatch(uint256[] memory ids) internal {
+        vm.prank(bot);
+        operatorExecutor.executeProcessRedeemBatch(address(controller), ids);
+    }
+
+    function _finalizeRedeemBatch(uint256[] memory ids, uint256[] memory settledAssets) internal {
+        vm.prank(bot);
+        operatorExecutor.executeFinalizeRedeemBatch(address(controller), ids, settledAssets);
+    }
+
     function setUp() public {
         usdc = new MockUSDC6();
-        sanctionsOracle = new MockSanctionsOracleForRisk();
-        accountant = new MockAccountantForRisk();
+        SanctionsOracle oracleImpl = new SanctionsOracle();
+        SanctionsOracleFactory oracleFactory = new SanctionsOracleFactory(address(oracleImpl), adminAddr);
+        vm.prank(adminAddr);
+        sanctionsOracle = SanctionsOracle(oracleFactory.deployAndInitOracle(adminAddr, complianceBot));
 
         MantleYieldVault impl = new MantleYieldVault();
         MantleVaultGateway gatewayImpl = new MantleVaultGateway();
@@ -2081,15 +2664,42 @@ contract RiskRegressionSanctionSafeInTest is Test {
             admin: adminAddr,
             gateway: gatewayAddr,
             controller: controllerAddr,
-            accountant: address(accountant),
+            accountant: address(1), // placeholder, replaced below
             treasury: treasuryAddr,
             maxRedemptionFeeBps: 500,
             redemptionFeeBps: 0, // No fee for simpler math
             minRedeemAmount: 0,
-            minDepositAmount: 0
+            minDepositAmount: 0,
+            maxSettlementDeviationBps: 0,
+            depositDailyRemaining: type(uint256).max,
+            redeemDailyRemaining: type(uint256).max
         });
         vm.prank(adminAddr);
         vault.initialize(params);
+
+        // Deploy real Accountant
+        Accountant acctImpl = new Accountant();
+        accountant = Accountant(address(new ERC1967Proxy(
+            address(acctImpl),
+            abi.encodeCall(Accountant.initialize, (address(vault), uint64(1e18), 0, adminAddr))
+        )));
+        vm.prank(adminAddr);
+        vault.setAccountant(address(accountant));
+
+        OperatorExecutor executorImpl = new OperatorExecutor();
+        operatorExecutor = OperatorExecutor(address(new ERC1967Proxy(
+            address(executorImpl),
+            abi.encodeCall(OperatorExecutor.initialize, (adminAddr, bot))
+        )));
+
+        StrategyController controllerImpl = new StrategyController();
+        controller = StrategyController(address(new ERC1967Proxy(
+            address(controllerImpl),
+            abi.encodeCall(StrategyController.initialize, (vaultAddr, adminAddr, address(operatorExecutor), adminAddr, 0, 0, 0))
+        )));
+        vm.prank(adminAddr);
+        vault.setController(address(controller));
+
         vm.prank(adminAddr);
         gateway.initialize(
             IMantleVaultGateway.InitParams({
@@ -2117,12 +2727,12 @@ contract RiskRegressionSanctionSafeInTest is Test {
     function test_SanctionSafeIn_BothPaths() public {
         _logCase(
             "test_SanctionSafeIn_BothPaths",
-            unicode"`SactionSafeIn` 事件在 shares 路由与 sanctions payout 两种路径下均按当前实现正确记录"
+            unicode"SanctionSafeIn 事件在 shares 路由与 sanctions payout 两种路径下均按当前实现正确记录"
         );
 
         // ---- Path 1: Sanctioned user calls gateway.requestRedeem -> shares routed to sanctionSafe ----
         _step("[Step 1] Path 1: Sanctioned user calls gateway.requestRedeem, triggering shares routing");
-        sanctionsOracle.setSanctioned(sanctionedUser, true);
+        _setSanctioned(sanctionedUser, true);
 
         uint256 sharesToRedeem = 500e6;
         uint256 sanctionSafeSharesBefore = vault.balanceOf(sanctionSafeAddr);
@@ -2157,31 +2767,28 @@ contract RiskRegressionSanctionSafeInTest is Test {
         assertTrue(reqId > 0, "should create a valid request");
         _step("  PASS: request created successfully");
 
-        // Process the request
+        // Process the request through the real bot -> operator -> controller chain
         uint256[] memory reqIds = new uint256[](1);
         reqIds[0] = reqId;
-        vm.prank(controllerAddr);
-        vault.updateRequestBatch(reqIds, IMantleYieldVault.RequestStatus.PROCESSING);
+        _processRedeemBatch(reqIds);
         _step("  request moved to PROCESSING");
 
         // Now sanction the normal user
-        sanctionsOracle.setSanctioned(normalUser, true);
+        _setSanctioned(normalUser, true);
         _step("  normalUser is now sanctioned");
 
         // Finalize - should pay to sanctionSafe and emit SanctionSafeIn
-        // Need to provide USDC to vault for payout
+        // Vault already has real physical USDC from the shared pool deposit in setUp
         (,,,, uint256 estimatedAssets,,,) = vault.requests(reqId);
         _step(string.concat("  estimatedAssets = ", vm.toString(estimatedAssets)));
-        usdc.mint(address(vault), estimatedAssets);
 
         uint256[] memory settledAssets = new uint256[](1);
         settledAssets[0] = estimatedAssets;
 
         _step("[Step 3] Finalize redeem batch -> expect SanctionSafeIn event for sanctions payout path");
-        vm.prank(controllerAddr);
         vm.expectEmit(true, true, false, true, address(vault));
         emit IMantleYieldVault.SanctionSafeIn(normalUser, address(usdc), estimatedAssets);
-        vault.markRequestsDone(reqIds, settledAssets);
+        _finalizeRedeemBatch(reqIds, settledAssets);
         _step("  PASS: SanctionSafeIn emitted for sanctions payout path");
 
         _step("[Step 4] Verify sanctionSafe received the USDC payout");

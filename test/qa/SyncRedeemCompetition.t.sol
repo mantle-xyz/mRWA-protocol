@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {Accountant} from "../../src/accountant/Accountant.sol";
+import {SanctionsOracle} from "../../src/compliance/SanctionsOracle.sol";
 import {ISanctionsOracle} from "../../src/interfaces/compliance/ISanctionsOracle.sol";
 import {IMantleVaultGateway} from "../../src/interfaces/vault/IMantleVaultGateway.sol";
 import {IMantleYieldVault} from "../../src/interfaces/vault/IMantleYieldVault.sol";
@@ -30,23 +31,6 @@ contract MockUSDC_SRC is ERC20 {
     function mint(address to, uint256 amount) external {
         _mint(to, amount);
     }
-}
-
-contract MockSanctionsOracle_SRC is ISanctionsOracle {
-    mapping(address => bool) private _sanctioned;
-
-    function initialize(address, address) external {}
-    function isSanctioned(address account) external view returns (bool) { return _sanctioned[account]; }
-    function isWhitelisted(address) external pure returns (bool) { return true; }
-    function totalSanctionedCount() external pure returns (uint256) { return 0; }
-    function totalWhitelistedCount() external pure returns (uint256) { return 0; }
-    function lastUpdateTimestamp() external pure returns (uint256) { return 0; }
-    function batchNonce() external pure returns (uint256) { return 0; }
-    function MAX_BATCH_SIZE() external pure returns (uint256) { return 200; }
-    function updateSanctionStatus(address account, bool sanctioned) external { _sanctioned[account] = sanctioned; }
-    function updateSanctionStatusBatch(address[] calldata, bool) external {}
-    function updateWhitelistStatus(address, bool) external {}
-    function updateWhitelistStatusBatch(address[] calldata, bool) external {}
 }
 
 contract MockPosToken_SRC is ERC20 {
@@ -140,7 +124,7 @@ contract MockStrategyAdapter_SRC is IStrategyAdapter {
 contract SyncRedeemCompetitionQATest is Test {
     MockUSDC_SRC internal usdc;
     MockPosToken_SRC internal posToken;
-    MockSanctionsOracle_SRC internal oracle;
+    SanctionsOracle internal oracle;
     MantleYieldVault internal vault;
     MantleVaultGateway internal gateway;
     Accountant internal accountant;
@@ -206,7 +190,11 @@ contract SyncRedeemCompetitionQATest is Test {
 
         usdc = new MockUSDC_SRC();
         posToken = new MockPosToken_SRC();
-        oracle = new MockSanctionsOracle_SRC();
+        SanctionsOracle oracleImpl = new SanctionsOracle();
+        oracle = SanctionsOracle(address(new ERC1967Proxy(
+            address(oracleImpl),
+            abi.encodeCall(SanctionsOracle.initialize, (admin, admin))
+        )));
 
         MantleYieldVault vaultImpl = new MantleYieldVault();
         Accountant acctImpl = new Accountant();
@@ -229,7 +217,10 @@ contract SyncRedeemCompetitionQATest is Test {
                 maxRedemptionFeeBps: 500,
                 redemptionFeeBps: FEE_BPS,
                 minRedeemAmount: 0,
-                minDepositAmount: 0
+                minDepositAmount: 0,
+                maxSettlementDeviationBps: 0,
+                depositDailyRemaining: type(uint256).max,
+                redeemDailyRemaining: type(uint256).max
             })
         );
         vault = MantleYieldVault(address(new ERC1967Proxy(address(vaultImpl), vaultInitData)));
@@ -545,6 +536,8 @@ contract SyncRedeemCompetitionQATest is Test {
         uint256 shares2 = vault.balanceOf(user2);
         uint256 maxR2 = vault.maxRedeem(user2);
         _step(string.concat("  maxRedeem(user2): ", vm.toString(maxR2)));
+        // user2 should not be able to fully sync redeem (freeCash exhausted by user1)
+        assertTrue(maxR2 < shares2, "precondition: maxRedeem(user2) < shares2 (freeCash exhausted)");
 
         if (maxR2 == 0) {
             _step("  user2 cannot sync redeem at all (maxRedeem = 0)");

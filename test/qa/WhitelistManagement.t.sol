@@ -86,7 +86,7 @@ contract WhitelistManagementQATest is Test {
     }
 
     function test_UpdateWhitelistStatus_RejectsZeroAddress() public {
-        _logCase("test_UpdateWhitelistStatus_RejectsZeroAddress", unicode"updateWhitelistStatus 拒绝零地址");
+        _logCase("test_UpdateWhitelistStatus_RejectsZeroAddress", unicode"`updateWhitelistStatus` 拒绝零地址");
 
         vm.prank(compliance);
         vm.expectRevert(ISanctionsOracle.Oracle__ZeroAddress.selector);
@@ -177,7 +177,7 @@ contract WhitelistManagementQATest is Test {
     // =======================================================================
 
     function test_TotalWhitelistedCount_Tracking() public {
-        _logCase("test_TotalWhitelistedCount_Tracking", unicode"totalWhitelistedCount 在增删后精确追踪");
+        _logCase("test_TotalWhitelistedCount_Tracking", unicode"`totalWhitelistedCount` 在增删后精确追踪");
 
         assertEq(oracle.totalWhitelistedCount(), 0, "start at 0");
 

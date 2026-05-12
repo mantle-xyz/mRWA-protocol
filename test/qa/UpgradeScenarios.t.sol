@@ -19,11 +19,17 @@ import {OperatorExecutor} from "../../src/protocol/OperatorExecutor.sol";
 import {IStrategyControllerExecutor} from "../../src/interfaces/strategy/IStrategyControllerExecutor.sol";
 import {SanctionsOracle} from "../../src/compliance/SanctionsOracle.sol";
 import {SanctionsOracleFactory} from "../../src/compliance/SanctionsOracleFactory.sol";
-import {TimelockUpgradeController} from "../../src/governance/TimelockUpgradeController.sol";
 import {UpgradeableBeacon} from "@openzeppelin/contracts/proxy/beacon/UpgradeableBeacon.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {ERC1967Utils} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Utils.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
+import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import {IAccessControlDefaultAdminRules} from "@openzeppelin/contracts/access/extensions/IAccessControlDefaultAdminRules.sol";
+import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
+import {TimelockController as TimelockUpgradeController} from "@openzeppelin/contracts/governance/TimelockController.sol";
+import {UUPSUpgradeable} from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Test, console2} from "forge-std/Test.sol";
@@ -112,10 +118,6 @@ contract MockAccountant_Upgrade {
         exchangeRate = newRate;
     }
 
-    function setManagementFeeRate(uint256 newRate) external {
-        managementFeeRate = uint32(newRate);
-    }
-
     function mintFeeShares(uint256) external {}
     function updateExchangeRate(uint64, uint64) external {}
 }
@@ -143,6 +145,19 @@ contract SanctionsOracleV2 is SanctionsOracle {
 
 /// @dev V2 implementation for Accountant that adds a version function
 contract AccountantV2 is Accountant {
+    function version() external pure returns (uint256) {
+        return 2;
+    }
+}
+
+/// @dev V2 Accountant that appends a new storage variable (compatible)
+contract AccountantV2WithStorage is Accountant {
+    uint256 public newAccountantVar;
+
+    function setNewAccountantVar(uint256 val) external {
+        newAccountantVar = val;
+    }
+
     function version() external pure returns (uint256) {
         return 2;
     }
@@ -193,17 +208,18 @@ contract MockVaultForUpgrade {
     uint256 public lastFeeShares;
     uint256 public totalFeeMintCalls;
 
+    constructor(uint256 initialSupply) {
+        _totalSupply = initialSupply;
+    }
+
     function mintFeeShares(uint256 shares) external {
         lastFeeShares = shares;
         totalFeeMintCalls++;
+        _totalSupply += shares;
     }
 
     function totalSupply() external view returns (uint256) {
         return _totalSupply;
-    }
-
-    function setTotalSupply(uint256 supply) external {
-        _totalSupply = supply;
     }
 
     function asset() external pure returns (address) {
@@ -336,10 +352,6 @@ contract MockVaultForController {
 
     function asset() external view returns (address) {
         return address(token);
-    }
-
-    function setLocked(uint256 v) external {
-        locked = v;
     }
 
     function exchangeRate() external view returns (uint256) {
@@ -485,22 +497,16 @@ contract MockVaultForController {
 contract MockAdapterForUpgrade is IStrategyAdapter {
     address public immutable ASSET;
     address public immutable POS_TOKEN;
-
-    uint256 public mockedTotalValue;
-    bool public paused;
+    address public immutable VAULT;
 
     uint256 public depositCount;
     uint256 public withdrawCount;
-    uint256 public sweepReturnAmount;
-    bool public useSweepReturn;
 
-    constructor(address asset_, address posToken_) {
+    constructor(address asset_, address posToken_, address vault_) {
         ASSET = asset_;
         POS_TOKEN = posToken_;
+        VAULT = vault_;
     }
-
-    function setTotalValue(uint256 v) external { mockedTotalValue = v; }
-    function setSweepReturn(uint256 amount_) external { sweepReturnAmount = amount_; useSweepReturn = true; }
 
     function name() external pure returns (string memory) { return "MockAdapterForUpgrade"; }
     function asset() external view returns (address) { return ASSET; }
@@ -528,11 +534,14 @@ contract MockAdapterForUpgrade is IStrategyAdapter {
         executableAssetAmount = assetAmount;
         expectedPosAmount = 0;
     }
-    function vault() external pure returns (address) { return address(0); }
-    function totalValue() external view returns (uint256) { return mockedTotalValue; }
+    function vault() external view returns (address) { return VAULT; }
+    function totalValue() external view returns (uint256) {
+        return ERC20(ASSET).balanceOf(address(this)) + ERC20(POS_TOKEN).balanceOf(address(this));
+    }
 
     function deposit(uint256 amount, address) external returns (uint256) {
         depositCount++;
+        ERC20(ASSET).transferFrom(VAULT, address(this), amount);
         return amount;
     }
 
@@ -545,11 +554,11 @@ contract MockAdapterForUpgrade is IStrategyAdapter {
     function retryRedeemAsync(uint256, address) external {}
 
     function sweepToVault(address token, uint256 amount) external returns (uint256) {
-        if (useSweepReturn) return sweepReturnAmount;
+        ERC20(token).transfer(VAULT, amount);
         return amount;
     }
 
-    function setPaused(bool p) external { paused = p; }
+    function setPaused(bool) external {}
 }
 
 /// @dev Not a UUPS contract - for testing upgrade-to-non-UUPS failure
@@ -564,6 +573,26 @@ contract NotUUPS {
 // ---------------------------------------------------------------------------
 
 contract UpgradeScenariosQATest is Test {
+    struct RealControllerStack {
+        MantleYieldVault vault;
+        MantleVaultGateway gateway;
+        Accountant accountant;
+        OperatorExecutor operatorExecutor;
+        StrategyControllerFactory factory;
+        UpgradeableBeacon beacon;
+        StrategyController controller;
+        MockUSDC_Upgrade posToken;
+        MockAdapterForUpgrade adapter;
+    }
+
+    struct RealAccountantStack {
+        MantleYieldVault vault;
+        MantleVaultGateway gateway;
+        Accountant accountant;
+        AccountantExecutor executor;
+        AccountantFactory factory;
+    }
+
     MockUSDC_Upgrade internal usdc;
     MockSanctionsOracle_Upgrade internal oracle;
     MockAccountant_Upgrade internal mockAccountant;
@@ -615,14 +644,23 @@ contract UpgradeScenariosQATest is Test {
     // Helper: deploy initialized vault + gateway
     // -----------------------------------------------------------------------
 
-    function _deployVaultAndGateway(VaultFactory vf, GatewayFactory gf)
+    function _deployRealOracle(address complianceBot) internal returns (SanctionsOracle so) {
+        SanctionsOracleFactory factory = new SanctionsOracleFactory(address(new SanctionsOracle()), admin);
+        address oracleAddr = factory.deployAndInitOracle(admin, complianceBot);
+        so = SanctionsOracle(oracleAddr);
+    }
+
+    function _deployRealAccountant(address vaultAddr, uint64 initialRate, uint32 managementFeeRate_)
         internal
-        returns (MantleYieldVault v, MantleVaultGateway gw)
+        returns (Accountant acct)
     {
-        address vAddr = vf.deployVault();
-        address gwAddr = gf.deployGateway();
+        AccountantFactory factory = new AccountantFactory(address(new Accountant()), admin);
+        address acctAddr = factory.deployAndInitAccountant(vaultAddr, initialRate, managementFeeRate_, admin);
+        acct = Accountant(acctAddr);
+    }
+
+    function _initRealVault(address vAddr, address gwAddr, address accountantAddr) internal returns (MantleYieldVault v) {
         v = MantleYieldVault(vAddr);
-        gw = MantleVaultGateway(gwAddr);
 
         vm.prank(admin);
         v.initialize(
@@ -633,25 +671,44 @@ contract UpgradeScenariosQATest is Test {
                 admin: admin,
                 gateway: gwAddr,
                 controller: makeAddr("controller"),
-                accountant: address(mockAccountant),
+                accountant: accountantAddr,
                 treasury: treasuryAddr,
                 maxRedemptionFeeBps: 500,
                 redemptionFeeBps: 100,
                 minRedeemAmount: 100e6,
-                minDepositAmount: 0
+                minDepositAmount: 0,
+                maxSettlementDeviationBps: 0,
+                depositDailyRemaining: type(uint256).max,
+                redeemDailyRemaining: type(uint256).max
             })
         );
+    }
+
+    function _initRealGateway(address gwAddr, address vAddr, address oracleAddr) internal returns (MantleVaultGateway gw) {
+        gw = MantleVaultGateway(gwAddr);
 
         vm.prank(admin);
         gw.initialize(
             IMantleVaultGateway.InitParams({
                 vault: vAddr,
-                sanctionsOracle: ISanctionsOracle(address(oracle)),
+                sanctionsOracle: ISanctionsOracle(oracleAddr),
                 sanctionSafe: sanctionSafe,
                 admin: admin,
                 syncRedeemDisabled: false
             })
         );
+    }
+
+    function _deployVaultAndGateway(VaultFactory vf, GatewayFactory gf)
+        internal
+        returns (MantleYieldVault v, MantleVaultGateway gw)
+    {
+        address vAddr = vf.deployVault();
+        address gwAddr = gf.deployGateway();
+        SanctionsOracle realOracle = _deployRealOracle(bot);
+        Accountant realAccountant = _deployRealAccountant(vAddr, 1e18, 100);
+        v = _initRealVault(vAddr, gwAddr, address(realAccountant));
+        gw = _initRealGateway(gwAddr, vAddr, address(realOracle));
     }
 
     function _depositForUser(MantleVaultGateway gw, MantleYieldVault v, address user, uint256 amount) internal {
@@ -660,6 +717,65 @@ contract UpgradeScenariosQATest is Test {
         usdc.approve(address(v), type(uint256).max);
         gw.deposit(amount);
         vm.stopPrank();
+    }
+
+    function _deployOperatorExecutor() internal returns (OperatorExecutor opExec) {
+        OperatorExecutor opImpl = new OperatorExecutor();
+        bytes memory opInit = abi.encodeCall(OperatorExecutor.initialize, (admin, bot));
+        opExec = OperatorExecutor(address(new ERC1967Proxy(address(opImpl), opInit)));
+    }
+
+    function _deployRealControllerStack(uint16 bufferTargetBps, uint16 rebalanceThresholdBps, uint64 cooldown)
+        internal
+        returns (RealControllerStack memory s)
+    {
+        VaultFactory vaultFactory = new VaultFactory(address(new MantleYieldVault()), admin);
+        GatewayFactory gatewayFactory = new GatewayFactory(address(new MantleVaultGateway()), admin);
+        (s.vault, s.gateway) = _deployVaultAndGateway(vaultFactory, gatewayFactory);
+        s.accountant = Accountant(s.vault.accountant());
+        s.operatorExecutor = _deployOperatorExecutor();
+        s.factory = new StrategyControllerFactory(address(new StrategyController()), admin);
+        s.beacon = s.factory.BEACON();
+        s.posToken = new MockUSDC_Upgrade();
+        s.adapter = new MockAdapterForUpgrade(address(usdc), address(s.posToken), address(s.vault));
+
+        address ctrlAddr = s.factory.deployAndInitController(
+            address(s.vault), admin, address(s.operatorExecutor), admin, bufferTargetBps, rebalanceThresholdBps, cooldown
+        );
+        s.controller = StrategyController(ctrlAddr);
+
+        vm.prank(admin);
+        s.vault.setController(ctrlAddr);
+    }
+
+    function _fundRealVault(RealControllerStack memory s, address user, uint256 amount) internal {
+        _depositForUser(s.gateway, s.vault, user, amount);
+    }
+
+    function _deployRealAccountantStack() internal returns (RealAccountantStack memory s) {
+        VaultFactory vaultFactory = new VaultFactory(address(new MantleYieldVault()), admin);
+        GatewayFactory gatewayFactory = new GatewayFactory(address(new MantleVaultGateway()), admin);
+        (s.vault, s.gateway) = _deployVaultAndGateway(vaultFactory, gatewayFactory);
+
+        s.factory = new AccountantFactory(address(new Accountant()), admin);
+        address acctAddr = s.factory.deployAndInitAccountant(address(s.vault), 1e18, 100, admin);
+        s.accountant = Accountant(acctAddr);
+
+        vm.prank(admin);
+        s.vault.setAccountant(acctAddr);
+
+        AccountantExecutor exImpl = new AccountantExecutor();
+        bytes memory exInit = abi.encodeCall(AccountantExecutor.initialize, (admin));
+        s.executor = AccountantExecutor(address(new ERC1967Proxy(address(exImpl), exInit)));
+
+        vm.startPrank(admin);
+        s.executor.grantRole(s.executor.BOT_ROLE(), bot);
+        s.accountant.grantRole(s.accountant.ACCOUNTANT_EXECUTOR_ROLE(), address(s.executor));
+        vm.stopPrank();
+    }
+
+    function _fundRealVault(MantleVaultGateway gw, MantleYieldVault v, address user, uint256 amount) internal {
+        _depositForUser(gw, v, user, amount);
     }
 
     /// @dev Helper to upgrade a beacon as owner (avoids vm.prank being consumed by BEACON() view call)
@@ -715,7 +831,7 @@ contract UpgradeScenariosQATest is Test {
 
         _step("[Step 1] beaconOwner upgrades to address(0), expect revert");
         vm.prank(admin);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(UpgradeableBeacon.BeaconInvalidImplementation.selector, address(0)));
         beacon.upgradeTo(address(0));
         _step("  PASS: reverted BeaconInvalidImplementation");
 
@@ -732,7 +848,7 @@ contract UpgradeScenariosQATest is Test {
         address eoa = makeAddr("eoa");
         _step("[Step 1] beaconOwner upgrades to EOA, expect revert");
         vm.prank(admin);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(UpgradeableBeacon.BeaconInvalidImplementation.selector, eoa));
         beacon.upgradeTo(eoa);
         _step("  PASS: reverted BeaconInvalidImplementation");
 
@@ -985,7 +1101,7 @@ contract UpgradeScenariosQATest is Test {
 
         _step("[Step 1] Attacker attempts upgrade");
         vm.prank(attacker);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, attacker));
         beacon.upgradeTo(address(newImpl));
         _step("  PASS: reverted OwnableUnauthorizedAccount");
 
@@ -999,7 +1115,7 @@ contract UpgradeScenariosQATest is Test {
         UpgradeableBeacon beacon = factory.BEACON();
 
         vm.prank(admin);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(UpgradeableBeacon.BeaconInvalidImplementation.selector, address(0)));
         beacon.upgradeTo(address(0));
         _step("  PASS: reverted for zero address");
 
@@ -1013,7 +1129,7 @@ contract UpgradeScenariosQATest is Test {
         UpgradeableBeacon beacon = factory.BEACON();
 
         vm.prank(admin);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(UpgradeableBeacon.BeaconInvalidImplementation.selector, makeAddr("eoa")));
         beacon.upgradeTo(makeAddr("eoa"));
         _step("  PASS: reverted BeaconInvalidImplementation");
 
@@ -1100,6 +1216,8 @@ contract UpgradeScenariosQATest is Test {
         _logCase("test_Vault_DeployAndInitVault", unicode"deployAndInitVault 部署并初始化");
 
         VaultFactory factory = new VaultFactory(address(new MantleYieldVault()), admin);
+        address accountantVault = factory.deployVault();
+        Accountant realAccountant = _deployRealAccountant(accountantVault, 1e18, 100);
 
         IMantleYieldVault.InitParams memory params = IMantleYieldVault.InitParams({
             asset: IERC20(address(usdc)),
@@ -1108,12 +1226,15 @@ contract UpgradeScenariosQATest is Test {
             admin: admin,
             gateway: makeAddr("gw"),
             controller: makeAddr("ctrl"),
-            accountant: address(mockAccountant),
+            accountant: address(realAccountant),
             treasury: treasuryAddr,
             maxRedemptionFeeBps: 500,
             redemptionFeeBps: 100,
             minRedeemAmount: 100e6,
-            minDepositAmount: 0
+            minDepositAmount: 0,
+            maxSettlementDeviationBps: 0,
+            depositDailyRemaining: type(uint256).max,
+            redeemDailyRemaining: type(uint256).max
         });
 
         address v = factory.deployAndInitVault(params);
@@ -1194,6 +1315,8 @@ contract UpgradeScenariosQATest is Test {
         VaultFactory vFactory = new VaultFactory(address(new MantleYieldVault()), admin);
         GatewayFactory gFactory = new GatewayFactory(address(new MantleVaultGateway()), admin);
         (MantleYieldVault v,) = _deployVaultAndGateway(vFactory, gFactory);
+        address accountantVault = vFactory.deployVault();
+        Accountant realAccountant = _deployRealAccountant(accountantVault, 1e18, 100);
 
         _step("[Step 1] Call initialize again on already-initialized vault");
         IMantleYieldVault.InitParams memory params = IMantleYieldVault.InitParams({
@@ -1203,15 +1326,18 @@ contract UpgradeScenariosQATest is Test {
             admin: admin,
             gateway: makeAddr("gw2"),
             controller: makeAddr("ctrl2"),
-            accountant: address(mockAccountant),
+            accountant: address(realAccountant),
             treasury: treasuryAddr,
             maxRedemptionFeeBps: 500,
             redemptionFeeBps: 100,
             minRedeemAmount: 100e6,
-            minDepositAmount: 0
+            minDepositAmount: 0,
+            maxSettlementDeviationBps: 0,
+            depositDailyRemaining: type(uint256).max,
+            redeemDailyRemaining: type(uint256).max
         });
         vm.prank(admin);
-        vm.expectRevert();
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
         v.initialize(params);
         _step("  PASS: Reverted InvalidInitialization on double init");
 
@@ -1222,6 +1348,9 @@ contract UpgradeScenariosQATest is Test {
         _logCase("test_Vault_ImplCannotBeInitialized", unicode"实现合约不可直接初始化");
 
         MantleYieldVault impl = new MantleYieldVault();
+        VaultFactory helperFactory = new VaultFactory(address(new MantleYieldVault()), admin);
+        address accountantVault = helperFactory.deployVault();
+        Accountant realAccountant = _deployRealAccountant(accountantVault, 1e18, 100);
 
         _step("[Step 1] Call initialize directly on implementation");
         IMantleYieldVault.InitParams memory params = IMantleYieldVault.InitParams({
@@ -1231,14 +1360,17 @@ contract UpgradeScenariosQATest is Test {
             admin: admin,
             gateway: makeAddr("gw"),
             controller: makeAddr("ctrl"),
-            accountant: address(mockAccountant),
+            accountant: address(realAccountant),
             treasury: treasuryAddr,
             maxRedemptionFeeBps: 500,
             redemptionFeeBps: 100,
             minRedeemAmount: 100e6,
-            minDepositAmount: 0
+            minDepositAmount: 0,
+            maxSettlementDeviationBps: 0,
+            depositDailyRemaining: type(uint256).max,
+            redeemDailyRemaining: type(uint256).max
         });
-        vm.expectRevert();
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
         impl.initialize(params);
         _step("  PASS: Reverted on direct implementation initialize");
 
@@ -1269,8 +1401,9 @@ contract UpgradeScenariosQATest is Test {
         timelock.schedule(address(beacon), 0, data, bytes32(0), salt, minDelay);
 
         _step("[Step 2] Immediately execute before delay -> revert");
+        bytes32 opId = timelock.hashOperation(address(beacon), 0, data, bytes32(0), salt);
         vm.prank(admin);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(TimelockController.TimelockUnexpectedOperationState.selector, opId, bytes32(1 << uint8(TimelockController.OperationState.Ready))));
         timelock.execute(address(beacon), 0, data, bytes32(0), salt);
         _step("  PASS: Early execute reverted as expected");
 
@@ -1333,7 +1466,7 @@ contract UpgradeScenariosQATest is Test {
         _step("  reinitialize(2) succeeded");
 
         _step("[Step 3] Call reinitialize(2) again -> revert");
-        vm.expectRevert();
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
         v2.reinitialize(123);
         _step("  PASS: Second reinitialize(2) reverted as expected");
 
@@ -1366,6 +1499,8 @@ contract UpgradeScenariosQATest is Test {
         _logCase("test_Vault_DeployAndInitVaultRejectZeroAddress", unicode"`deployAndInitVault` 参数零地址拒绝");
 
         VaultFactory factory = new VaultFactory(address(new MantleYieldVault()), admin);
+        address accountantVault = factory.deployVault();
+        Accountant realAccountant = _deployRealAccountant(accountantVault, 1e18, 100);
 
         _step("[Step 1] Call deployAndInitVault with admin = address(0)");
         IMantleYieldVault.InitParams memory params = IMantleYieldVault.InitParams({
@@ -1375,14 +1510,17 @@ contract UpgradeScenariosQATest is Test {
             admin: address(0),
             gateway: makeAddr("gw"),
             controller: makeAddr("ctrl"),
-            accountant: address(mockAccountant),
+            accountant: address(realAccountant),
             treasury: treasuryAddr,
             maxRedemptionFeeBps: 500,
             redemptionFeeBps: 100,
             minRedeemAmount: 100e6,
-            minDepositAmount: 0
+            minDepositAmount: 0,
+            maxSettlementDeviationBps: 0,
+            depositDailyRemaining: type(uint256).max,
+            redeemDailyRemaining: type(uint256).max
         });
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(IAccessControlDefaultAdminRules.AccessControlInvalidDefaultAdmin.selector, address(0)));
         factory.deployAndInitVault(params);
         _step("  PASS: Reverted for zero address admin");
 
@@ -1399,7 +1537,8 @@ contract UpgradeScenariosQATest is Test {
         assertEq(factory.vaultCount(), 1, "should have 1 vault");
 
         _step("[Step 2] Access vaults(1) -> revert (out of bounds)");
-        vm.expectRevert();
+        // Solidity array OOB: optimizer may strip Panic data, producing empty revert
+        vm.expectRevert(bytes(""));
         factory.vaults(1);
         _step("  PASS: Reverted on out-of-bounds access");
 
@@ -1434,8 +1573,9 @@ contract UpgradeScenariosQATest is Test {
         timelock.schedule(address(beacon), 0, data, bytes32(0), salt, minDelay);
 
         _step("[Step 2] Execute immediately should revert");
+        bytes32 opId = timelock.hashOperation(address(beacon), 0, data, bytes32(0), salt);
         vm.prank(admin);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(TimelockController.TimelockUnexpectedOperationState.selector, opId, bytes32(1 << uint8(TimelockController.OperationState.Ready))));
         timelock.execute(address(beacon), 0, data, bytes32(0), salt);
         _step("  Correctly reverted before delay");
 
@@ -1481,7 +1621,7 @@ contract UpgradeScenariosQATest is Test {
         _step("[Step 2] Execute after delay should still revert (cancelled)");
         vm.warp(block.timestamp + minDelay);
         vm.prank(admin);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(TimelockController.TimelockUnexpectedOperationState.selector, opId, bytes32(1 << uint8(TimelockController.OperationState.Ready))));
         timelock.execute(address(beacon), 0, data, bytes32(0), salt);
         _step("  PASS: Cancelled operation cannot be executed");
 
@@ -1516,7 +1656,7 @@ contract UpgradeScenariosQATest is Test {
         StrategyControllerV2 newImpl = new StrategyControllerV2();
 
         vm.prank(attacker);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, attacker));
         beacon.upgradeTo(address(newImpl));
         _step("  PASS: reverted OwnableUnauthorizedAccount");
 
@@ -1530,7 +1670,7 @@ contract UpgradeScenariosQATest is Test {
         UpgradeableBeacon beacon = factory.BEACON();
 
         vm.prank(admin);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(UpgradeableBeacon.BeaconInvalidImplementation.selector, address(0)));
         beacon.upgradeTo(address(0));
         _step("  PASS: reverted BeaconInvalidImplementation");
 
@@ -1544,7 +1684,7 @@ contract UpgradeScenariosQATest is Test {
         UpgradeableBeacon beacon = factory.BEACON();
 
         vm.prank(admin);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(UpgradeableBeacon.BeaconInvalidImplementation.selector, makeAddr("eoa")));
         beacon.upgradeTo(makeAddr("eoa"));
         _step("  PASS: reverted BeaconInvalidImplementation");
 
@@ -1579,7 +1719,7 @@ contract UpgradeScenariosQATest is Test {
     }
 
     function test_SC_TimelockDelayedUpgrade() public {
-        _logCase("test_SC_TimelockDelayedUpgrade", unicode"通过 `TimelockUpgradeController` 延迟升级");
+        _logCase("test_SC_TimelockDelayedUpgrade", unicode"通过 `TimelockController` 延迟升级");
 
         StrategyController impl = new StrategyController();
         StrategyControllerV2 newImpl = new StrategyControllerV2();
@@ -1603,8 +1743,9 @@ contract UpgradeScenariosQATest is Test {
         timelock.schedule(address(beacon), 0, data, bytes32(0), salt, minDelay);
 
         _step("[Step 2] Execute before delay should revert");
+        bytes32 opId = timelock.hashOperation(address(beacon), 0, data, bytes32(0), salt);
         vm.prank(admin);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(TimelockController.TimelockUnexpectedOperationState.selector, opId, bytes32(1 << uint8(TimelockController.OperationState.Ready))));
         timelock.execute(address(beacon), 0, data, bytes32(0), salt);
         _step("  Correctly reverted before delay");
 
@@ -1622,62 +1763,33 @@ contract UpgradeScenariosQATest is Test {
     function test_SC_PostUpgradeControllerWorks() public {
         _logCase("test_SC_PostUpgradeControllerWorks", unicode"升级后已有 controller 继续工作");
 
-        // Deploy infrastructure
-        MockUSDC_Upgrade asset_ = usdc;
-        MockUSDC_Upgrade posToken_ = new MockUSDC_Upgrade(); // reuse ERC20 as posToken
-        MockVaultForController mockVault = new MockVaultForController(address(asset_));
-        MockAdapterForUpgrade adapter = new MockAdapterForUpgrade(address(asset_), address(posToken_));
-
-        StrategyController scImpl = new StrategyController();
-        StrategyControllerFactory factory = new StrategyControllerFactory(address(scImpl), admin);
-        UpgradeableBeacon beacon = factory.BEACON();
-
-        // Deploy OperatorExecutor as the executor (must be a contract)
-        OperatorExecutor opImpl = new OperatorExecutor();
-        bytes memory opInit = abi.encodeCall(OperatorExecutor.initialize, (admin, bot));
-        OperatorExecutor opExec = OperatorExecutor(address(new ERC1967Proxy(address(opImpl), opInit)));
+        RealControllerStack memory s = _deployRealControllerStack(1000, 200, 0);
 
         _step("[Step 1] Deploy and init controller, register + activate strategy, set order");
-        address ctrlAddr = factory.deployAndInitController(
-            address(mockVault), admin, address(opExec), admin, 1000, 200, 0
-        );
-        StrategyController ctrl = StrategyController(ctrlAddr);
-
-        // Register adapter on vault first
-        mockVault.registerAdapter(address(adapter));
-
-        vm.startPrank(admin);
-        ctrl.registerStrategy(address(adapter), 10_000, 1, false);
-        ctrl.activateStrategy(address(adapter));
-        address[] memory order = new address[](1);
-        order[0] = address(adapter);
-        ctrl.setStrategyOrder(order);
-        vm.stopPrank();
-
-        // Fund vault so rebalance can invest
-        asset_.mint(address(mockVault), 10_000e6);
+        _registerActivateAndSetOrder(s.controller, s.adapter);
+        _fundRealVault(s, userA, 10_000e6);
 
         _step("[Step 2] Execute rebalance (invest) before upgrade");
         vm.prank(bot);
-        opExec.executeRebalance(address(ctrl));
-        assertTrue(adapter.depositCount() > 0, "deposit should have been called");
-        uint256 depositsBefore = adapter.depositCount();
+        s.operatorExecutor.executeRebalance(address(s.controller));
+        assertTrue(s.adapter.depositCount() > 0, "deposit should have been called");
+        uint256 depositsBefore = s.adapter.depositCount();
         _step(string.concat("  deposits before upgrade: ", vm.toString(depositsBefore)));
 
         _step("[Step 3] Upgrade beacon to V2");
         StrategyControllerV2 newImpl = new StrategyControllerV2();
-        _beaconUpgrade(beacon, admin, address(newImpl));
+        _beaconUpgrade(s.beacon, admin, address(newImpl));
 
         _step("[Step 4] Verify state preserved and rebalance works after upgrade");
-        _verifyStrategyPreserved(ctrl, address(adapter));
-        assertEq(StrategyControllerV2(ctrlAddr).version(), 2, "V2 version available");
+        _verifyStrategyPreserved(s.controller, address(s.adapter));
+        assertEq(StrategyControllerV2(address(s.controller)).version(), 2, "V2 version available");
 
-        // Rebalance again after upgrade (mint more funds)
-        asset_.mint(address(mockVault), 10_000e6);
+        // Rebalance again after upgrade with a new real deposit
+        _fundRealVault(s, userB, 10_000e6);
         vm.warp(block.timestamp + 1); // pass cooldown
         vm.prank(bot);
-        opExec.executeRebalance(address(ctrl));
-        assertTrue(adapter.depositCount() > depositsBefore, "deposit called again after upgrade");
+        s.operatorExecutor.executeRebalance(address(s.controller));
+        assertTrue(s.adapter.depositCount() > depositsBefore, "deposit called again after upgrade");
         _step("  PASS: Controller continues working after upgrade with state preserved");
 
         _logPass();
@@ -1695,14 +1807,16 @@ contract UpgradeScenariosQATest is Test {
         _beaconUpgrade(beacon, admin, address(newImpl));
 
         _step("[Step 2] Deploy new controller after upgrade");
-        OperatorExecutor opImpl = new OperatorExecutor();
-        bytes memory opInit = abi.encodeCall(OperatorExecutor.initialize, (admin, bot));
-        OperatorExecutor opExec = OperatorExecutor(address(new ERC1967Proxy(address(opImpl), opInit)));
-        MockVaultForController mockVault = new MockVaultForController(address(usdc));
+        VaultFactory vaultFactory = new VaultFactory(address(new MantleYieldVault()), admin);
+        GatewayFactory gatewayFactory = new GatewayFactory(address(new MantleVaultGateway()), admin);
+        (MantleYieldVault vault_,) = _deployVaultAndGateway(vaultFactory, gatewayFactory);
+        OperatorExecutor opExec = _deployOperatorExecutor();
 
         address newCtrl = factory.deployAndInitController(
-            address(mockVault), admin, address(opExec), admin, 1000, 200, 1 hours
+            address(vault_), admin, address(opExec), admin, 1000, 200, 1 hours
         );
+        vm.prank(admin);
+        vault_.setController(newCtrl);
         assertEq(StrategyControllerV2(newCtrl).version(), 2, "new controller should use V2");
         assertEq(factory.implementation(), address(newImpl), "factory.implementation should be V2");
         _step("  PASS: New deployment uses new implementation");
@@ -1713,42 +1827,26 @@ contract UpgradeScenariosQATest is Test {
     function test_SC_StorageLayoutCompatibility() public {
         _logCase("test_SC_StorageLayoutCompatibility", unicode"升级后存储布局兼容性");
 
-        MockUSDC_Upgrade asset_ = usdc;
-        MockUSDC_Upgrade posToken_ = new MockUSDC_Upgrade();
-        MockVaultForController mockVault = new MockVaultForController(address(asset_));
-        MockAdapterForUpgrade adapter = new MockAdapterForUpgrade(address(asset_), address(posToken_));
-
-        StrategyController scImpl = new StrategyController();
-        StrategyControllerFactory factory = new StrategyControllerFactory(address(scImpl), admin);
-        UpgradeableBeacon beacon = factory.BEACON();
-
-        OperatorExecutor opImpl = new OperatorExecutor();
-        bytes memory opInit = abi.encodeCall(OperatorExecutor.initialize, (admin, bot));
-        OperatorExecutor opExec = OperatorExecutor(address(new ERC1967Proxy(address(opImpl), opInit)));
+        RealControllerStack memory s = _deployRealControllerStack(1000, 200, 0);
 
         _step("[Step 1] Deploy V1 controller, register strategy, set order, rebalance");
-        address ctrlAddr = factory.deployAndInitController(
-            address(mockVault), admin, address(opExec), admin, 1000, 200, 0
-        );
-        StrategyController ctrl = StrategyController(ctrlAddr);
-        _registerActivateAndSetOrder(ctrl, mockVault, adapter);
-
-        asset_.mint(address(mockVault), 5_000e6);
+        _registerActivateAndSetOrder(s.controller, s.adapter);
+        _fundRealVault(s, userA, 5_000e6);
         vm.prank(bot);
-        opExec.executeRebalance(address(ctrl));
+        s.operatorExecutor.executeRebalance(address(s.controller));
 
         // Record V1 state snapshot
-        bytes32 v1StateHash = _hashControllerState(ctrl, address(adapter));
+        bytes32 v1StateHash = _hashControllerState(s.controller, address(s.adapter));
 
         _step("[Step 2] Upgrade beacon to V2 with appended storage");
         StrategyControllerV2WithStorage newImpl = new StrategyControllerV2WithStorage();
-        _beaconUpgrade(beacon, admin, address(newImpl));
+        _beaconUpgrade(s.beacon, admin, address(newImpl));
 
         _step("[Step 3] Verify V1 state preserved");
-        assertEq(_hashControllerState(ctrl, address(adapter)), v1StateHash, "controller state fully preserved");
+        assertEq(_hashControllerState(s.controller, address(s.adapter)), v1StateHash, "controller state fully preserved");
 
         _step("[Step 4] V2 new method available");
-        StrategyControllerV2WithStorage ctrlV2 = StrategyControllerV2WithStorage(ctrlAddr);
+        StrategyControllerV2WithStorage ctrlV2 = StrategyControllerV2WithStorage(address(s.controller));
         assertEq(ctrlV2.version(), 2, "version() should return 2");
         vm.prank(admin);
         ctrlV2.setNewControllerVar(42);
@@ -1761,27 +1859,16 @@ contract UpgradeScenariosQATest is Test {
     function test_SC_StorageLayoutIncompatibility() public {
         _logCase("test_SC_StorageLayoutIncompatibility", unicode"升级后存储布局不兼容（破坏性测试）");
 
-        MockVaultForController mockVault = new MockVaultForController(address(usdc));
-
-        StrategyController scImpl = new StrategyController();
-        StrategyControllerFactory factory = new StrategyControllerFactory(address(scImpl), admin);
-        UpgradeableBeacon beacon = factory.BEACON();
-
-        OperatorExecutor opImpl = new OperatorExecutor();
-        bytes memory opInit = abi.encodeCall(OperatorExecutor.initialize, (admin, bot));
-        OperatorExecutor opExec = OperatorExecutor(address(new ERC1967Proxy(address(opImpl), opInit)));
+        RealControllerStack memory s = _deployRealControllerStack(1500, 300, 1 hours);
 
         _step("[Step 1] Deploy V1 controller and record state");
-        address ctrlAddr = factory.deployAndInitController(
-            address(mockVault), admin, address(opExec), admin, 1500, 300, 1 hours
-        );
-        StrategyController ctrl = StrategyController(ctrlAddr);
-        address vaultV1 = address(ctrl.vault());
-        address assetV1 = address(ctrl.asset());
+        address ctrlAddr = address(s.controller);
+        address vaultV1 = address(s.controller.vault());
+        address assetV1 = address(s.controller.asset());
 
         _step("[Step 2] Upgrade to incompatible V2 (swapped vault/asset positions)");
         StrategyControllerV2Incompatible badImpl = new StrategyControllerV2Incompatible();
-        _beaconUpgrade(beacon, admin, address(badImpl));
+        _beaconUpgrade(s.beacon, admin, address(badImpl));
 
         _step("[Step 3] Read data through V2 interface - should be corrupted");
         StrategyControllerV2Incompatible ctrlBad = StrategyControllerV2Incompatible(ctrlAddr);
@@ -1800,61 +1887,45 @@ contract UpgradeScenariosQATest is Test {
             unicode"factory 部署 -> controller 初始化 -> 注册策略 -> 激活 -> rebalance -> 升级 -> rebalance"
         );
 
-        MockUSDC_Upgrade asset_ = usdc;
-        MockUSDC_Upgrade posToken_ = new MockUSDC_Upgrade();
-        MockVaultForController mockVault = new MockVaultForController(address(asset_));
-        MockAdapterForUpgrade adapter = new MockAdapterForUpgrade(address(asset_), address(posToken_));
+        RealControllerStack memory s = _deployRealControllerStack(1000, 200, 0);
 
         _step("[Step 1] Deploy factory");
-        StrategyController scImpl = new StrategyController();
-        StrategyControllerFactory factory = new StrategyControllerFactory(address(scImpl), admin);
-        UpgradeableBeacon beacon = factory.BEACON();
-
-        _step("[Step 2] deployAndInitController");
-        OperatorExecutor opImpl = new OperatorExecutor();
-        bytes memory opInit = abi.encodeCall(OperatorExecutor.initialize, (admin, bot));
-        OperatorExecutor opExec = OperatorExecutor(address(new ERC1967Proxy(address(opImpl), opInit)));
-
-        address ctrlAddr = factory.deployAndInitController(
-            address(mockVault), admin, address(opExec), admin, 1000, 200, 0
-        );
-        StrategyController ctrl = StrategyController(ctrlAddr);
+        assertEq(address(s.controller.vault()), address(s.vault), "controller wired to real vault");
 
         _step("[Step 3] Register strategy");
-        mockVault.registerAdapter(address(adapter));
         vm.prank(admin);
-        ctrl.registerStrategy(address(adapter), 10_000, 1, false);
+        s.controller.registerStrategy(address(s.adapter), 10_000, 1, false);
 
         _step("[Step 4] Activate strategy");
         vm.prank(admin);
-        ctrl.activateStrategy(address(adapter));
+        s.controller.activateStrategy(address(s.adapter));
 
         _step("[Step 5] Set strategy order");
         address[] memory order = new address[](1);
-        order[0] = address(adapter);
+        order[0] = address(s.adapter);
         vm.prank(admin);
-        ctrl.setStrategyOrder(order);
+        s.controller.setStrategyOrder(order);
 
-        _step("[Step 6] Mint USDC to vault");
-        asset_.mint(address(mockVault), 10_000e6);
+        _step("[Step 6] User deposits USDC to real vault through gateway");
+        _fundRealVault(s, userA, 10_000e6);
 
         _step("[Step 7] Rebalance (invest)");
         vm.prank(bot);
-        opExec.executeRebalance(address(ctrl));
-        assertTrue(adapter.depositCount() > 0, "deposit called on invest");
-        uint256 depositsFirst = adapter.depositCount();
+        s.operatorExecutor.executeRebalance(address(s.controller));
+        assertTrue(s.adapter.depositCount() > 0, "deposit called on invest");
+        uint256 depositsFirst = s.adapter.depositCount();
 
         _step("[Step 8] Upgrade beacon to new impl");
         StrategyControllerV2 newImpl = new StrategyControllerV2();
-        _beaconUpgrade(beacon, admin, address(newImpl));
-        assertEq(StrategyControllerV2(ctrlAddr).version(), 2, "V2 active");
+        _beaconUpgrade(s.beacon, admin, address(newImpl));
+        assertEq(StrategyControllerV2(address(s.controller)).version(), 2, "V2 active");
 
         _step("[Step 9] Rebalance again after upgrade");
-        asset_.mint(address(mockVault), 10_000e6);
+        _fundRealVault(s, userB, 10_000e6);
         vm.warp(block.timestamp + 1);
         vm.prank(bot);
-        opExec.executeRebalance(address(ctrl));
-        assertTrue(adapter.depositCount() > depositsFirst, "deposit called again post-upgrade");
+        s.operatorExecutor.executeRebalance(address(s.controller));
+        assertTrue(s.adapter.depositCount() > depositsFirst, "deposit called again post-upgrade");
         _step("  PASS: Full lifecycle with upgrade completed successfully");
 
         _logPass();
@@ -1863,50 +1934,31 @@ contract UpgradeScenariosQATest is Test {
     function test_SC_MultiControllerIndependent() public {
         _logCase("test_SC_MultiControllerIndependent", unicode"多 controller 独立运作");
 
-        MockUSDC_Upgrade asset_ = usdc;
-        MockUSDC_Upgrade posToken_ = new MockUSDC_Upgrade();
-
-        MockVaultForController vault1 = new MockVaultForController(address(asset_));
-        MockVaultForController vault2 = new MockVaultForController(address(asset_));
-        MockAdapterForUpgrade adapterA = new MockAdapterForUpgrade(address(asset_), address(posToken_));
-        MockAdapterForUpgrade adapterB = new MockAdapterForUpgrade(address(asset_), address(posToken_));
-
-        StrategyController scImpl = new StrategyController();
-        StrategyControllerFactory factory = new StrategyControllerFactory(address(scImpl), admin);
-
-        OperatorExecutor opImpl = new OperatorExecutor();
-        bytes memory opInit = abi.encodeCall(OperatorExecutor.initialize, (admin, bot));
-        OperatorExecutor opExec = OperatorExecutor(address(new ERC1967Proxy(address(opImpl), opInit)));
+        RealControllerStack memory s1 = _deployRealControllerStack(1000, 200, 0);
+        RealControllerStack memory s2 = _deployRealControllerStack(2000, 300, 0);
 
         _step("[Step 1] Deploy 2 controllers with different vaults");
-        address ctrl1Addr = factory.deployAndInitController(
-            address(vault1), admin, address(opExec), admin, 1000, 200, 0
-        );
-        address ctrl2Addr = factory.deployAndInitController(
-            address(vault2), admin, address(opExec), admin, 2000, 300, 0
-        );
-        StrategyController ctrl1 = StrategyController(ctrl1Addr);
-        StrategyController ctrl2 = StrategyController(ctrl2Addr);
+        assertTrue(address(s1.vault) != address(s2.vault), "vaults must differ");
 
         _step("[Step 2] Controller1 registers/activates adapterA");
-        _registerActivateAndSetOrder(ctrl1, vault1, adapterA);
+        _registerActivateAndSetOrder(s1.controller, s1.adapter);
 
         _step("[Step 3] Controller2 registers/activates adapterB");
-        _registerActivateAndSetOrder(ctrl2, vault2, adapterB);
+        _registerActivateAndSetOrder(s2.controller, s2.adapter);
 
         _step("[Step 4] Rebalance both independently");
-        asset_.mint(address(vault1), 5_000e6);
-        asset_.mint(address(vault2), 8_000e6);
+        _fundRealVault(s1, userA, 5_000e6);
+        _fundRealVault(s2, userB, 8_000e6);
 
         vm.prank(bot);
-        opExec.executeRebalance(ctrl1Addr);
+        s1.operatorExecutor.executeRebalance(address(s1.controller));
         vm.prank(bot);
-        opExec.executeRebalance(ctrl2Addr);
+        s2.operatorExecutor.executeRebalance(address(s2.controller));
 
-        assertTrue(adapterA.depositCount() > 0, "adapterA got deposits");
-        assertTrue(adapterB.depositCount() > 0, "adapterB got deposits");
-        assertEq(ctrl1.bufferTargetBps(), 1000, "ctrl1 has its own buffer");
-        assertEq(ctrl2.bufferTargetBps(), 2000, "ctrl2 has its own buffer");
+        assertTrue(s1.adapter.depositCount() > 0, "adapterA got deposits");
+        assertTrue(s2.adapter.depositCount() > 0, "adapterB got deposits");
+        assertEq(s1.controller.bufferTargetBps(), 1000, "ctrl1 has its own buffer");
+        assertEq(s2.controller.bufferTargetBps(), 2000, "ctrl2 has its own buffer");
         _step("  PASS: Controllers operate independently with different vaults and strategies");
 
         _logPass();
@@ -1918,43 +1970,20 @@ contract UpgradeScenariosQATest is Test {
             unicode"`OperatorExecutor -> StrategyController -> Vault` 全链路"
         );
 
-        MockUSDC_Upgrade asset_ = usdc;
-        MockUSDC_Upgrade posToken_ = new MockUSDC_Upgrade();
-        MockVaultForController mockVault = new MockVaultForController(address(asset_));
-        MockAdapterForUpgrade adapter = new MockAdapterForUpgrade(address(asset_), address(posToken_));
-
-        _step("[Step 1] Deploy OperatorExecutor");
-        OperatorExecutor opImpl = new OperatorExecutor();
-        bytes memory opInit = abi.encodeCall(OperatorExecutor.initialize, (admin, bot));
-        OperatorExecutor opExec = OperatorExecutor(address(new ERC1967Proxy(address(opImpl), opInit)));
-
-        _step("[Step 2] Deploy controller with opExec as OPERATOR_EXECUTOR_ROLE");
-        StrategyController scImpl = new StrategyController();
-        StrategyControllerFactory factory = new StrategyControllerFactory(address(scImpl), admin);
-        address ctrlAddr = factory.deployAndInitController(
-            address(mockVault), admin, address(opExec), admin, 1000, 200, 0
-        );
-        StrategyController ctrl = StrategyController(ctrlAddr);
+        RealControllerStack memory s = _deployRealControllerStack(1000, 200, 0);
 
         _step("[Step 3] Register, activate, set order");
-        mockVault.registerAdapter(address(adapter));
-        vm.startPrank(admin);
-        ctrl.registerStrategy(address(adapter), 10_000, 1, false);
-        ctrl.activateStrategy(address(adapter));
-        address[] memory order = new address[](1);
-        order[0] = address(adapter);
-        ctrl.setStrategyOrder(order);
-        vm.stopPrank();
+        _registerActivateAndSetOrder(s.controller, s.adapter);
 
         _step("[Step 4] Fund vault and execute rebalance through full chain");
-        asset_.mint(address(mockVault), 10_000e6);
+        _fundRealVault(s, userA, 10_000e6);
         vm.prank(bot);
-        opExec.executeRebalance(ctrlAddr);
+        s.operatorExecutor.executeRebalance(address(s.controller));
 
         _step("[Step 5] Verify vault state updated");
-        assertTrue(adapter.depositCount() > 0, "adapter deposit called");
-        assertTrue(mockVault.investInFlightTotal() > 0, "vault invest in-flight recorded");
-        assertTrue(mockVault.inFlightIdCursor() > 0, "in-flight ID created");
+        assertTrue(s.adapter.depositCount() > 0, "adapter deposit called");
+        assertTrue(s.vault.totalInvestInFlight() > 0, "vault invest in-flight recorded");
+        assertTrue(s.vault.nextInFlightId() > 1, "in-flight ID created");
         _step("  PASS: OperatorExecutor -> StrategyController -> Vault full chain works");
 
         _logPass();
@@ -1966,48 +1995,26 @@ contract UpgradeScenariosQATest is Test {
             unicode"`OperatorExecutor settleAdapter` 全链路"
         );
 
-        MockUSDC_Upgrade asset_ = usdc;
-        MockUSDC_Upgrade posToken_ = new MockUSDC_Upgrade();
-        MockVaultForController mockVault = new MockVaultForController(address(asset_));
-        MockAdapterForUpgrade adapter = new MockAdapterForUpgrade(address(asset_), address(posToken_));
-
-        OperatorExecutor opImpl = new OperatorExecutor();
-        bytes memory opInit = abi.encodeCall(OperatorExecutor.initialize, (admin, bot));
-        OperatorExecutor opExec = OperatorExecutor(address(new ERC1967Proxy(address(opImpl), opInit)));
-
-        StrategyController scImpl = new StrategyController();
-        StrategyControllerFactory factory = new StrategyControllerFactory(address(scImpl), admin);
-        address ctrlAddr = factory.deployAndInitController(
-            address(mockVault), admin, address(opExec), admin, 1000, 200, 0
-        );
-        StrategyController ctrl = StrategyController(ctrlAddr);
-
-        mockVault.registerAdapter(address(adapter));
-        vm.startPrank(admin);
-        ctrl.registerStrategy(address(adapter), 10_000, 1, false);
-        ctrl.activateStrategy(address(adapter));
-        address[] memory order = new address[](1);
-        order[0] = address(adapter);
-        ctrl.setStrategyOrder(order);
-        vm.stopPrank();
+        RealControllerStack memory s = _deployRealControllerStack(1000, 200, 0);
+        _registerActivateAndSetOrder(s.controller, s.adapter);
 
         _step("[Step 1] Create invest in-flight via rebalance");
-        asset_.mint(address(mockVault), 10_000e6);
+        _fundRealVault(s, userA, 10_000e6);
         vm.prank(bot);
-        opExec.executeRebalance(ctrlAddr);
+        s.operatorExecutor.executeRebalance(address(s.controller));
 
-        uint256 inFlightId = mockVault.inFlightIdCursor();
+        uint256 inFlightId = s.vault.nextInFlightId() - 1;
         assertTrue(inFlightId > 0, "in-flight created");
-        uint256 investBefore = mockVault.investInFlightTotal();
+        uint256 investBefore = s.vault.totalInvestInFlight();
         assertTrue(investBefore > 0, "invest in-flight > 0");
 
         _step("[Step 2] Settle adapter through OperatorExecutor");
-        _settleInvestInFlight(mockVault, opExec, ctrlAddr, address(adapter));
+        _settleInvestInFlight(s.vault, inFlightId, s.posToken, s.operatorExecutor, address(s.controller), address(s.adapter));
 
         _step("[Step 3] Verify settlement completed");
-        assertEq(mockVault.investInFlightTotal(), 0, "invest in-flight cleared");
+        assertEq(s.vault.totalInvestInFlight(), 0, "invest in-flight cleared");
         IMantleYieldVault.InFlightStatus status;
-        (,,,,,,,, status) = mockVault.inFlightRecords(inFlightId);
+        (,,,,,,,, status) = s.vault.inFlightRecords(inFlightId);
         assertEq(uint8(status), uint8(IMantleYieldVault.InFlightStatus.CONFIRMED), "in-flight confirmed");
         _step("  PASS: OperatorExecutor settleAdapter full chain works");
 
@@ -2020,63 +2027,51 @@ contract UpgradeScenariosQATest is Test {
             unicode"策略完整生命周期：注册 -> 激活 -> order -> rebalance -> settle -> 移出 order -> 停用"
         );
 
-        MockUSDC_Upgrade asset_ = usdc;
-        MockUSDC_Upgrade posToken_ = new MockUSDC_Upgrade();
-        MockVaultForController mockVault = new MockVaultForController(address(asset_));
-        MockAdapterForUpgrade adapter = new MockAdapterForUpgrade(address(asset_), address(posToken_));
-
-        OperatorExecutor opImpl = new OperatorExecutor();
-        bytes memory opInit = abi.encodeCall(OperatorExecutor.initialize, (admin, bot));
-        OperatorExecutor opExec = OperatorExecutor(address(new ERC1967Proxy(address(opImpl), opInit)));
-
-        StrategyController scImpl = new StrategyController();
-        StrategyControllerFactory factory = new StrategyControllerFactory(address(scImpl), admin);
-        address ctrlAddr = factory.deployAndInitController(
-            address(mockVault), admin, address(opExec), admin, 1000, 200, 0
-        );
-        StrategyController ctrl = StrategyController(ctrlAddr);
+        RealControllerStack memory s = _deployRealControllerStack(1000, 200, 0);
 
         _step("[Step 1] registerStrategy");
-        mockVault.registerAdapter(address(adapter));
         vm.prank(admin);
-        ctrl.registerStrategy(address(adapter), 10_000, 1, false);
-        (,,,, bool exists1) = ctrl.strategyInfo(address(adapter));
+        s.controller.registerStrategy(address(s.adapter), 10_000, 1, false);
+        (,,,, bool exists1) = s.controller.strategyInfo(address(s.adapter));
         assertTrue(exists1, "strategy registered");
 
         _step("[Step 2] activateStrategy");
         vm.prank(admin);
-        ctrl.activateStrategy(address(adapter));
-        (,,, bool active2,) = ctrl.strategyInfo(address(adapter));
+        s.controller.activateStrategy(address(s.adapter));
+        (,,, bool active2,) = s.controller.strategyInfo(address(s.adapter));
         assertTrue(active2, "strategy activated");
 
         _step("[Step 3] setStrategyOrder");
         address[] memory order = new address[](1);
-        order[0] = address(adapter);
+        order[0] = address(s.adapter);
         vm.prank(admin);
-        ctrl.setStrategyOrder(order);
-        assertEq(ctrl.strategyOrderLength(), 1, "order length = 1");
+        s.controller.setStrategyOrder(order);
+        assertEq(s.controller.strategyOrderLength(), 1, "order length = 1");
 
         _step("[Step 4] rebalance (invest)");
-        asset_.mint(address(mockVault), 10_000e6);
+        _fundRealVault(s, userA, 10_000e6);
         vm.prank(bot);
-        opExec.executeRebalance(ctrlAddr);
-        assertTrue(adapter.depositCount() > 0, "invest executed");
+        s.operatorExecutor.executeRebalance(address(s.controller));
+        assertTrue(s.adapter.depositCount() > 0, "invest executed");
 
         _step("[Step 5] settleAdapter (confirm invest in-flight)");
-        _settleInvestInFlight(mockVault, opExec, ctrlAddr, address(adapter));
-        assertEq(mockVault.investInFlightTotal(), 0, "in-flight settled");
+        _settleInvestInFlight(
+            s.vault, s.vault.nextInFlightId() - 1, s.posToken, s.operatorExecutor, address(s.controller), address(s.adapter)
+        );
+        assertEq(s.vault.totalInvestInFlight(), 0, "in-flight settled");
 
         _step("[Step 6] Register a second adapter, move weight, set order to exclude first adapter");
-        MockAdapterForUpgrade adapter2 = new MockAdapterForUpgrade(address(asset_), address(posToken_));
-        _registerAndSwapToAdapter2(ctrl, mockVault, adapter, adapter2);
-        assertEq(ctrl.strategyOrderLength(), 1, "order has only adapter2");
+        MockAdapterForUpgrade adapter2 =
+            new MockAdapterForUpgrade(address(usdc), address(s.posToken), address(s.vault));
+        _registerAndSwapToAdapter2(s.controller, s.adapter, adapter2);
+        assertEq(s.controller.strategyOrderLength(), 1, "order has only adapter2");
 
         _step("[Step 7] deactivateStrategy (first adapter)");
         vm.prank(admin);
-        ctrl.deactivateStrategy(address(adapter));
-        (,,, bool active7,) = ctrl.strategyInfo(address(adapter));
+        s.controller.deactivateStrategy(address(s.adapter));
+        (,,, bool active7,) = s.controller.strategyInfo(address(s.adapter));
         assertFalse(active7, "strategy deactivated");
-        assertFalse(mockVault.isAdapterRegistry(address(adapter)), "adapter removed from vault");
+        assertFalse(s.vault.isAdapter(address(s.adapter)), "adapter removed from vault");
         _step("  PASS: Full strategy lifecycle completed successfully");
 
         _logPass();
@@ -2138,7 +2133,7 @@ contract UpgradeScenariosQATest is Test {
         SanctionsOracleV2 newImpl = new SanctionsOracleV2();
 
         vm.prank(attacker);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, attacker));
         beacon.upgradeTo(address(newImpl));
         _step("  PASS: reverted OwnableUnauthorizedAccount");
 
@@ -2152,7 +2147,7 @@ contract UpgradeScenariosQATest is Test {
         UpgradeableBeacon beacon = factory.BEACON();
 
         vm.prank(admin);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(UpgradeableBeacon.BeaconInvalidImplementation.selector, address(0)));
         beacon.upgradeTo(address(0));
         _step("  PASS: reverted BeaconInvalidImplementation");
 
@@ -2166,7 +2161,7 @@ contract UpgradeScenariosQATest is Test {
         UpgradeableBeacon beacon = factory.BEACON();
 
         vm.prank(admin);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(UpgradeableBeacon.BeaconInvalidImplementation.selector, makeAddr("eoa")));
         beacon.upgradeTo(makeAddr("eoa"));
         _step("  PASS: reverted BeaconInvalidImplementation");
 
@@ -2314,6 +2309,7 @@ contract UpgradeScenariosQATest is Test {
         address gwAddr = gFactory.deployGateway();
         MantleYieldVault v = MantleYieldVault(vAddr);
         MantleVaultGateway gw = MantleVaultGateway(gwAddr);
+        Accountant realAccountant = _deployRealAccountant(vAddr, 1e18, 100);
 
         vm.prank(admin);
         v.initialize(
@@ -2324,12 +2320,15 @@ contract UpgradeScenariosQATest is Test {
                 admin: admin,
                 gateway: gwAddr,
                 controller: makeAddr("controller"),
-                accountant: address(mockAccountant),
+                accountant: address(realAccountant),
                 treasury: treasuryAddr,
                 maxRedemptionFeeBps: 500,
                 redemptionFeeBps: 100,
                 minRedeemAmount: 100e6,
-                minDepositAmount: 0
+                minDepositAmount: 0,
+                maxSettlementDeviationBps: 0,
+                depositDailyRemaining: type(uint256).max,
+                redeemDailyRemaining: type(uint256).max
             })
         );
 
@@ -2429,7 +2428,7 @@ contract UpgradeScenariosQATest is Test {
         AccountantV2 newImpl = new AccountantV2();
 
         vm.prank(attacker);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, attacker));
         beacon.upgradeTo(address(newImpl));
         _step("  PASS: reverted OwnableUnauthorizedAccount");
 
@@ -2443,7 +2442,7 @@ contract UpgradeScenariosQATest is Test {
         UpgradeableBeacon beacon = factory.BEACON();
 
         vm.prank(admin);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(UpgradeableBeacon.BeaconInvalidImplementation.selector, address(0)));
         beacon.upgradeTo(address(0));
         _step("  PASS: reverted BeaconInvalidImplementation");
 
@@ -2457,7 +2456,7 @@ contract UpgradeScenariosQATest is Test {
         UpgradeableBeacon beacon = factory.BEACON();
 
         vm.prank(admin);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(UpgradeableBeacon.BeaconInvalidImplementation.selector, makeAddr("eoa")));
         beacon.upgradeTo(makeAddr("eoa"));
         _step("  PASS: reverted BeaconInvalidImplementation");
 
@@ -2496,7 +2495,7 @@ contract UpgradeScenariosQATest is Test {
     }
 
     function test_Acct_TimelockDelayedUpgrade() public {
-        _logCase("test_Acct_TimelockDelayedUpgrade", unicode"通过 `TimelockUpgradeController` 延迟升级");
+        _logCase("test_Acct_TimelockDelayedUpgrade", unicode"通过 `TimelockController` 延迟升级");
 
         Accountant impl = new Accountant();
         AccountantV2 newImpl = new AccountantV2();
@@ -2519,8 +2518,9 @@ contract UpgradeScenariosQATest is Test {
         timelock.schedule(address(beacon), 0, data, bytes32(0), salt, minDelay);
 
         _step("[Step 1] Execute before delay should revert");
+        bytes32 opId = timelock.hashOperation(address(beacon), 0, data, bytes32(0), salt);
         vm.prank(admin);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(TimelockController.TimelockUnexpectedOperationState.selector, opId, bytes32(1 << uint8(TimelockController.OperationState.Ready))));
         timelock.execute(address(beacon), 0, data, bytes32(0), salt);
 
         _step("[Step 2] Warp and execute");
@@ -2551,11 +2551,19 @@ contract UpgradeScenariosQATest is Test {
         address acctAddr = factory.deployAndInitAccountant(address(v), 1e18, 100, admin);
         Accountant acct = Accountant(acctAddr);
 
-        _step("[Step 2] Grant executor role and update rate");
-        // admin already has EXECUTOR_ROLE from initialization
+        _step("[Step 2] Deploy executor and update rate via bot -> executor -> accountant");
+        AccountantExecutor exImpl = new AccountantExecutor();
+        AccountantExecutor executor = AccountantExecutor(address(new ERC1967Proxy(
+            address(exImpl), abi.encodeCall(AccountantExecutor.initialize, (admin))
+        )));
+        vm.startPrank(admin);
+        executor.grantRole(executor.BOT_ROLE(), bot);
+        acct.grantRole(acct.ACCOUNTANT_EXECUTOR_ROLE(), address(executor));
+        vm.stopPrank();
+
         vm.warp(block.timestamp + 21 hours); // wait for cooldown
-        vm.prank(admin);
-        acct.updateExchangeRate(1.001e18, uint64(block.timestamp));
+        vm.prank(bot);
+        executor.executeUpdateRate(address(acct), 1.001e18, uint64(block.timestamp));
         assertEq(acct.lastExchangeRate(), 1.001e18, "rate updated");
         _step("  Rate updated to 1.001e18");
 
@@ -2563,10 +2571,10 @@ contract UpgradeScenariosQATest is Test {
         AccountantV2 newImpl = new AccountantV2();
         _beaconUpgrade(beacon, admin, address(newImpl));
 
-        _step("[Step 4] Update rate again after upgrade");
+        _step("[Step 4] Update rate again after upgrade via executor");
         vm.warp(block.timestamp + 21 hours);
-        vm.prank(admin);
-        acct.updateExchangeRate(1.002e18, uint64(block.timestamp));
+        vm.prank(bot);
+        executor.executeUpdateRate(address(acct), 1.002e18, uint64(block.timestamp));
         assertEq(acct.lastExchangeRate(), 1.002e18, "rate updated after upgrade");
         _step("  PASS: Full lifecycle with upgrade works correctly");
 
@@ -2587,14 +2595,25 @@ contract UpgradeScenariosQATest is Test {
         address a1 = factory.deployAndInitAccountant(address(v1), 1e18, 100, admin);
         address a2 = factory.deployAndInitAccountant(address(v2), 1e18, 100, admin);
 
-        _step("[Step 1] Update rate on accountant1");
-        vm.warp(block.timestamp + 21 hours);
-        vm.prank(admin);
-        Accountant(a1).updateExchangeRate(1.005e18, uint64(block.timestamp));
+        // Deploy executor and grant roles on both accountants
+        AccountantExecutor exImpl = new AccountantExecutor();
+        AccountantExecutor executor = AccountantExecutor(address(new ERC1967Proxy(
+            address(exImpl), abi.encodeCall(AccountantExecutor.initialize, (admin))
+        )));
+        vm.startPrank(admin);
+        executor.grantRole(executor.BOT_ROLE(), bot);
+        Accountant(a1).grantRole(Accountant(a1).ACCOUNTANT_EXECUTOR_ROLE(), address(executor));
+        Accountant(a2).grantRole(Accountant(a2).ACCOUNTANT_EXECUTOR_ROLE(), address(executor));
+        vm.stopPrank();
 
-        _step("[Step 2] Update rate on accountant2 differently");
-        vm.prank(admin);
-        Accountant(a2).updateExchangeRate(0.995e18, uint64(block.timestamp));
+        _step("[Step 1] Update rate on accountant1 via executor");
+        vm.warp(block.timestamp + 21 hours);
+        vm.prank(bot);
+        executor.executeUpdateRate(a1, 1.005e18, uint64(block.timestamp));
+
+        _step("[Step 2] Update rate on accountant2 differently via executor");
+        vm.prank(bot);
+        executor.executeUpdateRate(a2, 0.995e18, uint64(block.timestamp));
 
         assertEq(Accountant(a1).lastExchangeRate(), 1.005e18, "a1 rate correct");
         assertEq(Accountant(a2).lastExchangeRate(), 0.995e18, "a2 rate correct");
@@ -2631,13 +2650,16 @@ contract UpgradeScenariosQATest is Test {
     /// @dev Helper: deploy Accountant via BeaconProxy with MockVaultForUpgrade
     /// @dev Helper: settle all pending invest in-flights for a given adapter via OperatorExecutor
     function _settleInvestInFlight(
-        MockVaultForController mv,
+        IMantleYieldVault vault_,
+        uint256 inFlightId,
+        MockUSDC_Upgrade posToken_,
         OperatorExecutor opExec,
         address ctrlAddr,
         address adapterAddr
     ) internal {
-        uint256 inFlightId = mv.inFlightIdCursor();
-        (,,, uint256 tokenAmt,,,,,) = mv.inFlightRecords(inFlightId);
+        (, address flightAdapter, address posToken, uint256 tokenAmt,,,,,) = vault_.inFlightRecords(inFlightId);
+        assertEq(posToken, address(posToken_), "unexpected invest pos token");
+        posToken_.mint(flightAdapter, tokenAmt);
         uint256[] memory investIds = new uint256[](1);
         investIds[0] = inFlightId;
         uint256[] memory investSettled = new uint256[](1);
@@ -2652,12 +2674,7 @@ contract UpgradeScenariosQATest is Test {
     }
 
     /// @dev Register adapter, activate, and set as sole strategy order
-    function _registerActivateAndSetOrder(
-        StrategyController ctrl,
-        MockVaultForController mv,
-        MockAdapterForUpgrade adapter
-    ) internal {
-        mv.registerAdapter(address(adapter));
+    function _registerActivateAndSetOrder(StrategyController ctrl, MockAdapterForUpgrade adapter) internal {
         vm.startPrank(admin);
         ctrl.registerStrategy(address(adapter), 10_000, 1, false);
         ctrl.activateStrategy(address(adapter));
@@ -2694,11 +2711,9 @@ contract UpgradeScenariosQATest is Test {
     /// @dev Register adapter2, move all weight from adapter to adapter2, set order to adapter2 only
     function _registerAndSwapToAdapter2(
         StrategyController ctrl,
-        MockVaultForController mv,
         MockAdapterForUpgrade adapter,
         MockAdapterForUpgrade adapter2
     ) internal {
-        mv.registerAdapter(address(adapter2));
         vm.startPrank(admin);
         ctrl.registerStrategy(address(adapter2), 0, 2, false);
         ctrl.activateStrategy(address(adapter2));
@@ -2744,8 +2759,57 @@ contract UpgradeScenariosQATest is Test {
 
         vm.startPrank(admin);
         executor.grantRole(executor.BOT_ROLE(), bot);
-        acct.grantRole(acct.EXECUTOR_ROLE(), address(executor));
+        acct.grantRole(acct.ACCOUNTANT_EXECUTOR_ROLE(), address(executor));
         vm.stopPrank();
+    }
+
+    function test_Acct_StorageLayoutCompatibility() public {
+        _logCase(
+            "test_Acct_StorageLayoutCompatibility",
+            unicode"升级后存储布局兼容性（ERC-7201）"
+        );
+
+        _step("[Step 1] Deploy full chain and perform rate update to establish V1 state");
+        RealAccountantStack memory s = _deployRealAccountantStack();
+        _fundRealVault(s.gateway, s.vault, userA, 1_000_000e6);
+
+        vm.warp(block.timestamp + 21 hours);
+        vm.prank(bot);
+        s.executor.executeUpdateRate(address(s.accountant), 1.005e18, uint64(block.timestamp));
+
+        // Record V1 state snapshot
+        uint256 v1Rate = s.accountant.lastExchangeRate();
+        uint32 v1FeeRate = s.accountant.managementFeeRate();
+        uint64 v1ComputeTs = s.accountant.lastComputeTimestamp();
+        address v1Vault = address(s.accountant.vault());
+        assertEq(v1Rate, 1.005e18, "V1 rate set");
+
+        _step("[Step 2] Upgrade beacon to V2 with appended storage");
+        UpgradeableBeacon beacon = s.factory.BEACON();
+        AccountantV2WithStorage newImpl = new AccountantV2WithStorage();
+        _beaconUpgrade(beacon, admin, address(newImpl));
+
+        _step("[Step 3] Verify V1 data preserved (ERC-7201 namespaced storage)");
+        assertEq(s.accountant.lastExchangeRate(), v1Rate, "lastExchangeRate preserved");
+        assertEq(s.accountant.managementFeeRate(), v1FeeRate, "managementFeeRate preserved");
+        assertEq(s.accountant.lastComputeTimestamp(), v1ComputeTs, "lastComputeTimestamp preserved");
+        assertEq(address(s.accountant.vault()), v1Vault, "vault reference preserved");
+
+        _step("[Step 4] V2 new method available");
+        AccountantV2WithStorage acctV2 = AccountantV2WithStorage(address(s.accountant));
+        assertEq(acctV2.version(), 2, "version() returns 2");
+        vm.prank(admin);
+        acctV2.setNewAccountantVar(42);
+        assertEq(acctV2.newAccountantVar(), 42, "new V2 variable works");
+
+        _step("[Step 5] V1 operations still work after upgrade");
+        vm.warp(block.timestamp + 21 hours);
+        vm.prank(bot);
+        s.executor.executeUpdateRate(address(s.accountant), 1.006e18, uint64(block.timestamp));
+        assertEq(s.accountant.lastExchangeRate(), 1.006e18, "rate update works after upgrade");
+        _step("  PASS: V1 data fully preserved (ERC-7201); V2 new method works");
+
+        _logPass();
     }
 
     function test_Acct_StorageLayoutIncompatibility() public {
@@ -2758,17 +2822,26 @@ contract UpgradeScenariosQATest is Test {
         AccountantFactory factory = new AccountantFactory(address(impl), admin);
         UpgradeableBeacon beacon = factory.BEACON();
 
-        MockVaultForUpgrade mockVault = new MockVaultForUpgrade();
-        mockVault.setTotalSupply(1_000_000e18);
+        MockVaultForUpgrade mockVault = new MockVaultForUpgrade(1_000_000e18);
 
         _step("[Step 1] Deploy accountant V1 and write data");
         address acctAddr = factory.deployAndInitAccountant(address(mockVault), 1e18, 100, admin);
         Accountant acct = Accountant(acctAddr);
 
+        // Deploy executor for proper call chain
+        AccountantExecutor exImpl = new AccountantExecutor();
+        AccountantExecutor executor = AccountantExecutor(address(new ERC1967Proxy(
+            address(exImpl), abi.encodeCall(AccountantExecutor.initialize, (admin))
+        )));
+        vm.startPrank(admin);
+        executor.grantRole(executor.BOT_ROLE(), bot);
+        acct.grantRole(acct.ACCOUNTANT_EXECUTOR_ROLE(), address(executor));
+        vm.stopPrank();
+
         // Update rate to set a known lastExchangeRate
         vm.warp(block.timestamp + 21 hours);
-        vm.prank(admin);
-        acct.updateExchangeRate(1.005e18, uint64(block.timestamp));
+        vm.prank(bot);
+        executor.executeUpdateRate(address(acct), 1.005e18, uint64(block.timestamp));
         uint256 v1Rate = acct.lastExchangeRate();
         assertEq(v1Rate, 1.005e18, "V1 rate should be 1.005e18");
         _step(string.concat("  V1 lastExchangeRate: ", vm.toString(v1Rate)));
@@ -2795,28 +2868,50 @@ contract UpgradeScenariosQATest is Test {
             unicode"accountant `setVault` 切换后与新 vault 联动"
         );
 
-        MockVaultForUpgrade oldVault = new MockVaultForUpgrade();
-        oldVault.setTotalSupply(1_000_000e18);
+        _step("[Step 1] Deploy accountant with full executor chain and oldVault");
+        RealAccountantStack memory oldStack = _deployRealAccountantStack();
+        _fundRealVault(oldStack.gateway, oldStack.vault, userA, 1_000_000e6);
 
-        _step("[Step 1] Deploy accountant with oldVault");
-        (Accountant acct,) = _deployAccountantWithMockVault(oldVault);
+        _step("[Step 1.1] Establish a non-zero fee baseline on oldVault");
+        vm.warp(block.timestamp + 21 hours);
+        vm.prank(bot);
+        oldStack.executor.executeSettleManagementFee(address(oldStack.accountant));
+        uint256 oldVaultSupplyBefore = oldStack.vault.totalSupply();
+        uint256 oldTreasuryBefore = oldStack.vault.balanceOf(treasuryAddr);
 
         _step("[Step 2] Switch to newVault");
-        MockVaultForUpgrade newVault = new MockVaultForUpgrade();
-        newVault.setTotalSupply(2_000_000e18);
+        VaultFactory vaultFactory = new VaultFactory(address(new MantleYieldVault()), admin);
+        GatewayFactory gatewayFactory = new GatewayFactory(address(new MantleVaultGateway()), admin);
+        (MantleYieldVault newVault, MantleVaultGateway newGateway) = _deployVaultAndGateway(vaultFactory, gatewayFactory);
+        _fundRealVault(newGateway, newVault, userB, 2_000_000e6);
+        uint256 newVaultSupplyBefore = newVault.totalSupply();
+        uint256 newTreasuryBefore = newVault.balanceOf(treasuryAddr);
+
         vm.prank(admin);
-        acct.setVault(address(newVault));
-        assertEq(address(acct.vault()), address(newVault), "vault should be newVault");
+        oldStack.accountant.setVault(address(newVault));
+        vm.prank(admin);
+        newVault.setAccountant(address(oldStack.accountant));
+        assertEq(address(oldStack.accountant.vault()), address(newVault), "vault should be newVault");
         _step("  vault switched to newVault");
 
-        _step("[Step 3] Update exchange rate - fee settlement should use newVault");
+        _step("[Step 3] Call settleManagementFee via executor - fee settlement should use newVault");
         vm.warp(block.timestamp + 21 hours);
-        vm.prank(admin);
-        acct.updateExchangeRate(1.001e18, uint64(block.timestamp));
+        uint256 lastSettleTsBefore = oldStack.accountant.lastFeeSettleTimestamp();
+        uint256 shareBaseBefore = oldStack.accountant.totalSharesLastSettle();
+        vm.prank(bot);
+        oldStack.executor.executeSettleManagementFee(address(oldStack.accountant));
 
-        // Fee settlement calls newVault.mintFeeShares, not oldVault
-        assertEq(oldVault.totalFeeMintCalls(), 0, "oldVault should not receive fee shares");
-        assertTrue(newVault.totalFeeMintCalls() > 0, "newVault should receive fee shares");
+        uint256 oldVaultSupplyAfter = oldStack.vault.totalSupply();
+        uint256 newVaultSupplyAfter = newVault.totalSupply();
+        uint256 newTreasuryAfter = newVault.balanceOf(treasuryAddr);
+        uint256 timeElapsed = block.timestamp - lastSettleTsBefore;
+        uint256 expectedFeeShares =
+            ((newVaultSupplyBefore < shareBaseBefore ? newVaultSupplyBefore : shareBaseBefore) * oldStack.accountant.managementFeeRate() * timeElapsed)
+                / (10_000 * 365 days);
+        assertEq(oldVaultSupplyAfter, oldVaultSupplyBefore, "oldVault totalSupply should stay unchanged");
+        assertEq(oldStack.vault.balanceOf(treasuryAddr), oldTreasuryBefore, "oldVault treasury balance should stay unchanged");
+        assertEq(newVaultSupplyAfter - newVaultSupplyBefore, expectedFeeShares, "newVault totalSupply should increase by expected fee shares");
+        assertEq(newTreasuryAfter - newTreasuryBefore, expectedFeeShares, "newVault treasury should receive expected fee shares");
         _step("  PASS: Fee settlement uses newVault after setVault switch");
 
         _logPass();
@@ -2828,23 +2923,20 @@ contract UpgradeScenariosQATest is Test {
             unicode"完整汇率更新流程"
         );
 
-        MockVaultForUpgrade mockVault = new MockVaultForUpgrade();
-        mockVault.setTotalSupply(1_000_000e18);
-
-        _step("[Step 1] Deploy full chain (executor + accountant + mockVault)");
-        (Accountant acct, AccountantExecutor executor,) = _deployFullChain(mockVault);
+        _step("[Step 1] Deploy full chain (executor + accountant + real vault)");
+        RealAccountantStack memory s = _deployRealAccountantStack();
 
         _step("[Step 2] Bot calls executor.executeUpdateRate");
         vm.warp(block.timestamp + 21 hours);
         uint64 newRate = 1.001e18;
         uint64 computeTs = uint64(block.timestamp);
         vm.prank(bot);
-        executor.executeUpdateRate(address(acct), newRate, computeTs);
+        s.executor.executeUpdateRate(address(s.accountant), newRate, computeTs);
 
         _step("[Step 3] Verify full chain success");
-        assertEq(acct.lastExchangeRate(), newRate, "rate should be updated");
-        assertEq(acct.lastComputeTimestamp(), computeTs, "computeTimestamp should be set");
-        _step("  PASS: Full chain Bot -> executor -> accountant -> fee settle -> rate update succeeded");
+        assertEq(s.accountant.lastExchangeRate(), newRate, "rate should be updated");
+        assertEq(s.accountant.lastComputeTimestamp(), computeTs, "computeTimestamp should be set");
+        _step("  PASS: Full chain Bot -> executor -> accountant -> rate update succeeded");
 
         _logPass();
     }
@@ -2855,16 +2947,13 @@ contract UpgradeScenariosQATest is Test {
             unicode"全链路 - cooldown 检查透传"
         );
 
-        MockVaultForUpgrade mockVault = new MockVaultForUpgrade();
-        mockVault.setTotalSupply(1_000_000e18);
-
-        (Accountant acct, AccountantExecutor executor,) = _deployFullChain(mockVault);
+        RealAccountantStack memory s = _deployRealAccountantStack();
 
         _step("[Step 1] Bot calls executor without waiting for cooldown");
         // Do NOT warp forward - cooldown has not elapsed
         vm.prank(bot);
-        vm.expectRevert();
-        executor.executeUpdateRate(address(acct), 1.001e18, uint64(block.timestamp + 1));
+        vm.expectRevert(abi.encodeWithSelector(Accountant.Accountant__FutureComputeTimestamp.selector, uint256(uint64(block.timestamp + 1)), block.timestamp));
+        s.executor.executeUpdateRate(address(s.accountant), 1.001e18, uint64(block.timestamp + 1));
         _step("  PASS: CooldownNotElapsed revert propagated through executor");
 
         _logPass();
@@ -2876,23 +2965,20 @@ contract UpgradeScenariosQATest is Test {
             unicode"全链路 - deviation 超限触发 soft pause"
         );
 
-        MockVaultForUpgrade mockVault = new MockVaultForUpgrade();
-        mockVault.setTotalSupply(1_000_000e18);
-
-        (Accountant acct, AccountantExecutor executor,) = _deployFullChain(mockVault);
+        RealAccountantStack memory s = _deployRealAccountantStack();
 
         _step("[Step 1] Bot calls executor with excessive deviation rate");
         vm.warp(block.timestamp + 21 hours);
-        uint256 rateBefore = acct.lastExchangeRate();
+        uint256 rateBefore = s.accountant.lastExchangeRate();
         // 1.05e18 is a 5% deviation, far above the 1% default maxAllowedDeviation
         uint64 extremeRate = 1.05e18;
         uint64 computeTs = uint64(block.timestamp);
         vm.prank(bot);
-        executor.executeUpdateRate(address(acct), extremeRate, computeTs);
+        s.executor.executeUpdateRate(address(s.accountant), extremeRate, computeTs);
 
         _step("[Step 2] Verify circuit breaker triggered");
-        assertTrue(acct.paused(), "accountant should be paused");
-        assertEq(acct.lastExchangeRate(), rateBefore, "rate should remain unchanged");
+        assertTrue(s.accountant.paused(), "accountant should be paused");
+        assertEq(s.accountant.lastExchangeRate(), rateBefore, "rate should remain unchanged");
         _step("  PASS: CircuitBreakerTriggered, accountant paused, rate unchanged");
 
         _logPass();
@@ -2904,19 +2990,16 @@ contract UpgradeScenariosQATest is Test {
             unicode"全链路 - `computeTimestamp` 过期透传"
         );
 
-        MockVaultForUpgrade mockVault = new MockVaultForUpgrade();
-        mockVault.setTotalSupply(1_000_000e18);
-
-        (Accountant acct, AccountantExecutor executor,) = _deployFullChain(mockVault);
+        RealAccountantStack memory s = _deployRealAccountantStack();
 
         _step("[Step 1] Bot calls executor with stale computeTimestamp");
         vm.warp(block.timestamp + 21 hours);
         // Use a computeTimestamp that equals the lastComputeTimestamp (set during init)
         // which is stale (not strictly newer)
-        uint64 staleTs = acct.lastComputeTimestamp();
+        uint64 staleTs = s.accountant.lastComputeTimestamp();
         vm.prank(bot);
-        vm.expectRevert();
-        executor.executeUpdateRate(address(acct), 1.001e18, staleTs);
+        vm.expectRevert(abi.encodeWithSelector(Accountant.Accountant__StaleComputeTimestamp.selector, uint256(staleTs), uint256(staleTs)));
+        s.executor.executeUpdateRate(address(s.accountant), 1.001e18, staleTs);
         _step("  PASS: StaleComputeTimestamp revert propagated through executor");
 
         _logPass();
@@ -2928,21 +3011,18 @@ contract UpgradeScenariosQATest is Test {
             unicode"全链路 - 暂停透传"
         );
 
-        MockVaultForUpgrade mockVault = new MockVaultForUpgrade();
-        mockVault.setTotalSupply(1_000_000e18);
-
-        (Accountant acct, AccountantExecutor executor,) = _deployFullChain(mockVault);
+        RealAccountantStack memory s = _deployRealAccountantStack();
 
         _step("[Step 1] Admin pauses accountant");
         vm.prank(admin);
-        acct.pause();
-        assertTrue(acct.paused(), "accountant should be paused");
+        s.accountant.pause();
+        assertTrue(s.accountant.paused(), "accountant should be paused");
 
         _step("[Step 2] Bot calls executor - should revert with EnforcedPause");
         vm.warp(block.timestamp + 21 hours);
         vm.prank(bot);
-        vm.expectRevert();
-        executor.executeUpdateRate(address(acct), 1.001e18, uint64(block.timestamp));
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
+        s.executor.executeUpdateRate(address(s.accountant), 1.001e18, uint64(block.timestamp));
         _step("  PASS: EnforcedPause revert propagated through executor");
 
         _logPass();
@@ -2954,28 +3034,37 @@ contract UpgradeScenariosQATest is Test {
             unicode"全链路 - 费用结算与 `vault.mintFeeShares`"
         );
 
-        MockVaultForUpgrade mockVault = new MockVaultForUpgrade();
-        mockVault.setTotalSupply(1_000_000e18);
+        RealAccountantStack memory s = _deployRealAccountantStack();
+        _fundRealVault(s.gateway, s.vault, userA, 1_000_000e6);
 
-        (Accountant acct, AccountantExecutor executor,) = _deployFullChain(mockVault);
-
-        _step("[Step 1] First update - primes the snapshot");
+        _step("[Step 1] First rate update - does NOT trigger fee settlement");
         vm.warp(block.timestamp + 21 hours);
         vm.prank(bot);
-        executor.executeUpdateRate(address(acct), 1.001e18, uint64(block.timestamp));
-        uint256 feeCalls1 = mockVault.totalFeeMintCalls();
-        _step(string.concat("  After first update, mintFeeShares calls: ", vm.toString(feeCalls1)));
+        s.executor.executeUpdateRate(address(s.accountant), 1.001e18, uint64(block.timestamp));
+        uint256 treasuryBefore = s.vault.balanceOf(treasuryAddr);
+        uint256 supplyBefore = s.vault.totalSupply();
+        uint256 lastSettleTsBefore = s.accountant.lastFeeSettleTimestamp();
+        uint256 shareBase = s.accountant.totalSharesLastSettle();
+        _step(string.concat("  totalSupply before settle: ", vm.toString(supplyBefore)));
+        assertEq(treasuryBefore, 0, "rate update should not mint fee shares");
 
-        _step("[Step 2] Second update - triggers fee calculation on elapsed time");
+        _step("[Step 2] Call executeSettleManagementFee - triggers fee calculation");
+        vm.prank(bot);
+        s.executor.executeSettleManagementFee(address(s.accountant));
+        uint256 treasuryAfter = s.vault.balanceOf(treasuryAddr);
+        uint256 supplyAfter = s.vault.totalSupply();
+        uint256 timeElapsed = block.timestamp - lastSettleTsBefore;
+        uint256 expectedFeeShares = (shareBase * s.accountant.managementFeeRate() * timeElapsed) / (10_000 * 365 days);
+        _step(string.concat("  fee shares minted: ", vm.toString(expectedFeeShares)));
+        assertEq(treasuryAfter - treasuryBefore, expectedFeeShares, "treasury should receive exact fee shares");
+        assertEq(supplyAfter - supplyBefore, expectedFeeShares, "vault totalSupply should increase by fee shares");
+
+        _step("[Step 3] Second rate update - still works after fee settlement");
         vm.warp(block.timestamp + 21 hours);
         vm.prank(bot);
-        executor.executeUpdateRate(address(acct), 1.002e18, uint64(block.timestamp));
-        uint256 feeCalls2 = mockVault.totalFeeMintCalls();
-        _step(string.concat("  After second update, mintFeeShares calls: ", vm.toString(feeCalls2)));
-
-        assertTrue(feeCalls2 > feeCalls1, "fee shares should be minted on second update");
-        assertTrue(mockVault.lastFeeShares() > 0, "treasury should receive fee shares");
-        _step("  PASS: Fee settlement mints shares to treasury via vault.mintFeeShares");
+        s.executor.executeUpdateRate(address(s.accountant), 1.002e18, uint64(block.timestamp));
+        assertEq(s.accountant.lastExchangeRate(), 1.002e18, "second rate update should succeed");
+        _step("  PASS: Fee settlement via executeSettleManagementFee mints shares to treasury");
 
         _logPass();
     }
@@ -2986,40 +3075,41 @@ contract UpgradeScenariosQATest is Test {
             unicode"全链路 - 连续多次更新"
         );
 
-        MockVaultForUpgrade mockVault = new MockVaultForUpgrade();
-        mockVault.setTotalSupply(1_000_000e18);
-
-        (Accountant acct, AccountantExecutor executor,) = _deployFullChain(mockVault);
+        RealAccountantStack memory s = _deployRealAccountantStack();
+        _fundRealVault(s.gateway, s.vault, userA, 1_000_000e6);
+        uint256 treasuryBefore = s.vault.balanceOf(treasuryAddr);
+        uint256 supplyBefore = s.vault.totalSupply();
 
         _step("[Step 1] First update");
         vm.warp(block.timestamp + 21 hours);
         uint64 ts1 = uint64(block.timestamp);
         vm.prank(bot);
-        executor.executeUpdateRate(address(acct), 1.001e18, ts1);
-        assertEq(acct.lastExchangeRate(), 1.001e18, "rate1");
-        uint64 computeTs1 = acct.lastComputeTimestamp();
+        s.executor.executeUpdateRate(address(s.accountant), 1.001e18, ts1);
+        assertEq(s.accountant.lastExchangeRate(), 1.001e18, "rate1");
+        uint64 computeTs1 = s.accountant.lastComputeTimestamp();
 
         _step("[Step 2] Second update");
         vm.warp(block.timestamp + 21 hours);
         uint64 ts2 = uint64(block.timestamp);
         vm.prank(bot);
-        executor.executeUpdateRate(address(acct), 1.002e18, ts2);
-        assertEq(acct.lastExchangeRate(), 1.002e18, "rate2");
-        uint64 computeTs2 = acct.lastComputeTimestamp();
+        s.executor.executeUpdateRate(address(s.accountant), 1.002e18, ts2);
+        assertEq(s.accountant.lastExchangeRate(), 1.002e18, "rate2");
+        uint64 computeTs2 = s.accountant.lastComputeTimestamp();
         assertTrue(computeTs2 > computeTs1, "computeTimestamp should strictly increase");
 
         _step("[Step 3] Third update");
         vm.warp(block.timestamp + 21 hours);
         uint64 ts3 = uint64(block.timestamp);
         vm.prank(bot);
-        executor.executeUpdateRate(address(acct), 1.003e18, ts3);
-        assertEq(acct.lastExchangeRate(), 1.003e18, "rate3");
-        uint64 computeTs3 = acct.lastComputeTimestamp();
+        s.executor.executeUpdateRate(address(s.accountant), 1.003e18, ts3);
+        assertEq(s.accountant.lastExchangeRate(), 1.003e18, "rate3");
+        uint64 computeTs3 = s.accountant.lastComputeTimestamp();
         assertTrue(computeTs3 > computeTs2, "computeTimestamp should strictly increase again");
 
-        // Verify fees were settled across updates
-        assertTrue(mockVault.totalFeeMintCalls() >= 2, "fees should be settled on each update");
-        _step("  PASS: Three consecutive updates succeeded with increasing computeTimestamp and fee settlement");
+        // Rate updates no longer settle fees - fee settlement requires separate settleManagementFee() calls.
+        assertEq(s.vault.balanceOf(treasuryAddr), treasuryBefore, "rate updates should not mint treasury shares");
+        assertEq(s.vault.totalSupply(), supplyBefore, "rate updates should not change totalSupply");
+        _step("  PASS: Three consecutive updates succeeded with increasing computeTimestamp; fee settlement is independent");
 
         _logPass();
     }
@@ -3030,42 +3120,39 @@ contract UpgradeScenariosQATest is Test {
             unicode"全链路 - 暂停后恢复再更新"
         );
 
-        MockVaultForUpgrade mockVault = new MockVaultForUpgrade();
-        mockVault.setTotalSupply(1_000_000e18);
-
-        (Accountant acct, AccountantExecutor executor,) = _deployFullChain(mockVault);
+        RealAccountantStack memory s = _deployRealAccountantStack();
 
         _step("[Step 1] First update succeeds");
         vm.warp(block.timestamp + 21 hours);
         vm.prank(bot);
-        executor.executeUpdateRate(address(acct), 1.001e18, uint64(block.timestamp));
-        assertEq(acct.lastExchangeRate(), 1.001e18, "first update should succeed");
+        s.executor.executeUpdateRate(address(s.accountant), 1.001e18, uint64(block.timestamp));
+        assertEq(s.accountant.lastExchangeRate(), 1.001e18, "first update should succeed");
         _step("  First update succeeded");
 
         _step("[Step 2] Admin pauses");
         vm.prank(admin);
-        acct.pause();
-        assertTrue(acct.paused(), "should be paused");
+        s.accountant.pause();
+        assertTrue(s.accountant.paused(), "should be paused");
         _step("  Accountant paused");
 
         _step("[Step 3] Update reverts while paused");
         vm.warp(block.timestamp + 21 hours);
         vm.prank(bot);
-        vm.expectRevert();
-        executor.executeUpdateRate(address(acct), 1.002e18, uint64(block.timestamp));
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
+        s.executor.executeUpdateRate(address(s.accountant), 1.002e18, uint64(block.timestamp));
         _step("  Update correctly reverted while paused");
 
         _step("[Step 4] Admin unpauses");
         vm.prank(admin);
-        acct.unpause();
-        assertFalse(acct.paused(), "should be unpaused");
+        s.accountant.unpause();
+        assertFalse(s.accountant.paused(), "should be unpaused");
         _step("  Accountant unpaused");
 
         _step("[Step 5] Update succeeds after unpause and cooldown");
         vm.warp(block.timestamp + 21 hours);
         vm.prank(bot);
-        executor.executeUpdateRate(address(acct), 1.002e18, uint64(block.timestamp));
-        assertEq(acct.lastExchangeRate(), 1.002e18, "update after unpause should succeed");
+        s.executor.executeUpdateRate(address(s.accountant), 1.002e18, uint64(block.timestamp));
+        assertEq(s.accountant.lastExchangeRate(), 1.002e18, "update after unpause should succeed");
         _step("  PASS: Pause -> revert -> unpause -> cooldown -> update succeeded");
 
         _logPass();
@@ -3113,7 +3200,7 @@ contract UpgradeScenariosQATest is Test {
 
         _step("[Step 1] Non-admin attempts upgrade");
         vm.prank(attacker);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, attacker, bytes32(0)));
         executor.upgradeToAndCall(address(newImpl), "");
         _step("  PASS: reverted AccessControlUnauthorizedAccount");
 
@@ -3166,7 +3253,7 @@ contract UpgradeScenariosQATest is Test {
         OperatorExecutorV2 newImpl = new OperatorExecutorV2();
 
         vm.prank(attacker);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, attacker, bytes32(0)));
         executor.upgradeToAndCall(address(newImpl), "");
         _step("  PASS: reverted AccessControlUnauthorizedAccount");
 
@@ -3180,7 +3267,7 @@ contract UpgradeScenariosQATest is Test {
         OperatorExecutorV2 newImpl = new OperatorExecutorV2();
 
         _step("[Step 1] Direct call to implementation should revert (onlyProxy)");
-        vm.expectRevert();
+        vm.expectRevert(UUPSUpgradeable.UUPSUnauthorizedCallContext.selector);
         impl.upgradeToAndCall(address(newImpl), "");
         _step("  PASS: Reverted on direct impl call (UUPS onlyProxy)");
 
@@ -3198,7 +3285,7 @@ contract UpgradeScenariosQATest is Test {
 
         _step("[Step 1] Upgrade to non-UUPS contract should revert");
         vm.prank(admin);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(UUPSUpgradeable.UUPSUnsupportedProxiableUUID.selector, bytes32(0)));
         executor.upgradeToAndCall(address(notUups), "");
         _step("  PASS: Reverted for non-UUPS implementation");
 
@@ -3285,7 +3372,7 @@ contract UpgradeScenariosQATest is Test {
         // Grant roles
         vm.startPrank(admin);
         executor.grantRole(executor.BOT_ROLE(), bot);
-        acct.grantRole(acct.EXECUTOR_ROLE(), address(executor));
+        acct.grantRole(acct.ACCOUNTANT_EXECUTOR_ROLE(), address(executor));
         vm.stopPrank();
 
         _step("[Step 1] Upgrade executor to V2");

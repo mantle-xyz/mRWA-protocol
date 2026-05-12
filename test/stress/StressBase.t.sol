@@ -648,7 +648,10 @@ abstract contract StressBase is LogUtil {
                             maxRedemptionFeeBps: 500,
                             redemptionFeeBps: 100, // 1%
                             minRedeemAmount: 1e6, // 1 USDC
-                            minDepositAmount: 1e6 // 1 USDC
+                            minDepositAmount: 1e6, // 1 USDC
+                            maxSettlementDeviationBps: 0,
+                            depositDailyRemaining: type(uint256).max,
+                            redeemDailyRemaining: type(uint256).max
                         })
                     )
                 )
@@ -725,7 +728,7 @@ abstract contract StressBase is LogUtil {
         // AccountantExecutor: grant BOT_ROLE to bot
         acctExecutor.grantRole(acctExecutor.BOT_ROLE(), bot);
         // Accountant: grant EXECUTOR_ROLE to AccountantExecutor
-        accountant.grantRole(accountant.EXECUTOR_ROLE(), address(acctExecutor));
+        accountant.grantRole(accountant.ACCOUNTANT_EXECUTOR_ROLE(), address(acctExecutor));
         vm.stopPrank();
 
         // --- Deploy and register adapters ---

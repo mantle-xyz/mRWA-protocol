@@ -64,6 +64,7 @@ contract VaultAdminConfigQATest is Test {
     address internal bot = makeAddr("bot");
     address internal user = makeAddr("user");
     address internal nonAdmin = makeAddr("nonAdmin");
+    address internal capManager = makeAddr("capManager");
 
     // -----------------------------------------------------------------------
     // Logging helpers
@@ -120,7 +121,10 @@ contract VaultAdminConfigQATest is Test {
                 maxRedemptionFeeBps: 500,
                 redemptionFeeBps: 100,
                 minRedeemAmount: 0,
-                minDepositAmount: 0
+                minDepositAmount: 0,
+                maxSettlementDeviationBps: 0,
+                depositDailyRemaining: type(uint256).max,
+                redeemDailyRemaining: type(uint256).max
             }))
         )));
 
@@ -156,6 +160,7 @@ contract VaultAdminConfigQATest is Test {
         vault.setAccountant(address(accountant));
         vault.setGateway(address(gateway));
         vault.setController(address(controller));
+        vault.grantRole(vault.CAP_MANAGER_ROLE(), capManager);
         vm.stopPrank();
 
         // Fund user
@@ -184,7 +189,7 @@ contract VaultAdminConfigQATest is Test {
     }
 
     function test_SetAccountant_RejectsZeroAddress() public {
-        _logCase("test_SetAccountant_RejectsZeroAddress", unicode"setAccountant 拒绝零地址");
+        _logCase("test_SetAccountant_RejectsZeroAddress", unicode"`setAccountant` 拒绝零地址");
 
         vm.prank(admin);
         vm.expectRevert(IMantleYieldVault.Vault__ZeroAddress.selector);
@@ -231,7 +236,7 @@ contract VaultAdminConfigQATest is Test {
     }
 
     function test_SetController_RejectsZeroAddress() public {
-        _logCase("test_SetController_RejectsZeroAddress", unicode"setController 拒绝零地址");
+        _logCase("test_SetController_RejectsZeroAddress", unicode"`setController` 拒绝零地址");
 
         vm.prank(admin);
         vm.expectRevert(IMantleYieldVault.Vault__ZeroAddress.selector);
@@ -263,7 +268,7 @@ contract VaultAdminConfigQATest is Test {
     }
 
     function test_SetGateway_RejectsZeroAddress() public {
-        _logCase("test_SetGateway_RejectsZeroAddress", unicode"setGateway 拒绝零地址");
+        _logCase("test_SetGateway_RejectsZeroAddress", unicode"`setGateway` 拒绝零地址");
 
         vm.prank(admin);
         vm.expectRevert(IMantleYieldVault.Vault__ZeroAddress.selector);
@@ -304,7 +309,7 @@ contract VaultAdminConfigQATest is Test {
     }
 
     function test_SetTreasury_RejectsZeroAddress() public {
-        _logCase("test_SetTreasury_RejectsZeroAddress", unicode"setTreasury 拒绝零地址");
+        _logCase("test_SetTreasury_RejectsZeroAddress", unicode"`setTreasury` 拒绝零地址");
 
         vm.prank(admin);
         vm.expectRevert(IMantleYieldVault.Vault__ZeroAddress.selector);
@@ -318,7 +323,7 @@ contract VaultAdminConfigQATest is Test {
     // =======================================================================
 
     function test_SetMaxRedemptionFee_Success() public {
-        _logCase("test_SetMaxRedemptionFee_Success", unicode"admin 调整赎回费率上限");
+        _logCase("test_SetMaxRedemptionFee_Success", unicode"admin 调整赎回费率上限（上调）");
 
         _step("[Step 1] Current max fee = 500 bps (5%)");
         // Init: maxRedemptionFeeBps=500, redemptionFeeBps=100
@@ -350,7 +355,7 @@ contract VaultAdminConfigQATest is Test {
     }
 
     function test_SetMaxRedemptionFee_RejectsAboveBasis() public {
-        _logCase("test_SetMaxRedemptionFee_RejectsAboveBasis", unicode"setMaxRedemptionFee 拒绝超过 10000 bps");
+        _logCase("test_SetMaxRedemptionFee_RejectsAboveBasis", unicode"`setMaxRedemptionFee` 拒绝超过 10000 bps");
 
         vm.prank(admin);
         vm.expectRevert(abi.encodeWithSelector(IMantleYieldVault.Vault__FeeTooHigh.selector, 10001, 10000));
@@ -380,7 +385,7 @@ contract VaultAdminConfigQATest is Test {
     }
 
     function test_RescueTokens_RejectsUnderlyingAsset() public {
-        _logCase("test_RescueTokens_RejectsUnderlyingAsset", unicode"rescueTokens 拒绝回收底层资产 (USDC)");
+        _logCase("test_RescueTokens_RejectsUnderlyingAsset", unicode"`rescueTokens` 拒绝回收底层资产 (USDC)");
 
         vm.prank(user);
         gateway.deposit(1000e6);
@@ -394,7 +399,7 @@ contract VaultAdminConfigQATest is Test {
     }
 
     function test_RescueTokens_OnlyAdmin() public {
-        _logCase("test_RescueTokens_OnlyAdmin", unicode"非 admin 不能调用 rescueTokens");
+        _logCase("test_RescueTokens_OnlyAdmin", unicode"非 admin 不能调用 `rescueTokens`");
 
         vm.prank(nonAdmin);
         vm.expectRevert(abi.encodeWithSelector(
@@ -404,6 +409,220 @@ contract VaultAdminConfigQATest is Test {
         ));
         vault.rescueTokens(address(usdc), nonAdmin, 1);
 
+        _logPass();
+    }
+
+    // =======================================================================
+    // Settlement Deviation — Admin setter
+    // =======================================================================
+
+    function test_SetMaxSettlementDeviation_Success() public {
+        _logCase(
+            "test_SetMaxSettlementDeviation_Success",
+            unicode"admin 可设置 `maxSettlementDeviationBps` 有效值"
+        );
+
+        _step("[Step 1] Record old value");
+        uint256 oldBps = vault.maxSettlementDeviationBps();
+        _step(string.concat("  old maxSettlementDeviationBps = ", vm.toString(oldBps)));
+
+        _step("[Step 2] Admin sets new value to 1000 (10%)");
+        vm.prank(admin);
+        vm.expectEmit(false, false, false, true, address(vault));
+        emit IMantleYieldVault.SettlementDeviationUpdated(oldBps, 1000);
+        vault.setMaxSettlementDeviation(1000);
+
+        assertEq(vault.maxSettlementDeviationBps(), 1000, "should update to 1000");
+        _step("  PASS: maxSettlementDeviationBps updated to 1000, event emitted");
+        _logPass();
+    }
+
+    function test_SetMaxSettlementDeviation_RejectExceedsCeiling() public {
+        _logCase(
+            "test_SetMaxSettlementDeviation_RejectExceedsCeiling",
+            unicode"`setMaxSettlementDeviation` 超过 ceiling 被拒绝"
+        );
+
+        _step("[Step 1] Admin tries to set 3001 (> ceiling 3000)");
+        vm.prank(admin);
+        vm.expectRevert(abi.encodeWithSelector(IMantleYieldVault.Vault__InvalidSettlementDeviation.selector, 3001));
+        vault.setMaxSettlementDeviation(3001);
+        _step("  PASS: reverted with Vault__InvalidSettlementDeviation(3001)");
+        _logPass();
+    }
+
+    function test_SetMaxSettlementDeviation_DisableGuard() public {
+        _logCase(
+            "test_SetMaxSettlementDeviation_DisableGuard",
+            unicode"admin 可将 `maxSettlementDeviationBps` 设为 0 以关闭防护"
+        );
+
+        _step("[Step 1] First set a non-zero value");
+        vm.prank(admin);
+        vault.setMaxSettlementDeviation(1000);
+        assertEq(vault.maxSettlementDeviationBps(), 1000);
+        _step("  maxSettlementDeviationBps = 1000");
+
+        _step("[Step 2] Admin sets to 0 (disable guard)");
+        vm.prank(admin);
+        vault.setMaxSettlementDeviation(0);
+        assertEq(vault.maxSettlementDeviationBps(), 0, "should be 0 (guard disabled)");
+        _step("  PASS: maxSettlementDeviationBps = 0 (guard disabled)");
+        _logPass();
+    }
+
+    function test_SetMaxSettlementDeviation_OnlyAdmin() public {
+        _logCase(
+            "test_SetMaxSettlementDeviation_OnlyAdmin",
+            unicode"非 admin 不能修改 `maxSettlementDeviationBps`"
+        );
+
+        vm.prank(nonAdmin);
+        vm.expectRevert(abi.encodeWithSelector(
+            bytes4(keccak256("AccessControlUnauthorizedAccount(address,bytes32)")),
+            nonAdmin,
+            bytes32(0)
+        ));
+        vault.setMaxSettlementDeviation(500);
+        _step("  PASS: nonAdmin reverted");
+        _logPass();
+    }
+
+    // =======================================================================
+    // CAP_MANAGER_ROLE — Daily cap setters
+    // =======================================================================
+
+    function test_SetDepositDailyRemaining_Success() public {
+        _logCase(
+            "test_SetDepositDailyRemaining_Success",
+            unicode"`CAP_MANAGER_ROLE` 可设置 `depositDailyRemaining`"
+        );
+
+        _step("[Step 1] Record old value");
+        uint256 oldValue = vault.depositDailyRemaining();
+        _step(string.concat("  old depositDailyRemaining = ", vm.toString(oldValue)));
+
+        _step("[Step 2] capManager sets depositDailyRemaining to 5000e6");
+        vm.prank(capManager);
+        vm.expectEmit(false, false, false, true, address(vault));
+        emit IMantleYieldVault.DepositDailyRemainingUpdated(oldValue, 5000e6);
+        vault.setDepositDailyRemaining(5000e6);
+
+        assertEq(vault.depositDailyRemaining(), 5000e6, "depositDailyRemaining should be 5000e6");
+        _step("  PASS: depositDailyRemaining updated to 5000e6, event emitted");
+        _logPass();
+    }
+
+    function test_SetRedeemDailyRemaining_Success() public {
+        _logCase(
+            "test_SetRedeemDailyRemaining_Success",
+            unicode"`CAP_MANAGER_ROLE` 可设置 `redeemDailyRemaining`"
+        );
+
+        _step("[Step 1] Record old value");
+        uint256 oldValue = vault.redeemDailyRemaining();
+        _step(string.concat("  old redeemDailyRemaining = ", vm.toString(oldValue)));
+
+        _step("[Step 2] capManager sets redeemDailyRemaining to 10000e18");
+        vm.prank(capManager);
+        vm.expectEmit(false, false, false, true, address(vault));
+        emit IMantleYieldVault.RedeemDailyRemainingUpdated(oldValue, 10000e18);
+        vault.setRedeemDailyRemaining(10000e18);
+
+        assertEq(vault.redeemDailyRemaining(), 10000e18, "redeemDailyRemaining should be 10000e18");
+        _step("  PASS: redeemDailyRemaining updated to 10000e18, event emitted");
+        _logPass();
+    }
+
+    function test_SetDepositDailyRemaining_OnlyCapManager() public {
+        _logCase(
+            "test_SetDepositDailyRemaining_OnlyCapManager",
+            unicode"非 `CAP_MANAGER_ROLE` 不能设置 `depositDailyRemaining`"
+        );
+
+        bytes32 capManagerRole = vault.CAP_MANAGER_ROLE();
+        vm.prank(nonAdmin);
+        vm.expectRevert(abi.encodeWithSelector(
+            bytes4(keccak256("AccessControlUnauthorizedAccount(address,bytes32)")),
+            nonAdmin,
+            capManagerRole
+        ));
+        vault.setDepositDailyRemaining(5000e6);
+        _step("  PASS: nonAdmin reverted with AccessControlUnauthorizedAccount");
+        _logPass();
+    }
+
+    function test_SetRedeemDailyRemaining_OnlyCapManager() public {
+        _logCase(
+            "test_SetRedeemDailyRemaining_OnlyCapManager",
+            unicode"非 `CAP_MANAGER_ROLE` 不能设置 `redeemDailyRemaining`"
+        );
+
+        bytes32 capManagerRole = vault.CAP_MANAGER_ROLE();
+        vm.prank(nonAdmin);
+        vm.expectRevert(abi.encodeWithSelector(
+            bytes4(keccak256("AccessControlUnauthorizedAccount(address,bytes32)")),
+            nonAdmin,
+            capManagerRole
+        ));
+        vault.setRedeemDailyRemaining(10000e18);
+        _step("  PASS: nonAdmin reverted with AccessControlUnauthorizedAccount");
+        _logPass();
+    }
+
+    function test_SetDepositDailyRemaining_UnlimitedMode() public {
+        _logCase(
+            "test_SetDepositDailyRemaining_UnlimitedMode",
+            unicode"`setDepositDailyRemaining(type(uint256).max)` 恢复无限额模式"
+        );
+
+        _step("[Step 1] Set a finite cap first");
+        vm.prank(capManager);
+        vault.setDepositDailyRemaining(5000e6);
+        assertEq(vault.depositDailyRemaining(), 5000e6);
+        _step("  depositDailyRemaining = 5000e6");
+
+        _step("[Step 2] capManager restores unlimited mode");
+        vm.prank(capManager);
+        vault.setDepositDailyRemaining(type(uint256).max);
+        assertEq(vault.depositDailyRemaining(), type(uint256).max, "should be type(uint256).max");
+        _step("  depositDailyRemaining = type(uint256).max");
+
+        _step("[Step 3] Verify maxDeposit returns type(uint256).max");
+        uint256 maxDep = vault.maxDeposit(user);
+        assertEq(maxDep, type(uint256).max, "maxDeposit should be unlimited");
+        _step(string.concat("  maxDeposit(user) = ", vm.toString(maxDep)));
+        _step("  PASS: unlimited mode restored");
+        _logPass();
+    }
+
+    function test_SetRedeemDailyRemaining_UnlimitedMode() public {
+        _logCase(
+            "test_SetRedeemDailyRemaining_UnlimitedMode",
+            unicode"`setRedeemDailyRemaining(type(uint256).max)` 恢复无限额模式"
+        );
+
+        _step("[Step 1] Set a finite cap first");
+        vm.prank(capManager);
+        vault.setRedeemDailyRemaining(1000e18);
+        assertEq(vault.redeemDailyRemaining(), 1000e18);
+        _step("  redeemDailyRemaining = 1000e18");
+
+        _step("[Step 2] capManager restores unlimited mode");
+        vm.prank(capManager);
+        vault.setRedeemDailyRemaining(type(uint256).max);
+        assertEq(vault.redeemDailyRemaining(), type(uint256).max, "should be type(uint256).max");
+        _step("  redeemDailyRemaining = type(uint256).max");
+
+        _step("[Step 3] Verify maxRedeem is not constrained by daily cap");
+        // Deposit some shares first so maxRedeem has something to return
+        vm.prank(user);
+        gateway.deposit(1000e6);
+        uint256 shares = vault.balanceOf(user);
+        uint256 maxRed = vault.maxRedeem(user);
+        assertEq(maxRed, shares, "maxRedeem should equal user shares (no cap constraint)");
+        _step(string.concat("  maxRedeem(user) = ", vm.toString(maxRed)));
+        _step("  PASS: unlimited mode restored, maxRedeem not capped");
         _logPass();
     }
 }

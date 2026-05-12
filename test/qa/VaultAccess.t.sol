@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import {SanctionsOracle} from "../../src/compliance/SanctionsOracle.sol";
+import {Accountant} from "../../src/accountant/Accountant.sol";
 import {ISanctionsOracle} from "../../src/interfaces/compliance/ISanctionsOracle.sol";
 import {IMantleVaultGateway} from "../../src/interfaces/vault/IMantleVaultGateway.sol";
 import {IMantleYieldVault} from "../../src/interfaces/vault/IMantleYieldVault.sol";
@@ -8,6 +10,7 @@ import {MantleVaultGateway} from "../../src/vault/MantleVaultGateway.sol";
 import {MantleYieldVault} from "../../src/vault/MantleYieldVault.sol";
 import {GatewayFactory} from "../../src/vault/GatewayFactory.sol";
 import {VaultFactory} from "../../src/vault/VaultFactory.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Test, console2} from "forge-std/Test.sol";
@@ -28,87 +31,20 @@ contract MockUSDC6 is ERC20 {
     }
 }
 
-contract MockSanctionsOracle is ISanctionsOracle {
-    mapping(address => bool) public sanctioned;
-    mapping(address => bool) public whitelisted;
-
-    function initialize(address, address) external override {}
-
-    function isSanctioned(address account) external view override returns (bool) {
-        return sanctioned[account];
-    }
-
-    function isWhitelisted(address account) external view override returns (bool) {
-        return whitelisted[account];
-    }
-
-    function setSanctioned(address account, bool status) external {
-        sanctioned[account] = status;
-    }
-
-    function setWhitelisted(address account, bool status) external {
-        whitelisted[account] = status;
-    }
-
-    function totalSanctionedCount() external pure override returns (uint256) {
-        return 0;
-    }
-
-    function totalWhitelistedCount() external pure override returns (uint256) {
-        return 0;
-    }
-
-    function lastUpdateTimestamp() external pure override returns (uint256) {
-        return 0;
-    }
-
-    function batchNonce() external pure override returns (uint256) {
-        return 0;
-    }
-
-    function updateSanctionStatus(address, bool) external override {}
-    function updateSanctionStatusBatch(address[] calldata, bool) external override {}
-    function updateWhitelistStatus(address, bool) external override {}
-    function updateWhitelistStatusBatch(address[] calldata, bool) external override {}
-
-    function MAX_BATCH_SIZE() external pure override returns (uint256) {
-        return 200;
-    }
-}
-
-contract MockAccountant {
-    uint256 public exchangeRate = 1e18;
-
-    function getRate() external view returns (uint256) {
-        return exchangeRate;
-    }
-
-    function getRateSafe() external view returns (uint256) {
-        return exchangeRate;
-    }
-
-    function managementFeeRate() external pure returns (uint32) {
-        return 0;
-    }
-
-    function setExchangeRate(uint256 newRate) external {
-        exchangeRate = newRate;
-    }
-}
-
 // ---------------------------------------------------------------------------
 // QA Test: Vault Access Scenarios
 // ---------------------------------------------------------------------------
 
 contract VaultAccessQATest is Test {
     MockUSDC6 internal usdc;
-    MockSanctionsOracle internal sanctionsOracle;
-    MockAccountant internal accountant;
+    SanctionsOracle internal sanctionsOracle;
+    Accountant internal accountant;
 
     MantleYieldVault internal vault;
     MantleVaultGateway internal gateway;
 
     address internal adminAddr = makeAddr("admin");
+    address internal complianceAddr = makeAddr("compliance");
     address internal controllerAddr = makeAddr("controller");
     address internal treasuryAddr = makeAddr("treasury");
     address internal sanctionSafeAddr = makeAddr("sanctionSafe");
@@ -150,16 +86,24 @@ contract VaultAccessQATest is Test {
 
     function setUp() public {
         usdc = new MockUSDC6();
-        sanctionsOracle = new MockSanctionsOracle();
-        accountant = new MockAccountant();
 
         MantleYieldVault impl = new MantleYieldVault();
         MantleVaultGateway gatewayImpl = new MantleVaultGateway();
+        SanctionsOracle sanctionsOracleImpl = new SanctionsOracle();
+        Accountant accountantImpl = new Accountant();
         VaultFactory factory = new VaultFactory(address(impl), adminAddr);
         GatewayFactory gatewayFactory = new GatewayFactory(address(gatewayImpl), adminAddr);
 
         address vaultAddr = factory.deployVault();
         address gatewayAddr = gatewayFactory.deployGateway();
+        sanctionsOracle = SanctionsOracle(address(new ERC1967Proxy(
+            address(sanctionsOracleImpl),
+            abi.encodeCall(SanctionsOracle.initialize, (adminAddr, complianceAddr))
+        )));
+        accountant = Accountant(address(new ERC1967Proxy(
+            address(accountantImpl),
+            abi.encodeCall(Accountant.initialize, (vaultAddr, uint64(1e18), uint32(0), adminAddr))
+        )));
         vault = MantleYieldVault(vaultAddr);
         gateway = MantleVaultGateway(gatewayAddr);
 
@@ -175,7 +119,10 @@ contract VaultAccessQATest is Test {
             maxRedemptionFeeBps: 500,
             redemptionFeeBps: 0,
             minRedeemAmount: 0,
-            minDepositAmount: 0
+            minDepositAmount: 0,
+            maxSettlementDeviationBps: 0,
+            depositDailyRemaining: type(uint256).max,
+            redeemDailyRemaining: type(uint256).max
         });
         vm.prank(adminAddr);
         vault.initialize(params);
@@ -204,9 +151,9 @@ contract VaultAccessQATest is Test {
 
         _step("[Step 1] User directly calls vault.deposit(assets, receiver)");
         vm.prank(user);
-        vm.expectRevert(IMantleYieldVault.Vault__NotAuthorized.selector);
+        vm.expectRevert(IMantleYieldVault.Vault__OnlyGateway.selector);
         vault.deposit(1000e6, user);
-        _step("  PASS: Transaction reverted with Vault__NotAuthorized");
+        _step("  PASS: Transaction reverted with Vault__OnlyGateway");
 
         _logPass();
     }
@@ -242,9 +189,9 @@ contract VaultAccessQATest is Test {
 
         _step("[Step 1] User directly calls vault.redeem(...)");
         vm.prank(user);
-        vm.expectRevert(IMantleYieldVault.Vault__NotAuthorized.selector);
+        vm.expectRevert(IMantleYieldVault.Vault__OnlyGateway.selector);
         vault.redeem(1000e18, user, user);
-        _step("  PASS: vault.redeem reverted with Vault__NotAuthorized");
+        _step("  PASS: vault.redeem reverted with Vault__OnlyGateway");
 
         _step("[Step 2] User directly calls vault.withdraw(...)");
         vm.prank(user);
@@ -281,13 +228,13 @@ contract VaultAccessQATest is Test {
     function test_NonGatewayDepositFor_Rejected() public {
         _logCase(
             "test_NonGatewayDepositFor_Rejected",
-            unicode"非 Gateway 账户直调 `depositFor` 被拒绝"
+            unicode"非 Gateway 账户直调 `deposit` 被拒绝"
         );
 
-        _step("[Step 1] Non-Gateway address calls vault.depositFor(...)");
+        _step("[Step 1] Non-Gateway address calls vault.deposit(...)");
         vm.prank(nonGateway);
         vm.expectRevert(IMantleYieldVault.Vault__OnlyGateway.selector);
-        vault.depositFor(nonGateway, 1000e6, nonGateway);
+        vault.deposit(1000e6, nonGateway);
         _step("  PASS: Transaction reverted with Vault__OnlyGateway");
 
         _logPass();
@@ -300,13 +247,13 @@ contract VaultAccessQATest is Test {
     function test_NonGatewayRedeemFor_Rejected() public {
         _logCase(
             "test_NonGatewayRedeemFor_Rejected",
-            unicode"非 Gateway 账户直调 `redeemFor` 被拒绝"
+            unicode"非 Gateway 账户直调 `redeem` 被拒绝"
         );
 
-        _step("[Step 1] Non-Gateway address calls vault.redeemFor(...)");
+        _step("[Step 1] Non-Gateway address calls vault.redeem(...)");
         vm.prank(nonGateway);
         vm.expectRevert(IMantleYieldVault.Vault__OnlyGateway.selector);
-        vault.redeemFor(nonGateway, 1000e18, nonGateway, nonGateway);
+        vault.redeem(1000e18, nonGateway, nonGateway);
         _step("  PASS: Transaction reverted with Vault__OnlyGateway");
 
         _logPass();
@@ -319,13 +266,13 @@ contract VaultAccessQATest is Test {
     function test_NonGatewayRequestRedeemFor_Rejected() public {
         _logCase(
             "test_NonGatewayRequestRedeemFor_Rejected",
-            unicode"非 Gateway 账户直调 `requestRedeemFor` 被拒绝"
+            unicode"非 Gateway 账户直调 `requestRedeem` 被拒绝"
         );
 
-        _step("[Step 1] Non-Gateway address calls vault.requestRedeemFor(...)");
+        _step("[Step 1] Non-Gateway address calls vault.requestRedeem(...)");
         vm.prank(nonGateway);
         vm.expectRevert(IMantleYieldVault.Vault__OnlyGateway.selector);
-        vault.requestRedeemFor(nonGateway, nonGateway, 1000e18);
+        vault.requestRedeem(nonGateway, 1000e18);
         _step("  PASS: Transaction reverted with Vault__OnlyGateway");
 
         _logPass();

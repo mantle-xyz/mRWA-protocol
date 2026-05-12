@@ -1,18 +1,39 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {SubRedManagementAdapter} from "../../src/adapters/digift/SubRedManagementAdapter.sol";
-import {BaseAdapter} from "../../src/adapters/base/BaseAdapter.sol";
+import {SubRedManagementAdapter} from "../../src/adapters/digift/SubRedManagementAdapterUpgradeable.sol";
+import {SubRedManagementAdapterFactory} from "../../src/adapters/digift/SubRedManagementAdapterFactory.sol";
+import {BaseAdapterUpgradeable} from "../../src/adapters/base/BaseAdapterUpgradeable.sol";
 import {ISubRedManagement} from "../../src/interfaces/adapters/digift/ISubRedManagement.sol";
+import {IStrategyControllerExecutor} from "../../src/interfaces/strategy/IStrategyControllerExecutor.sol";
+import {ISanctionsOracle} from "../../src/interfaces/compliance/ISanctionsOracle.sol";
 import {MockDFeedPriceOracle} from "../../src/mocks/strategy/MockDFeedPriceOracle.sol";
+import {Accountant} from "../../src/accountant/Accountant.sol";
+import {AccountantExecutor} from "../../src/accountant/AccountantExecutor.sol";
+import {StrategyController} from "../../src/protocol/StrategyController.sol";
+import {OperatorExecutor} from "../../src/protocol/OperatorExecutor.sol";
+import {MantleYieldVault} from "../../src/vault/MantleYieldVault.sol";
+import {MantleVaultGateway} from "../../src/vault/MantleVaultGateway.sol";
+import {IMantleYieldVault} from "../../src/interfaces/vault/IMantleYieldVault.sol";
+import {IMantleVaultGateway} from "../../src/interfaces/vault/IMantleVaultGateway.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
+import {IERC20Errors} from "@openzeppelin/contracts/interfaces/draft-IERC6093.sol";
+import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
+import {UpgradeableBeacon} from "@openzeppelin/contracts/proxy/beacon/UpgradeableBeacon.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {Test, console2} from "forge-std/Test.sol";
 import {VmSafe} from "forge-std/Vm.sol";
 
 // ---------------------------------------------------------------------------
 // Mock contracts
 // ---------------------------------------------------------------------------
+
+interface IMintableERC20_AQ {
+    function mint(address to, uint256 amount) external;
+}
 
 contract MockUSDC_AQ is ERC20 {
     constructor() ERC20("Mock USDC", "USDC") {}
@@ -82,10 +103,31 @@ contract MockVault_AQ {
     }
 }
 
+contract MockSanctionsOracle_AQ is ISanctionsOracle {
+    function initialize(address, address) external {}
+    function isSanctioned(address) external pure returns (bool) { return false; }
+    function isWhitelisted(address) external pure returns (bool) { return true; }
+    function totalSanctionedCount() external pure returns (uint256) { return 0; }
+    function totalWhitelistedCount() external pure returns (uint256) { return 0; }
+    function lastUpdateTimestamp() external pure returns (uint256) { return 0; }
+    function batchNonce() external pure returns (uint256) { return 0; }
+    function MAX_BATCH_SIZE() external pure returns (uint256) { return 200; }
+    function updateSanctionStatus(address, bool) external {}
+    function updateSanctionStatusBatch(address[] calldata, bool) external {}
+    function updateWhitelistStatus(address, bool) external {}
+    function updateWhitelistStatusBatch(address[] calldata, bool) external {}
+}
+
 contract MockSubRed_AQ is ISubRedManagement {
+    struct PendingFlow {
+        uint256 subscribeAsset;
+        uint256 redeemPos;
+    }
+
     uint256 public subscribeCount;
     uint256 public redeemCount;
     uint256 public redeemNonce;
+    address public owner;
 
     address public lastStToken;
     address public lastCurrencyToken;
@@ -99,6 +141,17 @@ contract MockSubRed_AQ is ISubRedManagement {
 
     bool public rejectSubscribe;
     bool public rejectRedeem;
+
+    mapping(address adapter => mapping(address stToken => PendingFlow)) public pending;
+
+    modifier onlyOwner() {
+        require(msg.sender == owner, "ONLY_OWNER");
+        _;
+    }
+
+    constructor(address owner_) {
+        owner = owner_;
+    }
 
     function setRejectSubscribe(bool v) external {
         rejectSubscribe = v;
@@ -117,6 +170,7 @@ contract MockSubRed_AQ is ISubRedManagement {
         lastDeadline = deadline;
         subscribeCount++;
         ERC20(currencyToken).transferFrom(msg.sender, address(this), amount);
+        pending[msg.sender][stToken].subscribeAsset += amount;
     }
 
     function redeem(address stToken, address currencyToken, uint256 quantity, uint256 deadline) external override {
@@ -128,6 +182,66 @@ contract MockSubRed_AQ is ISubRedManagement {
         lastRedeemDeadline = deadline;
         redeemCount++;
         redeemNonce++;
+        ERC20(stToken).transferFrom(msg.sender, address(this), quantity);
+        pending[msg.sender][stToken].redeemPos += quantity;
+    }
+
+    function settleSubscribe(address adapter, address stToken, address receiver, uint256 mintedPos) external onlyOwner {
+        PendingFlow storage flow = pending[adapter][stToken];
+        require(flow.subscribeAsset > 0, "NO_SUBSCRIBE_PENDING");
+        flow.subscribeAsset = 0;
+        MockSTToken6_AQ(stToken).mint(receiver, mintedPos);
+    }
+
+    function settleRedeem(address adapter, address stToken, address currencyToken, address receiver, uint256 assetsOut)
+        external
+        onlyOwner
+    {
+        PendingFlow storage flow = pending[adapter][stToken];
+        require(flow.redeemPos > 0, "NO_REDEEM_PENDING");
+        flow.redeemPos = 0;
+        ERC20(currencyToken).transfer(receiver, assetsOut);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// V2 mock implementations for upgrade tests
+// ---------------------------------------------------------------------------
+
+/// @dev V2 implementation — adds version() to verify upgrade took effect
+contract SubRedManagementAdapterV2 is SubRedManagementAdapter {
+    function version() external pure returns (uint256) {
+        return 2;
+    }
+}
+
+/// @dev V2 with extra storage — verifies ERC-7201 storage layout compatibility
+contract SubRedManagementAdapterV2WithStorage is SubRedManagementAdapter {
+    /// @custom:storage-location erc7201:mrwa.storage.SubRedAdapterV2Extra
+    struct V2ExtraStorage {
+        uint256 extraParam;
+    }
+
+    bytes32 private constant V2_EXTRA_LOCATION =
+        keccak256(abi.encode(uint256(keccak256("mrwa.storage.SubRedAdapterV2Extra")) - 1)) & ~bytes32(uint256(0xff));
+
+    function _getV2Extra() private pure returns (V2ExtraStorage storage $) {
+        bytes32 loc = V2_EXTRA_LOCATION;
+        assembly {
+            $.slot := loc
+        }
+    }
+
+    function setExtraParam(uint256 v) external {
+        _getV2Extra().extraParam = v;
+    }
+
+    function extraParam() external view returns (uint256) {
+        return _getV2Extra().extraParam;
+    }
+
+    function version() external pure returns (uint256) {
+        return 2;
     }
 }
 
@@ -156,7 +270,13 @@ contract SubRedAdapterQATest is Test {
     // ── mock tokens (asset 18 decimals, ST 6 decimals — default pair) ──
     MockUSDC_AQ internal usdc;
     MockSTToken6_AQ internal stToken6;
-    MockVault_AQ internal vault;
+    MantleYieldVault internal vault;
+    MantleVaultGateway internal gateway;
+    Accountant internal vaultAccountant;
+    AccountantExecutor internal accountantExecutor;
+    StrategyController internal controllerContract;
+    OperatorExecutor internal operatorExecutor;
+    MockSanctionsOracle_AQ internal sanctionsOracle;
     MockSubRed_AQ internal subRed;
     MockDFeedPriceOracle internal oracle;
 
@@ -164,11 +284,14 @@ contract SubRedAdapterQATest is Test {
     MockUSDC6_AQ internal usdc6;
     MockSTToken_AQ internal stToken18;
     MockUSDC_AQ internal dustToken;
+    MockVault_AQ internal directVault;
 
-    // ── adapters ──
+    // ── factory & adapters (deployed via BeaconProxy, matching production) ──
+    SubRedManagementAdapterFactory internal factory;
     SubRedManagementAdapter internal adapter; // no oracle, asset=18, st=6
     SubRedManagementAdapter internal adapterWithOracle; // oracle price=2, asset=18, st=6
     SubRedManagementAdapter internal adapterSameDecimals; // no oracle, asset=18, st=18
+    SubRedManagementAdapter internal directAdapter; // direct edge-only adapter on mock vault
 
     // ── actors ──
     address internal admin = makeAddr("admin");
@@ -177,6 +300,11 @@ contract SubRedAdapterQATest is Test {
     address internal pauser;
     address internal receiver = makeAddr("receiver");
     address internal other = makeAddr("other");
+    address internal funder = makeAddr("funder");
+    address internal bot = makeAddr("bot");
+    address internal acctBot = makeAddr("acctBot");
+    address internal treasury = makeAddr("treasury");
+    address internal sanctionSafe = makeAddr("sanctionSafe");
 
     // ── logging ──
     string constant MODULE = unicode"SubRedAdapter专项场景";
@@ -204,6 +332,78 @@ contract SubRedAdapterQATest is Test {
         _step("test result: passed");
     }
 
+    function _fundToken(address token, address to, uint256 amount) internal {
+        IMintableERC20_AQ(token).mint(funder, amount);
+        vm.prank(funder);
+        IERC20(token).transfer(to, amount);
+    }
+
+    function _fundVaultAsset(uint256 amount) internal {
+        _fundToken(address(usdc), address(vault), amount);
+    }
+
+    function _fundVaultSt6(uint256 amount) internal {
+        _fundToken(address(stToken6), address(vault), amount);
+    }
+
+    function _fundAdapterAsset(address targetAdapter, uint256 amount) internal {
+        _fundToken(address(usdc), targetAdapter, amount);
+    }
+
+    function _fundAdapterDust(uint256 amount) internal {
+        _fundToken(address(dustToken), address(adapter), amount);
+    }
+
+    function _fundAdapterSt6(uint256 amount) internal {
+        _fundToken(address(stToken6), address(adapter), amount);
+    }
+
+    function _depositToVault(address user, uint256 amount) internal returns (uint256 shares) {
+        IMintableERC20_AQ(address(usdc)).mint(user, amount);
+        vm.startPrank(user);
+        usdc.approve(address(vault), amount);
+        shares = gateway.deposit(amount);
+        vm.stopPrank();
+    }
+
+    function _rebalance() internal {
+        vm.prank(bot);
+        operatorExecutor.executeRebalance(address(controllerContract));
+    }
+
+    function _processRedeemBatch(uint256[] memory ids) internal {
+        vm.prank(bot);
+        operatorExecutor.executeProcessRedeemBatch(address(controllerContract), ids);
+    }
+
+    function _settleAdapterInvest(uint256 inFlightId, uint256 settledPosAmount) internal {
+        vm.prank(admin);
+        subRed.settleSubscribe(address(adapter), address(stToken6), address(adapter), settledPosAmount);
+
+        uint256[] memory ids = new uint256[](1);
+        ids[0] = inFlightId;
+        uint256[] memory settledPos = new uint256[](1);
+        settledPos[0] = settledPosAmount;
+        uint256[] memory refundAssets = new uint256[](1);
+        refundAssets[0] = 0;
+
+        IStrategyControllerExecutor.InvestSettlementInput memory invest =
+            IStrategyControllerExecutor.InvestSettlementInput(ids, settledPos, refundAssets);
+        IStrategyControllerExecutor.RedeemSettlementInput memory redeem =
+            IStrategyControllerExecutor.RedeemSettlementInput(new uint256[](0), new uint256[](0));
+
+        vm.prank(bot);
+        operatorExecutor.executeSettleAdapter(address(controllerContract), address(adapter), invest, redeem);
+    }
+
+    function _seedVaultSt(uint256 assetAmount, address user) internal returns (uint256 shares, uint256 posAmount) {
+        shares = _depositToVault(user, assetAmount);
+        uint256 inFlightId = vault.nextInFlightId();
+        posAmount = adapter.estimatePosAmount(assetAmount);
+        _rebalance();
+        _settleAdapterInvest(inFlightId, posAmount);
+    }
+
     // ── setUp ──
     function setUp() public {
         // tokens
@@ -213,49 +413,139 @@ contract SubRedAdapterQATest is Test {
         usdc6 = new MockUSDC6_AQ();
         dustToken = new MockUSDC_AQ();
 
-        // vault & subRed
-        vault = new MockVault_AQ(address(usdc));
-        subRed = new MockSubRed_AQ();
+        // real protocol stack
+        sanctionsOracle = new MockSanctionsOracle_AQ();
+        subRed = new MockSubRed_AQ(admin);
 
         // oracle: price = 2 (2e8 in 8-decimal)
         oracle = new MockDFeedPriceOracle(2e8, 8);
 
+        MantleYieldVault vaultImpl = new MantleYieldVault();
+        Accountant accountantImpl = new Accountant();
+        AccountantExecutor accountantExecutorImpl = new AccountantExecutor();
+        StrategyController controllerImpl = new StrategyController();
+        OperatorExecutor executorImpl = new OperatorExecutor();
+        MantleVaultGateway gatewayImpl = new MantleVaultGateway();
+
+        vault = MantleYieldVault(address(new ERC1967Proxy(
+            address(vaultImpl),
+            abi.encodeCall(MantleYieldVault.initialize, IMantleYieldVault.InitParams({
+                asset: IERC20(address(usdc)),
+                name: "mRWA Vault",
+                symbol: "mRWA",
+                admin: admin,
+                gateway: address(1),
+                controller: admin,
+                accountant: address(1),
+                treasury: treasury,
+                maxRedemptionFeeBps: 500,
+                redemptionFeeBps: 0,
+                minRedeemAmount: 0,
+                minDepositAmount: 0,
+                maxSettlementDeviationBps: 0,
+                depositDailyRemaining: type(uint256).max,
+                redeemDailyRemaining: type(uint256).max
+            }))
+        )));
+
+        vaultAccountant = Accountant(address(new ERC1967Proxy(
+            address(accountantImpl),
+            abi.encodeCall(Accountant.initialize, (address(vault), 1e18, 0, admin))
+        )));
+
+        accountantExecutor = AccountantExecutor(address(new ERC1967Proxy(
+            address(accountantExecutorImpl),
+            abi.encodeCall(AccountantExecutor.initialize, (admin))
+        )));
+
+        operatorExecutor = OperatorExecutor(address(new ERC1967Proxy(
+            address(executorImpl),
+            abi.encodeCall(OperatorExecutor.initialize, (admin, bot))
+        )));
+
+        controllerContract = StrategyController(address(new ERC1967Proxy(
+            address(controllerImpl),
+            abi.encodeCall(StrategyController.initialize, (
+                address(vault),
+                admin,
+                address(operatorExecutor),
+                admin,
+                0,
+                0,
+                0
+            ))
+        )));
+
+        gateway = MantleVaultGateway(address(new ERC1967Proxy(
+            address(gatewayImpl),
+            abi.encodeCall(MantleVaultGateway.initialize, IMantleVaultGateway.InitParams({
+                vault: address(vault),
+                sanctionsOracle: ISanctionsOracle(address(sanctionsOracle)),
+                sanctionSafe: sanctionSafe,
+                admin: admin,
+                syncRedeemDisabled: false
+            }))
+        )));
+
+        // Factory + BeaconProxy deployment (matches production)
+        SubRedManagementAdapter adapterImpl = new SubRedManagementAdapter();
+        factory = new SubRedManagementAdapterFactory(address(adapterImpl), admin);
+
         // adapter (no oracle): asset=18, st=6
-        adapter = new SubRedManagementAdapter(
-            address(vault),
-            address(subRed),
-            address(stToken6),
-            admin,
-            controller,
-            accountant,
-            address(0)
-        );
+        adapter = SubRedManagementAdapter(factory.deployAndInitAdapter(
+            address(vault), address(subRed), address(stToken6),
+            admin, address(controllerContract), address(accountantExecutor), address(0)
+        ));
 
         // adapter with oracle: asset=18, st=6, price=2
-        adapterWithOracle = new SubRedManagementAdapter(
-            address(vault),
-            address(subRed),
-            address(stToken6),
-            admin,
-            controller,
-            accountant,
-            address(oracle)
-        );
+        adapterWithOracle = SubRedManagementAdapter(factory.deployAndInitAdapter(
+            address(vault), address(subRed), address(stToken6),
+            admin, address(controllerContract), address(accountantExecutor), address(oracle)
+        ));
 
         // adapter same decimals: asset=18, st=18
         MockVault_AQ vault18 = new MockVault_AQ(address(usdc));
-        adapterSameDecimals = new SubRedManagementAdapter(
-            address(vault18),
-            address(subRed),
-            address(stToken18),
-            admin,
-            controller,
-            accountant,
-            address(0)
-        );
+        adapterSameDecimals = SubRedManagementAdapter(factory.deployAndInitAdapter(
+            address(vault18), address(subRed), address(stToken18),
+            admin, controller, accountant, address(0)
+        ));
 
-        // pauser = controller (granted in BaseAdapter constructor)
-        pauser = controller;
+        directVault = new MockVault_AQ(address(usdc));
+        directAdapter = SubRedManagementAdapter(factory.deployAndInitAdapter(
+            address(directVault), address(subRed), address(stToken6),
+            admin, controller, accountant, address(0)
+        ));
+
+        vm.startPrank(admin);
+        vault.setController(address(controllerContract));
+        vault.setAccountant(address(vaultAccountant));
+        vault.setGateway(address(gateway));
+        accountantExecutor.grantRole(accountantExecutor.BOT_ROLE(), acctBot);
+        vaultAccountant.grantRole(vaultAccountant.ACCOUNTANT_EXECUTOR_ROLE(), address(accountantExecutor));
+        controllerContract.registerStrategy(address(adapter), 10_000, 1, true);
+        controllerContract.activateStrategy(address(adapter));
+        address[] memory order = new address[](1);
+        order[0] = address(adapter);
+        controllerContract.setStrategyOrder(order);
+        adapter.grantRole(adapter.CONTROLLER_ROLE(), admin);
+        adapter.grantRole(adapter.PAUSER_ROLE(), admin);
+        adapter.grantRole(adapter.ACCOUNTANT_EXECUTOR_ROLE(), accountant);
+        adapterWithOracle.grantRole(adapterWithOracle.CONTROLLER_ROLE(), admin);
+        adapterWithOracle.grantRole(adapterWithOracle.PAUSER_ROLE(), admin);
+        adapterWithOracle.grantRole(adapterWithOracle.ACCOUNTANT_EXECUTOR_ROLE(), accountant);
+        vm.stopPrank();
+
+        // pauser = admin via controllerContract.setAdapterPaused; admin also has direct extra-test role
+        pauser = admin;
+
+        // Set manual price = 1e18 (1:1) for adapters without oracle so that
+        // estimatePosAmount / deposit / previewDeposit work correctly.
+        // (The adapter returns 0 when getPosTokenPrice() == 0.)
+        vm.startPrank(accountant);
+        adapter.setManualPosTokenPrice(1e18);
+        adapterSameDecimals.setManualPosTokenPrice(1e18);
+        directAdapter.setManualPosTokenPrice(1e18);
+        vm.stopPrank();
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -389,16 +679,15 @@ contract SubRedAdapterQATest is Test {
     function test_Case04_PauseAndUnpause() public {
         _logCase("Case-04", unicode"合约暂停解除");
 
-        _step("[Prepare] mint 1000e18 USDC to vault and approve adapter");
-        usdc.mint(address(vault), 1_000e18);
-        vault.approveToAdapter(address(adapter), 1_000e18);
+        _step("[Prepare] user deposits 1000e18 through gateway");
+        _depositToVault(receiver, 1_000e18);
         _step(string.concat("  vault USDC balance = ", vm.toString(usdc.balanceOf(address(vault)))));
 
-        _step("[Step 1] pauser calls setPaused(true)");
+        _step("[Step 1] pauser calls controller.setAdapterPaused(adapter, true)");
         _step(string.concat("  pauser = ", vm.toString(pauser)));
         vm.recordLogs();
         vm.prank(pauser);
-        adapter.setPaused(true);
+        controllerContract.setAdapterPaused(address(adapter), true);
         _step(string.concat("  adapter.paused() = ", adapter.paused() ? "true" : "false"));
         assertTrue(adapter.paused());
         {
@@ -417,24 +706,24 @@ contract SubRedAdapterQATest is Test {
         }
         _step("  paused = true, event emitted");
 
-        _step("[Step 2] deposit/requestRedeemAsync/sweepToVault all revert when paused");
-        vm.prank(controller);
-        vm.expectRevert(BaseAdapter.PausedError.selector);
+        _step("[Step 2] direct controller-role extra checks still revert when paused");
+        vm.prank(admin);
+        vm.expectRevert(Pausable.EnforcedPause.selector);
         adapter.deposit(100e18, receiver);
 
-        vm.prank(controller);
-        vm.expectRevert(BaseAdapter.PausedError.selector);
+        vm.prank(admin);
+        vm.expectRevert(Pausable.EnforcedPause.selector);
         adapter.requestRedeemAsync(100e18, receiver);
 
-        vm.prank(controller);
-        vm.expectRevert(BaseAdapter.PausedError.selector);
+        vm.prank(admin);
+        vm.expectRevert(Pausable.EnforcedPause.selector);
         adapter.sweepToVault(address(usdc), 100e18);
-        _step("  all controller actions reverted with PausedError");
+        _step("  paused guard verified");
 
-        _step("[Step 3] pauser calls setPaused(false) to unpause");
+        _step("[Step 3] pauser calls controller.setAdapterPaused(adapter, false)");
         vm.recordLogs();
         vm.prank(pauser);
-        adapter.setPaused(false);
+        controllerContract.setAdapterPaused(address(adapter), false);
         _step(string.concat("  adapter.paused() = ", adapter.paused() ? "true" : "false"));
         assertFalse(adapter.paused());
         {
@@ -453,12 +742,14 @@ contract SubRedAdapterQATest is Test {
         }
         _step("  paused = false, event emitted");
 
-        _step("[Step 4] deposit executes successfully after unpause");
-        vm.prank(controller);
-        uint256 deposited = adapter.deposit(100e18, receiver);
-        _step(string.concat("  deposited = ", vm.toString(deposited)));
-        assertGt(deposited, 0);
-        _step("  PASS: pause/unpause cycle works, operations resume after unpause");
+        _step("[Step 4] bot calls executeRebalance after unpause");
+        uint256 beforeCount = subRed.subscribeCount();
+        _rebalance();
+        uint256 afterCount = subRed.subscribeCount();
+        _step(string.concat("  subscribeCount before = ", vm.toString(beforeCount)));
+        _step(string.concat("  subscribeCount after  = ", vm.toString(afterCount)));
+        assertEq(afterCount, beforeCount + 1);
+        _step("  PASS: pause/unpause cycle works and real rebalance resumes after unpause");
 
         _logPass();
     }
@@ -476,51 +767,73 @@ contract SubRedAdapterQATest is Test {
         _step(string.concat("  accountant = ", vm.toString(accountant)));
         _step(string.concat("  pauser = ", vm.toString(pauser)));
 
+        // Cache role values to avoid external calls consuming vm.prank
+        bytes32 controllerRole = adapter.CONTROLLER_ROLE();
+        bytes32 pauserRole = adapter.PAUSER_ROLE();
+        bytes32 accountantExecutorRole = adapter.ACCOUNTANT_EXECUTOR_ROLE();
+        bytes32 adminRole = 0x00; // DEFAULT_ADMIN_ROLE
+
         _step("[Step 1] non-Controller calls sweepToVault -> revert");
         vm.prank(other);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(
+            IAccessControl.AccessControlUnauthorizedAccount.selector, other, controllerRole
+        ));
         adapter.sweepToVault(address(usdc), 1e18);
         _step("  reverted (only controller allowed)");
 
         _step("[Step 2] non-Pauser calls setPaused -> revert");
         vm.prank(other);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(
+            IAccessControl.AccessControlUnauthorizedAccount.selector, other, pauserRole
+        ));
         adapter.setPaused(true);
         _step("  reverted (only pauser allowed)");
 
         _step("[Step 3] non-Controller calls deposit -> revert");
         vm.prank(other);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(
+            IAccessControl.AccessControlUnauthorizedAccount.selector, other, controllerRole
+        ));
         adapter.deposit(1e18, receiver);
         _step("  reverted (only controller allowed)");
 
         _step("[Step 4] non-Controller calls requestRedeemAsync -> revert");
         vm.prank(other);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(
+            IAccessControl.AccessControlUnauthorizedAccount.selector, other, controllerRole
+        ));
         adapter.requestRedeemAsync(1e18, receiver);
         _step("  reverted (only controller allowed)");
 
         _step("[Step 5] non-Admin calls sweep -> revert");
         vm.prank(other);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(
+            IAccessControl.AccessControlUnauthorizedAccount.selector, other, adminRole
+        ));
         adapter.sweep(address(dustToken), receiver);
         _step("  reverted (only admin allowed)");
 
         _step("[Step 6] non-Admin calls setPriceOracle -> revert");
         vm.prank(other);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(
+            IAccessControl.AccessControlUnauthorizedAccount.selector, other, adminRole
+        ));
         adapter.setPriceOracle(address(oracle));
         _step("  reverted (only admin allowed)");
 
         _step("[Step 7] non-Accountant calls setManualPosTokenPrice -> revert");
         vm.prank(other);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(
+            IAccessControl.AccessControlUnauthorizedAccount.selector, other, accountantExecutorRole
+        ));
         adapter.setManualPosTokenPrice(1e18);
         _step("  reverted (only accountant allowed)");
 
         _step("[Step 8] non-Admin calls setSubscribeDeadlineWindow -> revert");
         vm.prank(other);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(
+            IAccessControl.AccessControlUnauthorizedAccount.selector, other, adminRole
+        ));
         adapter.setSubscribeDeadlineWindow(1 hours);
         _step("  reverted (only admin allowed)");
         _step("  PASS: all 8 access control checks verified");
@@ -536,21 +849,17 @@ contract SubRedAdapterQATest is Test {
         _logCase("Case-06", unicode"deposit-从vault取usdc");
 
         uint256 amount = 100e18;
-        // M-6 fallback: no oracle + no manual price => priceE18=0 => _scaleToStRaw path
-        // assetDec=18, stDec=6, so expectedShares = amount / 1e12 = 100e6
         uint256 expectedShares = 100e6;
-        _step("[Prepare] mint 500e18 USDC to vault and approve adapter");
-        usdc.mint(address(vault), 500e18);
-        vault.approveToAdapter(address(adapter), 500e18);
+        _step("[Prepare] user deposits 100e18 through gateway");
+        _depositToVault(receiver, amount);
 
-        _step(string.concat("[Step 1] controller deposits ", vm.toString(amount)));
-        _step(string.concat("  caller = ", vm.toString(controller)));
+        _step("[Step 1] bot calls executeRebalance -> controller -> adapter.deposit");
+        _step(string.concat("  caller = ", vm.toString(bot)));
         uint256 vaultBefore = usdc.balanceOf(address(vault));
         _step(string.concat("  vault USDC before = ", vm.toString(vaultBefore)));
 
         vm.recordLogs();
-        vm.prank(controller);
-        uint256 pos = adapter.deposit(amount, receiver);
+        _rebalance();
         {
             VmSafe.Log[] memory logs = vm.getRecordedLogs();
             bool found;
@@ -561,8 +870,8 @@ contract SubRedAdapterQATest is Test {
                 ) {
                     assertEq(logs[i].emitter, address(adapter), "wrong emitter");
                     assertEq(address(uint160(uint256(logs[i].topics[1]))), address(adapter), "wrong adapter");
-                    assertEq(address(uint160(uint256(logs[i].topics[2]))), controller, "wrong caller");
-                    assertEq(address(uint160(uint256(logs[i].topics[3]))), receiver, "wrong receiver");
+                    assertEq(address(uint160(uint256(logs[i].topics[2]))), address(controllerContract), "wrong caller");
+                    assertEq(address(uint160(uint256(logs[i].topics[3]))), address(adapter), "wrong receiver");
                     (uint256 amt, uint256 shares) = abi.decode(logs[i].data, (uint256, uint256));
                     assertEq(amt, amount, "wrong amount");
                     assertEq(shares, expectedShares, "wrong sharesOrPos");
@@ -572,7 +881,7 @@ contract SubRedAdapterQATest is Test {
             }
             assertTrue(found, "AdapterDeposit not emitted");
         }
-        _step(string.concat("  returned pos = ", vm.toString(pos)));
+        _step(string.concat("  expected pos = ", vm.toString(expectedShares)));
 
         _step("[Step 2] verify balances and subRed state");
         uint256 vaultAfter = usdc.balanceOf(address(vault));
@@ -598,13 +907,13 @@ contract SubRedAdapterQATest is Test {
     function test_Case07_DepositZeroAmount() public {
         _logCase("Case-07", unicode"deposit-amount为0");
 
-        _step("[Step 1] controller calls deposit(0, receiver)");
-        _step(string.concat("  caller = ", vm.toString(controller)));
+        _step("[Step 1] admin calls adapter.deposit(0, receiver) as extra controller-role edge test");
+        _step(string.concat("  caller = ", vm.toString(admin)));
         _step(string.concat("  receiver = ", vm.toString(receiver)));
         _step("  amount = 0");
         vm.prank(controller);
-        vm.expectRevert(BaseAdapter.InvalidAmount.selector);
-        adapter.deposit(0, receiver);
+        vm.expectRevert(BaseAdapterUpgradeable.InvalidAmount.selector);
+        directAdapter.deposit(0, receiver);
         _step("  reverted with InvalidAmount");
         _step("  PASS: zero amount deposit is rejected");
 
@@ -619,21 +928,21 @@ contract SubRedAdapterQATest is Test {
         _logCase("Case-08", unicode"deposit-过期deposit");
 
         uint256 amount = 100e18;
-        _step("[Prepare] mint 500e18 USDC to vault and approve adapter");
-        usdc.mint(address(vault), 500e18);
-        vault.approveToAdapter(address(adapter), 500e18);
+        _step("[Prepare] directVault receives funds for adapter-level expiry edge test");
+        _fundToken(address(usdc), address(directVault), 500e18);
+        directVault.approveToAdapter(address(directAdapter), 500e18);
 
         _step("[Step 1] admin sets subscribeDeadlineWindow to 0 (immediate expiry)");
         vm.prank(admin);
-        adapter.setSubscribeDeadlineWindow(0);
-        _step(string.concat("  subscribeDeadlineWindow = ", vm.toString(uint256(adapter.subscribeDeadlineWindow()))));
+        directAdapter.setSubscribeDeadlineWindow(0);
+        _step(string.concat("  subscribeDeadlineWindow = ", vm.toString(uint256(directAdapter.subscribeDeadlineWindow()))));
         _step(string.concat("  block.timestamp = ", vm.toString(block.timestamp)));
         _step("  deadline will be: block.timestamp + 0 = block.timestamp (expired)");
 
-        _step(string.concat("[Step 2] controller calls deposit(", vm.toString(amount), ", receiver)"));
+        _step(string.concat("[Step 2] controller-role holder calls directAdapter.deposit(", vm.toString(amount), ", receiver) directly"));
         vm.prank(controller);
         vm.expectRevert("SUBSCRIBE_EXPIRED");
-        adapter.deposit(amount, receiver);
+        directAdapter.deposit(amount, receiver);
         _step("  reverted with SUBSCRIBE_EXPIRED");
         _step("  PASS: expired deadline correctly rejected by SubRed");
 
@@ -648,14 +957,12 @@ contract SubRedAdapterQATest is Test {
         _logCase("Case-09", unicode"deposit-allowance验证");
 
         uint256 amount = 100e18;
-        _step("[Prepare] mint 500e18 USDC to vault and approve adapter");
-        usdc.mint(address(vault), 500e18);
-        vault.approveToAdapter(address(adapter), 500e18);
+        _step("[Prepare] user deposits 100e18 through gateway");
+        _depositToVault(receiver, amount);
 
-        _step(string.concat("[Step 1] controller deposits ", vm.toString(amount)));
-        vm.prank(controller);
-        adapter.deposit(amount, receiver);
-        _step("  deposit succeeded");
+        _step("[Step 1] bot calls executeRebalance");
+        _rebalance();
+        _step("  rebalance succeeded");
 
         _step("[Step 2] verify adapter -> SubRed USDC allowance is reset to 0");
         uint256 allowance = usdc.allowance(address(adapter), address(subRed));
@@ -673,23 +980,20 @@ contract SubRedAdapterQATest is Test {
     function test_Case10_MultipleDeposits() public {
         _logCase("Case-10", unicode"deposit-连续多次deposit");
 
-        _step("[Prepare] mint 1000e18 USDC to vault and approve adapter");
-        usdc.mint(address(vault), 1_000e18);
-        vault.approveToAdapter(address(adapter), 1_000e18);
-
-        _step("[Step 1] controller deposits 100e18 (1st)");
-        vm.startPrank(controller);
-        adapter.deposit(100e18, receiver);
+        _step("[Step 1] user deposits 100e18, bot rebalances (1st)");
+        _depositToVault(receiver, 100e18);
+        _rebalance();
         _step(string.concat("  subscribeCount after 1st = ", vm.toString(subRed.subscribeCount())));
 
-        _step("[Step 2] controller deposits 200e18 (2nd)");
-        adapter.deposit(200e18, receiver);
+        _step("[Step 2] user deposits 200e18, bot rebalances (2nd)");
+        _depositToVault(receiver, 200e18);
+        _rebalance();
         _step(string.concat("  subscribeCount after 2nd = ", vm.toString(subRed.subscribeCount())));
 
-        _step("[Step 3] controller deposits 300e18 (3rd)");
-        adapter.deposit(300e18, receiver);
+        _step("[Step 3] user deposits 300e18, bot rebalances (3rd)");
+        _depositToVault(receiver, 300e18);
+        _rebalance();
         _step(string.concat("  subscribeCount after 3rd = ", vm.toString(subRed.subscribeCount())));
-        vm.stopPrank();
 
         _step("[Step 4] verify final state");
         assertEq(subRed.subscribeCount(), 3);
@@ -697,7 +1001,7 @@ contract SubRedAdapterQATest is Test {
         assertEq(totalSubscribed, 600e18);
         _step(string.concat("  total subscribed to subRed = ", vm.toString(totalSubscribed)));
         uint256 vaultRemaining = usdc.balanceOf(address(vault));
-        assertEq(vaultRemaining, 400e18);
+        assertEq(vaultRemaining, 0);
         _step(string.concat("  vault remaining = ", vm.toString(vaultRemaining)));
         _step("  PASS: 3 consecutive deposits all succeeded");
 
@@ -711,18 +1015,22 @@ contract SubRedAdapterQATest is Test {
     function test_Case11_RequestRedeemAsyncNormal() public {
         _logCase("Case-11", unicode"RequestRedeemAsync-从vault取ST");
 
-        // M-14: requestRedeemAsync takes posAmount directly (ST raw units).
+        uint256 assetAmount = 200e18;
         uint256 posAmount = 200e6;
-        _step("[Prepare] mint 1000e6 ST to vault and approve adapter");
-        stToken6.mint(address(vault), 1_000e6);
-        vault.approveTokenToAdapter(address(stToken6), address(adapter), 1_000e6);
-        _step(string.concat("  vault ST balance = ", vm.toString(stToken6.balanceOf(address(vault)))));
+        _step("[Prepare] user deposit -> bot rebalance -> bot settle invest, forming real vault ST balance");
+        (uint256 shares,) = _seedVaultSt(assetAmount, receiver);
+        uint256 vaultBefore = stToken6.balanceOf(address(vault));
+        _step(string.concat("  vault ST balance = ", vm.toString(vaultBefore)));
         _step(string.concat("  ST decimals = 6, posAmount = ", vm.toString(posAmount)));
 
-        _step(string.concat("[Step 1] controller calls requestRedeemAsync(", vm.toString(posAmount), ", receiver)"));
+        vm.prank(receiver);
+        uint256 reqId = gateway.requestRedeem(shares);
+        uint256[] memory ids = new uint256[](1);
+        ids[0] = reqId;
+
+        _step("[Step 1] bot calls executeProcessRedeemBatch -> controller -> adapter.requestRedeemAsync");
         vm.recordLogs();
-        vm.prank(controller);
-        adapter.requestRedeemAsync(posAmount, receiver);
+        _processRedeemBatch(ids);
         {
             VmSafe.Log[] memory logs = vm.getRecordedLogs();
             bool found;
@@ -733,8 +1041,8 @@ contract SubRedAdapterQATest is Test {
                 ) {
                     assertEq(logs[i].emitter, address(adapter), "wrong emitter");
                     assertEq(address(uint160(uint256(logs[i].topics[1]))), address(adapter), "wrong adapter");
-                    assertEq(address(uint160(uint256(logs[i].topics[2]))), controller, "wrong caller");
-                    assertEq(address(uint160(uint256(logs[i].topics[3]))), receiver, "wrong receiver");
+                    assertEq(address(uint160(uint256(logs[i].topics[2]))), address(controllerContract), "wrong caller");
+                    assertEq(address(uint160(uint256(logs[i].topics[3]))), address(adapter), "wrong receiver");
                     assertEq(abi.decode(logs[i].data, (uint256)), posAmount, "wrong amount");
                     found = true;
                     break;
@@ -743,17 +1051,23 @@ contract SubRedAdapterQATest is Test {
             assertTrue(found, "AdapterRedeemRequested not emitted");
         }
 
-        _step("[Step 2] verify redeemCount, redeemNonce, ST balance");
+        _step("[Step 2] verify redeemCount, redeemNonce, and real ST flow");
         _step(string.concat("  subRed.redeemCount = ", vm.toString(subRed.redeemCount())));
         assertEq(subRed.redeemCount(), 1);
         _step(string.concat("  subRed.redeemNonce = ", vm.toString(subRed.redeemNonce())));
         assertEq(subRed.redeemNonce(), 1);
         _step(string.concat("  subRed.lastRedeemQuantity = ", vm.toString(subRed.lastRedeemQuantity())));
         assertEq(subRed.lastRedeemQuantity(), posAmount);
+        uint256 vaultAfter = stToken6.balanceOf(address(vault));
+        _step(string.concat("  vault ST after = ", vm.toString(vaultAfter)));
+        assertEq(vaultBefore - vaultAfter, posAmount);
         uint256 adapterST = stToken6.balanceOf(address(adapter));
         _step(string.concat("  adapter ST balance = ", vm.toString(adapterST)));
-        assertEq(adapterST, posAmount);
-        _step("  PASS: requestRedeemAsync correctly transferred ST and called subRed.redeem");
+        assertEq(adapterST, 0);
+        uint256 subRedST = stToken6.balanceOf(address(subRed));
+        _step(string.concat("  subRed ST balance = ", vm.toString(subRedST)));
+        assertEq(subRedST, posAmount);
+        _step("  PASS: requestRedeemAsync correctly moved ST vault -> adapter -> subRed and called redeem");
 
         _logPass();
     }
@@ -765,16 +1079,18 @@ contract SubRedAdapterQATest is Test {
     function test_Case12_RequestRedeemAsyncNoAllowance() public {
         _logCase("Case-12", unicode"RequestRedeemAsync-vault未授权ST进行redeem");
 
-        _step("[Prepare] mint 100e6 ST to vault, do NOT approve adapter");
-        stToken6.mint(address(vault), 100e6);
-        _step(string.concat("  vault ST balance = ", vm.toString(stToken6.balanceOf(address(vault)))));
-        uint256 allowance = stToken6.allowance(address(vault), address(adapter));
+        _step("[Prepare] fund vault ST directly, do NOT approve adapter (adapter-level edge test)");
+        _fundToken(address(stToken6), address(directVault), 100e6);
+        _step(string.concat("  vault ST balance = ", vm.toString(stToken6.balanceOf(address(directVault)))));
+        uint256 allowance = stToken6.allowance(address(directVault), address(directAdapter));
         _step(string.concat("  vault->adapter ST allowance = ", vm.toString(allowance)));
 
-        _step("[Step 1] controller calls requestRedeemAsync(100e18, receiver)");
+        _step("[Step 1] controller-role holder calls directAdapter.requestRedeemAsync(100e18, receiver) directly");
         vm.prank(controller);
-        vm.expectRevert();
-        adapter.requestRedeemAsync(100e18, receiver);
+        vm.expectRevert(abi.encodeWithSelector(
+            IERC20Errors.ERC20InsufficientAllowance.selector, address(directAdapter), 0, 100e18
+        ));
+        directAdapter.requestRedeemAsync(100e18, receiver);
         _step("  reverted due to insufficient allowance");
         _step("  PASS: missing allowance correctly prevents redeem");
 
@@ -788,24 +1104,32 @@ contract SubRedAdapterQATest is Test {
     function test_Case13_RequestRedeemAsyncMultiple() public {
         _logCase("Case-13", unicode"RequestRedeemAsync-连续多次调用");
 
-        _step("[Prepare] mint 1000e6 ST to vault and approve adapter");
-        stToken6.mint(address(vault), 1_000e6);
-        vault.approveTokenToAdapter(address(stToken6), address(adapter), 1_000e6);
+        _step("[Prepare] seed 350e6 ST into vault through real invest path");
+        (uint256 shares,) = _seedVaultSt(350e18, receiver);
 
-        // M-14: requestRedeemAsync accepts posAmount (ST raw units) directly.
-        _step("[Step 1] controller calls requestRedeemAsync(100e6)");
-        vm.startPrank(controller);
-        adapter.requestRedeemAsync(100e6, receiver);
+        _step("[Step 1] user requests 100e18 shares, bot processes batch");
+        vm.prank(receiver);
+        uint256 reqId1 = gateway.requestRedeem(100e18);
+        uint256[] memory ids1 = new uint256[](1);
+        ids1[0] = reqId1;
+        _processRedeemBatch(ids1);
         _step(string.concat("  redeemCount = ", vm.toString(subRed.redeemCount()), ", nonce = ", vm.toString(subRed.redeemNonce())));
 
-        _step("[Step 2] controller calls requestRedeemAsync(200e6)");
-        adapter.requestRedeemAsync(200e6, receiver);
+        _step("[Step 2] user requests 200e18 shares, bot processes batch");
+        vm.prank(receiver);
+        uint256 reqId2 = gateway.requestRedeem(200e18);
+        uint256[] memory ids2 = new uint256[](1);
+        ids2[0] = reqId2;
+        _processRedeemBatch(ids2);
         _step(string.concat("  redeemCount = ", vm.toString(subRed.redeemCount()), ", nonce = ", vm.toString(subRed.redeemNonce())));
 
-        _step("[Step 3] controller calls requestRedeemAsync(50e6)");
-        adapter.requestRedeemAsync(50e6, receiver);
+        _step("[Step 3] user requests 50e18 shares, bot processes batch");
+        vm.prank(receiver);
+        uint256 reqId3 = gateway.requestRedeem(shares - 300e18);
+        uint256[] memory ids3 = new uint256[](1);
+        ids3[0] = reqId3;
+        _processRedeemBatch(ids3);
         _step(string.concat("  redeemCount = ", vm.toString(subRed.redeemCount()), ", nonce = ", vm.toString(subRed.redeemNonce())));
-        vm.stopPrank();
 
         _step("[Step 4] verify final state");
         assertEq(subRed.redeemCount(), 3);
@@ -822,15 +1146,15 @@ contract SubRedAdapterQATest is Test {
     function test_Case14_RequestRedeemAsyncZeroReceiver() public {
         _logCase("Case-14", unicode"RequestRedeemAsync-receiver为零地址");
 
-        _step("[Prepare] mint 100e6 ST to vault and approve adapter");
-        stToken6.mint(address(vault), 100e6);
-        vault.approveTokenToAdapter(address(stToken6), address(adapter), 100e6);
+        _step("[Prepare] fund vault ST directly and approve adapter (adapter-level edge test)");
+        _fundToken(address(stToken6), address(directVault), 100e6);
+        directVault.approveTokenToAdapter(address(stToken6), address(directAdapter), 100e6);
 
-        _step("[Step 1] controller calls requestRedeemAsync(100e6, address(0))");
+        _step("[Step 1] controller-role holder calls directAdapter.requestRedeemAsync(100e6, address(0)) directly");
         _step("  receiver = address(0)");
         vm.prank(controller);
-        vm.expectRevert(BaseAdapter.InvalidAddress.selector);
-        adapter.requestRedeemAsync(100e6, address(0));
+        vm.expectRevert(BaseAdapterUpgradeable.InvalidAddress.selector);
+        directAdapter.requestRedeemAsync(100e6, address(0));
         _step("  reverted with InvalidAddress");
         _step("  PASS: zero receiver address correctly rejected");
 
@@ -844,14 +1168,17 @@ contract SubRedAdapterQATest is Test {
     function test_Case15_RequestRedeemAsyncAllowanceResetToZero() public {
         _logCase("Case-15", unicode"RequestRedeemAsync-redeem后查看授权allowance");
 
-        _step("[Prepare] mint 500e6 ST to vault and approve adapter");
-        stToken6.mint(address(vault), 500e6);
-        vault.approveTokenToAdapter(address(stToken6), address(adapter), 500e6);
+        _step("[Prepare] seed 100e6 ST into vault through real invest path");
+        (uint256 shares,) = _seedVaultSt(100e18, receiver);
 
-        _step("[Step 1] controller calls requestRedeemAsync(100e6, receiver)");
-        vm.prank(controller);
-        adapter.requestRedeemAsync(100e6, receiver);
-        _step("  requestRedeemAsync succeeded");
+        vm.prank(receiver);
+        uint256 reqId = gateway.requestRedeem(shares);
+        uint256[] memory ids = new uint256[](1);
+        ids[0] = reqId;
+
+        _step("[Step 1] bot processes redeem batch");
+        _processRedeemBatch(ids);
+        _step("  requestRedeemAsync succeeded through controller path");
 
         _step("[Step 2] verify adapter -> SubRed ST allowance is reset to 0");
         uint256 allowance = stToken6.allowance(address(adapter), address(subRed));
@@ -869,21 +1196,21 @@ contract SubRedAdapterQATest is Test {
     function test_Case16_RequestRedeemAsyncExpired() public {
         _logCase("Case-16", unicode"RequestRedeemAsync-过期redeem");
 
-        _step("[Prepare] mint 500e6 ST to vault and approve adapter");
-        stToken6.mint(address(vault), 500e6);
-        vault.approveTokenToAdapter(address(stToken6), address(adapter), 500e6);
+        _step("[Prepare] fund vault ST directly and approve adapter (adapter-level edge test)");
+        _fundToken(address(stToken6), address(directVault), 500e6);
+        directVault.approveTokenToAdapter(address(stToken6), address(directAdapter), 500e6);
 
-        _step("[Step 1] admin sets redeemDeadlineWindow to 0 (immediate expiry)");
+        _step("[Step 1] admin sets directAdapter.redeemDeadlineWindow to 0 (immediate expiry)");
         vm.prank(admin);
-        adapter.setRedeemDeadlineWindow(0);
-        _step(string.concat("  redeemDeadlineWindow = ", vm.toString(uint256(adapter.redeemDeadlineWindow()))));
+        directAdapter.setRedeemDeadlineWindow(0);
+        _step(string.concat("  redeemDeadlineWindow = ", vm.toString(uint256(directAdapter.redeemDeadlineWindow()))));
         _step(string.concat("  block.timestamp = ", vm.toString(block.timestamp)));
         _step("  deadline will be: block.timestamp + 0 = block.timestamp (expired)");
 
-        _step("[Step 2] controller calls requestRedeemAsync(100e6, receiver)");
+        _step("[Step 2] controller-role holder calls directAdapter.requestRedeemAsync(100e6, receiver) directly");
         vm.prank(controller);
         vm.expectRevert("REDEEM_EXPIRED");
-        adapter.requestRedeemAsync(100e6, receiver);
+        directAdapter.requestRedeemAsync(100e6, receiver);
         _step("  reverted with REDEEM_EXPIRED");
         _step("  PASS: expired deadline correctly rejected by SubRed");
 
@@ -958,8 +1285,8 @@ contract SubRedAdapterQATest is Test {
         _step("  formula: asset = 476666666 * 2.1e18 * 1e18 / (1e18 * 1e6)");
         _step("  expected: 1000999998600000000000 (floor)");
 
-        _step("[Step 2] mint 476666666 ST to vault and check totalValue");
-        stToken6.mint(address(vault), 476_666_666);
+        _step("[Step 2] seed 476666666 ST into vault through real invest settlement");
+        _seedVaultSt(476_666_666e12, receiver);
         _step(string.concat("  vault ST balance = ", vm.toString(stToken6.balanceOf(address(vault)))));
         uint256 totalVal = adapterWithOracle.totalValue();
         _step(string.concat("  totalValue = ", vm.toString(totalVal)));
@@ -979,8 +1306,8 @@ contract SubRedAdapterQATest is Test {
     function test_Case21_TotalValueCheck() public {
         _logCase("Case-21", unicode"价格估算-检查totalValue");
 
-        _step("[Step 1] mint 500e6 ST to vault");
-        stToken6.mint(address(vault), 500e6);
+        _step("[Step 1] seed 500e6 ST into vault through real invest settlement");
+        _seedVaultSt(500e18, receiver);
         _step(string.concat("  vault ST balance = ", vm.toString(stToken6.balanceOf(address(vault)))));
         _step("  oracle price = 2, st_dec = 6, asset_dec = 18");
         _step("  expected totalValue = 500e6 * 2 * 1e12 = 1000e18");
@@ -1003,14 +1330,13 @@ contract SubRedAdapterQATest is Test {
 
         _step("[Step 1] set oracle price to 0");
         oracle.setPrice(0);
-        _step("  oracle price = 0 => fallback to 1:1 decimal scaling");
-        _step("  asset_dec=18, st_dec=6 => 2000e18 should map to 2000e6");
+        _step("  oracle price = 0 => getPosTokenPrice() returns 0 => estimatePosAmount returns 0");
 
         _step("[Step 2] call estimatePosAmount(2000e18)");
         uint256 pos = adapterWithOracle.estimatePosAmount(2000e18);
         _step(string.concat("  pos = ", vm.toString(pos)));
-        assertEq(pos, 2000e6);
-        _step("  PASS: oracle returning 0 triggers 1:1 fallback with decimal scaling");
+        assertEq(pos, 0);
+        _step("  PASS: oracle returning 0 means no valid price, estimatePosAmount returns 0");
 
         _logPass();
     }
@@ -1022,7 +1348,7 @@ contract SubRedAdapterQATest is Test {
     function test_Case23_EstimatePosAmountSameDecimals() public {
         _logCase("Case-23", unicode"价格估算-同精度换算");
 
-        _step("[Step 1] adapterSameDecimals: asset_dec=18, st_dec=18, no oracle => price=1e18");
+        _step("[Step 1] adapterSameDecimals: asset_dec=18, st_dec=18, no oracle, manualPrice=1e18");
         _step("  expected: 500e18 asset -> 500e18 pos (no scaling)");
 
         _step("[Step 2] call estimatePosAmount(500e18)");
@@ -1041,18 +1367,20 @@ contract SubRedAdapterQATest is Test {
     function test_Case24_EstimatePosAmountDifferentDecimals() public {
         _logCase("Case-24", unicode"价格估算-不同精度换算");
 
-        _step("[Step 1] test scale-down: asset_dec=18, st_dec=6, no oracle, price=1e18");
-        _step("  formula: pos = 1000e18 * 1e18 * 1e6 / (1e18 * 1e18) = 1000e6");
+        _step("[Step 1] test scale-down: asset_dec=18, st_dec=6, manualPrice=1e18");
+        _step("  formula: pos = 1000e18 * 1e18 / (1e18 * 1e12) = 1000e6");
         uint256 pos = adapter.estimatePosAmount(1000e18);
         _step(string.concat("  result: 1000e18 asset -> ", vm.toString(pos), " st (6 decimals)"));
         assertEq(pos, 1000e6);
 
-        _step("[Step 2] test scale-up: asset_dec=6, st_dec=18, no oracle, price=1e18");
+        _step("[Step 2] test scale-up: asset_dec=6, st_dec=18, manualPrice=1e18");
         MockVault_AQ vault6 = new MockVault_AQ(address(usdc6));
-        SubRedManagementAdapter adapterHighSt = new SubRedManagementAdapter(
+        SubRedManagementAdapter adapterHighSt = SubRedManagementAdapter(factory.deployAndInitAdapter(
             address(vault6), address(subRed), address(stToken18), admin, controller, accountant, address(0)
-        );
-        _step("  formula: pos = 1000e6 * 1e18 * 1e18 / (1e18 * 1e6) = 1000e18");
+        ));
+        vm.prank(accountant);
+        adapterHighSt.setManualPosTokenPrice(1e18);
+        _step("  formula: pos = 1000e6 * 1e18 * 1e12 / 1e18 = 1000e18");
         uint256 pos2 = adapterHighSt.estimatePosAmount(1000e6);
         _step(string.concat("  result: 1000e6 asset -> ", vm.toString(pos2), " st (18 decimals)"));
         assertEq(pos2, 1000e18);
@@ -1068,12 +1396,12 @@ contract SubRedAdapterQATest is Test {
     function test_Case25_TotalValueExcludesAdapterIdleAsset() public {
         _logCase("Case-25", unicode"价格估算-adapter有闲置usdc");
 
-        _step("[Step 1] mint 500e6 ST to vault");
-        stToken6.mint(address(vault), 500e6);
+        _step("[Step 1] seed 500e6 ST into vault through real invest settlement");
+        _seedVaultSt(500e18, receiver);
         _step(string.concat("  vault ST balance = ", vm.toString(stToken6.balanceOf(address(vault)))));
 
-        _step("[Step 2] mint 100e18 idle USDC to adapter");
-        usdc.mint(address(adapterWithOracle), 100e18);
+        _step("[Step 2] transfer 100e18 idle USDC to adapter");
+        _fundAdapterAsset(address(adapterWithOracle), 100e18);
         _step(string.concat("  adapter USDC balance = ", vm.toString(usdc.balanceOf(address(adapterWithOracle)))));
 
         _step("[Step 3] check totalValue (should only reflect vault ST, not adapter idle USDC)");
@@ -1096,8 +1424,8 @@ contract SubRedAdapterQATest is Test {
         _step("[Step 1] vault has 0 ST");
         _step(string.concat("  vault ST balance = ", vm.toString(stToken6.balanceOf(address(vault)))));
 
-        _step("[Step 2] mint 50e18 idle USDC to adapter");
-        usdc.mint(address(adapterWithOracle), 50e18);
+        _step("[Step 2] transfer 50e18 idle USDC to adapter");
+        _fundAdapterAsset(address(adapterWithOracle), 50e18);
         _step(string.concat("  adapter USDC balance = ", vm.toString(usdc.balanceOf(address(adapterWithOracle)))));
 
         _step("[Step 3] check totalValue");
@@ -1121,7 +1449,7 @@ contract SubRedAdapterQATest is Test {
 
         _step("[Step 2] accountant calls setManualPosTokenPrice(5e18) -> revert");
         vm.prank(accountant);
-        vm.expectRevert(BaseAdapter.Unsupported.selector);
+        vm.expectRevert(BaseAdapterUpgradeable.Unsupported.selector);
         adapterWithOracle.setManualPosTokenPrice(5e18);
         _step("  reverted with Unsupported");
         _step("  PASS: cannot set manual price when oracle is active");
@@ -1189,11 +1517,13 @@ contract SubRedAdapterQATest is Test {
     function test_Case30_NoOracleNoManualPrice() public {
         _logCase("Case-30", unicode"价格估算-无oracle不设置价格");
 
+        _step("[Step 0] clear manual price set in setUp");
+        vm.prank(accountant);
+        adapter.setManualPosTokenPrice(0);
+
         _step("[Step 1] verify adapter has no oracle and no manual price");
         _step(string.concat("  priceOracle = ", vm.toString(adapter.priceOracle())));
         assertEq(adapter.priceOracle(), address(0));
-        _step(string.concat("  manualPosTokenPrice = ", vm.toString(adapter.manualPosTokenPrice())));
-        assertEq(adapter.manualPosTokenPrice(), 0);
 
         _step("[Step 2] call getPosTokenPrice()");
         uint256 price = adapter.getPosTokenPrice();
@@ -1250,7 +1580,7 @@ contract SubRedAdapterQATest is Test {
                     assertEq(logs[i].emitter, address(adapter), "wrong emitter");
                     assertEq(address(uint160(uint256(logs[i].topics[1]))), accountant, "wrong updater");
                     (uint256 oldP, uint256 newP) = abi.decode(logs[i].data, (uint256, uint256));
-                    assertEq(oldP, 0, "wrong oldPrice");
+                    assertEq(oldP, 1e18, "wrong oldPrice");
                     assertEq(newP, 5e18, "wrong newPrice");
                     found = true;
                     break;
@@ -1258,7 +1588,7 @@ contract SubRedAdapterQATest is Test {
             }
             assertTrue(found, "ManualPosTokenPriceUpdated not emitted");
         }
-        _step("  ManualPosTokenPriceUpdated(oldPrice=0, newPrice=5e18, updater=accountant) emitted");
+        _step("  ManualPosTokenPriceUpdated(oldPrice=1e18, newPrice=5e18, updater=accountant) emitted");
 
         _step("[Step 2] admin calls setPriceOracle(oracle), verify PriceOracleUpdated event");
         vm.recordLogs();
@@ -1292,18 +1622,18 @@ contract SubRedAdapterQATest is Test {
     function test_Case33_SweepToVaultPartial() public {
         _logCase("Case-33", unicode"SweepToVault-余额150请求100");
 
-        _step("[Step 1] mint 150e18 USDC to adapter");
-        usdc.mint(address(adapter), 150e18);
-        _step(string.concat("  adapter USDC balance = ", vm.toString(usdc.balanceOf(address(adapter)))));
+        _step("[Step 1] transfer 150e18 USDC to adapter");
+        _fundAdapterAsset(address(directAdapter), 150e18);
+        _step(string.concat("  adapter USDC balance = ", vm.toString(usdc.balanceOf(address(directAdapter)))));
 
-        _step("[Step 2] controller calls sweepToVault(usdc, 100e18)");
+        _step("[Step 2] controller-role holder calls directAdapter.sweepToVault(usdc, 100e18)");
         vm.prank(controller);
-        uint256 claimed = adapter.sweepToVault(address(usdc), 100e18);
+        uint256 claimed = directAdapter.sweepToVault(address(usdc), 100e18);
         _step(string.concat("  claimed = ", vm.toString(claimed)));
 
         _step("[Step 3] verify balances after partial sweep");
-        uint256 vaultBal = usdc.balanceOf(address(vault));
-        uint256 adapterBal = usdc.balanceOf(address(adapter));
+        uint256 vaultBal = usdc.balanceOf(address(directVault));
+        uint256 adapterBal = usdc.balanceOf(address(directAdapter));
         _step(string.concat("  vault USDC = ", vm.toString(vaultBal)));
         _step(string.concat("  adapter USDC = ", vm.toString(adapterBal)));
         assertEq(claimed, 100e18);
@@ -1321,18 +1651,18 @@ contract SubRedAdapterQATest is Test {
     function test_Case34_SweepToVaultExceedsBalance() public {
         _logCase("Case-34", unicode"SweepToVault-超额");
 
-        _step("[Step 1] mint 80e18 USDC to adapter");
-        usdc.mint(address(adapter), 80e18);
-        _step(string.concat("  adapter USDC balance = ", vm.toString(usdc.balanceOf(address(adapter)))));
+        _step("[Step 1] transfer 80e18 USDC to adapter");
+        _fundAdapterAsset(address(directAdapter), 80e18);
+        _step(string.concat("  adapter USDC balance = ", vm.toString(usdc.balanceOf(address(directAdapter)))));
 
-        _step("[Step 2] controller calls sweepToVault(usdc, 200e18) -> requests more than available");
+        _step("[Step 2] controller-role holder calls directAdapter.sweepToVault(usdc, 200e18) -> requests more than available");
         vm.prank(controller);
-        uint256 claimed = adapter.sweepToVault(address(usdc), 200e18);
+        uint256 claimed = directAdapter.sweepToVault(address(usdc), 200e18);
         _step(string.concat("  claimed = ", vm.toString(claimed), " (capped to balance)"));
 
         _step("[Step 3] verify balances: claimed = min(200, 80) = 80");
-        uint256 vaultBal = usdc.balanceOf(address(vault));
-        uint256 adapterBal = usdc.balanceOf(address(adapter));
+        uint256 vaultBal = usdc.balanceOf(address(directVault));
+        uint256 adapterBal = usdc.balanceOf(address(directAdapter));
         _step(string.concat("  vault USDC = ", vm.toString(vaultBal)));
         _step(string.concat("  adapter USDC = ", vm.toString(adapterBal)));
         assertEq(claimed, 80e18);
@@ -1351,16 +1681,16 @@ contract SubRedAdapterQATest is Test {
         _logCase("Case-35", unicode"SweepToVault-余额为0");
 
         _step("[Step 1] verify adapter USDC balance is 0");
-        _step(string.concat("  adapter USDC balance = ", vm.toString(usdc.balanceOf(address(adapter)))));
+        _step(string.concat("  adapter USDC balance = ", vm.toString(usdc.balanceOf(address(directAdapter)))));
 
-        _step("[Step 2] controller calls sweepToVault(usdc, 100e18)");
+        _step("[Step 2] controller-role holder calls directAdapter.sweepToVault(usdc, 100e18)");
         vm.prank(controller);
-        uint256 claimed = adapter.sweepToVault(address(usdc), 100e18);
+        uint256 claimed = directAdapter.sweepToVault(address(usdc), 100e18);
         _step(string.concat("  claimed = ", vm.toString(claimed)));
 
         _step("[Step 3] verify no transfer occurred");
         assertEq(claimed, 0);
-        assertEq(usdc.balanceOf(address(vault)), 0);
+        assertEq(usdc.balanceOf(address(directVault)), 0);
         _step("  PASS: zero balance sweep returns 0 without error");
 
         _logPass();
@@ -1373,11 +1703,11 @@ contract SubRedAdapterQATest is Test {
     function test_Case36_SweepToVaultInvalidToken() public {
         _logCase("Case-36", unicode"SweepToVault-token无效");
 
-        _step("[Step 1] controller calls sweepToVault(address(0), 100e18)");
+        _step("[Step 1] controller-role holder calls directAdapter.sweepToVault(address(0), 100e18)");
         _step("  token = address(0)");
         vm.prank(controller);
-        vm.expectRevert(abi.encodeWithSelector(BaseAdapter.InvalidToken.selector, address(0)));
-        adapter.sweepToVault(address(0), 100e18);
+        vm.expectRevert(abi.encodeWithSelector(BaseAdapterUpgradeable.InvalidToken.selector, address(0)));
+        directAdapter.sweepToVault(address(0), 100e18);
         _step("  reverted with InvalidToken(address(0))");
         _step("  PASS: zero address token correctly rejected");
 
@@ -1391,8 +1721,8 @@ contract SubRedAdapterQATest is Test {
     function test_Case37_SweepUnprotectedToken() public {
         _logCase("Case-37", unicode"Sweep-非保护代币");
 
-        _step("[Step 1] mint 50e18 dustToken to adapter");
-        dustToken.mint(address(adapter), 50e18);
+        _step("[Step 1] transfer 50e18 dustToken to adapter");
+        _fundAdapterDust(50e18);
         _step(string.concat("  adapter dustToken balance = ", vm.toString(dustToken.balanceOf(address(adapter)))));
 
         _step("[Step 2] admin calls sweep(dustToken, receiver)");
@@ -1419,14 +1749,14 @@ contract SubRedAdapterQATest is Test {
     function test_Case38_SweepZeroReceiver() public {
         _logCase("Case-38", unicode"Sweep-接收者为零地址");
 
-        _step("[Step 1] mint 10e18 dustToken to adapter");
-        dustToken.mint(address(adapter), 10e18);
+        _step("[Step 1] transfer 10e18 dustToken to adapter");
+        _fundAdapterDust(10e18);
         _step(string.concat("  adapter dustToken balance = ", vm.toString(dustToken.balanceOf(address(adapter)))));
 
         _step("[Step 2] admin calls sweep(dustToken, address(0)) -> revert");
         _step("  receiver = address(0)");
         vm.prank(admin);
-        vm.expectRevert(BaseAdapter.InvalidAddress.selector);
+        vm.expectRevert(BaseAdapterUpgradeable.InvalidAddress.selector);
         adapter.sweep(address(dustToken), address(0));
         _step("  reverted with InvalidAddress");
         _step("  PASS: zero receiver address correctly rejected");
@@ -1444,7 +1774,7 @@ contract SubRedAdapterQATest is Test {
         _step("[Step 1] admin calls sweep(address(0), receiver)");
         _step("  token = address(0)");
         vm.prank(admin);
-        vm.expectRevert(abi.encodeWithSelector(BaseAdapter.InvalidToken.selector, address(0)));
+        vm.expectRevert(abi.encodeWithSelector(BaseAdapterUpgradeable.InvalidToken.selector, address(0)));
         adapter.sweep(address(0), receiver);
         _step("  reverted with InvalidToken(address(0))");
         _step("  PASS: zero address token correctly rejected");
@@ -1459,14 +1789,14 @@ contract SubRedAdapterQATest is Test {
     function test_Case40_SweepProtectedAsset() public {
         _logCase("Case-40", unicode"Sweep-token为ASSET");
 
-        _step("[Step 1] mint 10e18 USDC (ASSET) to adapter");
-        usdc.mint(address(adapter), 10e18);
+        _step("[Step 1] transfer 10e18 USDC (ASSET) to adapter");
+        _fundAdapterAsset(address(adapter), 10e18);
         _step(string.concat("  adapter USDC balance = ", vm.toString(usdc.balanceOf(address(adapter)))));
         _step(string.concat("  ASSET address = ", vm.toString(address(usdc))));
 
         _step("[Step 2] admin calls sweep(ASSET, receiver) -> revert");
         vm.prank(admin);
-        vm.expectRevert(abi.encodeWithSelector(BaseAdapter.SweepProtectedToken.selector, address(usdc)));
+        vm.expectRevert(abi.encodeWithSelector(BaseAdapterUpgradeable.SweepProtectedToken.selector, address(usdc)));
         adapter.sweep(address(usdc), receiver);
         _step("  reverted with SweepProtectedToken(USDC)");
         _step("  PASS: ASSET token is protected and cannot be swept");
@@ -1481,14 +1811,14 @@ contract SubRedAdapterQATest is Test {
     function test_Case41_SweepProtectedSTToken() public {
         _logCase("Case-41", unicode"Sweep-token为ST_TOKEN");
 
-        _step("[Step 1] mint 10e6 stToken6 (ST_TOKEN) to adapter");
-        stToken6.mint(address(adapter), 10e6);
+        _step("[Step 1] transfer 10e6 stToken6 (ST_TOKEN) to adapter");
+        _fundAdapterSt6(10e6);
         _step(string.concat("  adapter stToken6 balance = ", vm.toString(stToken6.balanceOf(address(adapter)))));
         _step(string.concat("  ST_TOKEN address = ", vm.toString(address(stToken6))));
 
         _step("[Step 2] admin calls sweep(ST_TOKEN, receiver) -> revert");
         vm.prank(admin);
-        vm.expectRevert(abi.encodeWithSelector(BaseAdapter.SweepProtectedToken.selector, address(stToken6)));
+        vm.expectRevert(abi.encodeWithSelector(BaseAdapterUpgradeable.SweepProtectedToken.selector, address(stToken6)));
         adapter.sweep(address(stToken6), receiver);
         _step("  reverted with SweepProtectedToken(stToken6)");
         _step("  PASS: ST_TOKEN is protected and cannot be swept");
@@ -1506,10 +1836,268 @@ contract SubRedAdapterQATest is Test {
         _step("[Step 1] call withdrawSync(100e18, receiver)");
         _step(string.concat("  receiver = ", vm.toString(receiver)));
         _step("  amount = 100e18");
-        vm.expectRevert(BaseAdapter.Unsupported.selector);
+        vm.expectRevert(BaseAdapterUpgradeable.Unsupported.selector);
         adapter.withdrawSync(100e18, receiver);
         _step("  reverted with Unsupported");
         _step("  PASS: withdrawSync is not supported by SubRedManagementAdapter");
+
+        _logPass();
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  Case 43 — beaconOwner 升级 adapter 实现合约
+    // ═══════════════════════════════════════════════════════════════
+
+    function test_Case43_BeaconOwnerUpgrade() public {
+        _logCase("Case-43", unicode"beaconOwner 升级 adapter 实现合约");
+
+        UpgradeableBeacon beacon = factory.BEACON();
+        address oldImpl = beacon.implementation();
+        _step(string.concat("[Step 1] current impl = ", vm.toString(oldImpl)));
+
+        _step("[Step 2] deploy V2 and upgrade");
+        SubRedManagementAdapterV2 newImpl = new SubRedManagementAdapterV2();
+        vm.prank(admin);
+        beacon.upgradeTo(address(newImpl));
+
+        assertEq(beacon.implementation(), address(newImpl), "impl should be newImpl");
+        _step(string.concat("  new impl = ", vm.toString(address(newImpl))));
+        _step("  PASS: BEACON.implementation() updated to V2");
+
+        _logPass();
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  Case 44 — 非 beaconOwner 无法升级
+    // ═══════════════════════════════════════════════════════════════
+
+    function test_Case44_NonOwnerCannotUpgrade() public {
+        _logCase("Case-44", unicode"非 beaconOwner 无法升级");
+
+        UpgradeableBeacon beacon = factory.BEACON();
+        SubRedManagementAdapterV2 newImpl = new SubRedManagementAdapterV2();
+
+        _step("[Step 1] non-owner attempts upgrade, expect revert");
+        vm.prank(other);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, other));
+        beacon.upgradeTo(address(newImpl));
+        _step("  PASS: reverted OwnableUnauthorizedAccount");
+
+        _logPass();
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  Case 45 — 升级为零地址
+    // ═══════════════════════════════════════════════════════════════
+
+    function test_Case45_UpgradeToZeroAddress() public {
+        _logCase("Case-45", unicode"升级为零地址");
+
+        UpgradeableBeacon beacon = factory.BEACON();
+
+        _step("[Step 1] beaconOwner upgrades to address(0), expect revert");
+        vm.prank(admin);
+        vm.expectRevert(abi.encodeWithSelector(UpgradeableBeacon.BeaconInvalidImplementation.selector, address(0)));
+        beacon.upgradeTo(address(0));
+        _step("  PASS: reverted BeaconInvalidImplementation");
+
+        _logPass();
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  Case 46 — 升级为 EOA
+    // ═══════════════════════════════════════════════════════════════
+
+    function test_Case46_UpgradeToEOA() public {
+        _logCase("Case-46", unicode"升级为 EOA（无代码）");
+
+        UpgradeableBeacon beacon = factory.BEACON();
+        address eoa = makeAddr("eoa");
+
+        _step("[Step 1] beaconOwner upgrades to EOA, expect revert");
+        vm.prank(admin);
+        vm.expectRevert(abi.encodeWithSelector(UpgradeableBeacon.BeaconInvalidImplementation.selector, eoa));
+        beacon.upgradeTo(eoa);
+        _step("  PASS: reverted BeaconInvalidImplementation");
+
+        _logPass();
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  Case 47 — 升级后 ERC-7201 存储布局保持不变
+    // ═══════════════════════════════════════════════════════════════
+
+    function test_Case47_StatePreservedAfterUpgrade() public {
+        _logCase("Case-47", unicode"升级后 ERC-7201 存储布局保持不变");
+
+        _step("[Step 1] record V1 state");
+        uint64 subWindow = adapter.subscribeDeadlineWindow();
+        uint64 redWindow = adapter.redeemDeadlineWindow();
+        uint256 price = adapter.getPosTokenPrice();
+        address st = adapter.stToken();
+        address pos = adapter.posToken();
+        bool isPaused = adapter.paused();
+        _step(string.concat("  subscribeDeadlineWindow = ", vm.toString(uint256(subWindow))));
+        _step(string.concat("  redeemDeadlineWindow = ", vm.toString(uint256(redWindow))));
+        _step(string.concat("  getPosTokenPrice = ", vm.toString(price)));
+        _step(string.concat("  stToken = ", vm.toString(st)));
+        _step(string.concat("  posToken = ", vm.toString(pos)));
+
+        _step("[Step 2] upgrade beacon to V2");
+        UpgradeableBeacon beacon = factory.BEACON();
+        SubRedManagementAdapterV2 newImpl = new SubRedManagementAdapterV2();
+        vm.prank(admin);
+        beacon.upgradeTo(address(newImpl));
+
+        _step("[Step 3] verify V1 state preserved");
+        assertEq(adapter.subscribeDeadlineWindow(), subWindow, "subscribeDeadlineWindow preserved");
+        assertEq(adapter.redeemDeadlineWindow(), redWindow, "redeemDeadlineWindow preserved");
+        assertEq(adapter.getPosTokenPrice(), price, "getPosTokenPrice preserved");
+        assertEq(adapter.stToken(), st, "stToken preserved");
+        assertEq(adapter.posToken(), pos, "posToken preserved");
+        assertEq(adapter.paused(), isPaused, "paused preserved");
+        _step("  PASS: all ERC-7201 state preserved after V2 upgrade");
+
+        _logPass();
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  Case 48 — 批量升级所有 adapter
+    // ═══════════════════════════════════════════════════════════════
+
+    function test_Case48_BatchUpgradeAllAdapters() public {
+        _logCase("Case-48", unicode"批量升级所有 adapter");
+
+        _step("[Step 1] deploy 3 extra adapters via factory");
+        MockVault_AQ v1 = new MockVault_AQ(address(usdc));
+        MockVault_AQ v2 = new MockVault_AQ(address(usdc));
+        MockVault_AQ v3 = new MockVault_AQ(address(usdc));
+        address a1 = factory.deployAndInitAdapter(
+            address(v1), address(subRed), address(stToken6), admin, controller, accountant, address(0)
+        );
+        address a2 = factory.deployAndInitAdapter(
+            address(v2), address(subRed), address(stToken6), admin, controller, accountant, address(0)
+        );
+        address a3 = factory.deployAndInitAdapter(
+            address(v3), address(subRed), address(stToken6), admin, controller, accountant, address(0)
+        );
+
+        _step("[Step 2] upgrade beacon once");
+        UpgradeableBeacon beacon = factory.BEACON();
+        SubRedManagementAdapterV2 newImpl = new SubRedManagementAdapterV2();
+        vm.prank(admin);
+        beacon.upgradeTo(address(newImpl));
+
+        _step("[Step 3] all 3 adapters use new impl");
+        assertEq(SubRedManagementAdapterV2(a1).version(), 2, "a1 should use V2");
+        assertEq(SubRedManagementAdapterV2(a2).version(), 2, "a2 should use V2");
+        assertEq(SubRedManagementAdapterV2(a3).version(), 2, "a3 should use V2");
+        _step("  PASS: all 3 adapters upgraded simultaneously via single beacon upgrade");
+
+        _logPass();
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  Case 49 — 升级后 adapter 功能正常（deposit 全链路）
+    // ═══════════════════════════════════════════════════════════════
+
+    function test_Case49_PostUpgradeDepositFunctionality() public {
+        _logCase("Case-49", unicode"升级后 adapter 功能正常（deposit 全链路）");
+
+        _step("[Step 1] deposit before upgrade via full chain");
+        uint256 depositAmt = 1000e18;
+        _depositToVault(funder, depositAmt);
+        uint256 inFlightId = vault.nextInFlightId();
+        uint256 posAmt = adapter.estimatePosAmount(depositAmt);
+        _rebalance();
+        _settleAdapterInvest(inFlightId, posAmt);
+        uint256 stBalBefore = stToken6.balanceOf(address(vault));
+        _step(string.concat("  vault ST balance after first invest = ", vm.toString(stBalBefore)));
+        assertTrue(stBalBefore > 0, "vault should hold ST tokens");
+
+        _step("[Step 2] upgrade beacon to V2");
+        UpgradeableBeacon beacon = factory.BEACON();
+        SubRedManagementAdapterV2 newImpl = new SubRedManagementAdapterV2();
+        vm.prank(admin);
+        beacon.upgradeTo(address(newImpl));
+        assertEq(SubRedManagementAdapterV2(address(adapter)).version(), 2, "adapter upgraded");
+
+        _step("[Step 3] deposit after upgrade via full chain");
+        _depositToVault(receiver, depositAmt);
+        uint256 inFlightId2 = vault.nextInFlightId();
+        uint256 posAmt2 = adapter.estimatePosAmount(depositAmt);
+        _rebalance();
+        _settleAdapterInvest(inFlightId2, posAmt2);
+        uint256 stBalAfter = stToken6.balanceOf(address(vault));
+        _step(string.concat("  vault ST balance after second invest = ", vm.toString(stBalAfter)));
+        assertTrue(stBalAfter > stBalBefore, "vault ST balance should increase after second invest");
+        _step("  PASS: deposit works correctly after upgrade");
+
+        _logPass();
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  Case 50 — 升级后新部署的 adapter 使用新实现
+    // ═══════════════════════════════════════════════════════════════
+
+    function test_Case50_NewDeployUsesNewImpl() public {
+        _logCase("Case-50", unicode"升级后新部署的 adapter 使用新实现");
+
+        _step("[Step 1] upgrade beacon to V2");
+        UpgradeableBeacon beacon = factory.BEACON();
+        SubRedManagementAdapterV2 newImpl = new SubRedManagementAdapterV2();
+        vm.prank(admin);
+        beacon.upgradeTo(address(newImpl));
+
+        _step("[Step 2] deploy new adapter after upgrade");
+        MockVault_AQ newVault = new MockVault_AQ(address(usdc));
+        address newAdapter = factory.deployAndInitAdapter(
+            address(newVault), address(subRed), address(stToken6), admin, controller, accountant, address(0)
+        );
+
+        assertEq(SubRedManagementAdapterV2(newAdapter).version(), 2, "new adapter should use V2");
+        assertEq(factory.implementation(), address(newImpl), "factory.implementation should be V2");
+        _step("  PASS: new deployment uses new implementation");
+
+        _logPass();
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  Case 51 — V2 新增 storage 与 V1 存储兼容
+    // ═══════════════════════════════════════════════════════════════
+
+    function test_Case51_V2StorageCompatibility() public {
+        _logCase("Case-51", unicode"V2 新增 storage 与 V1 存储兼容");
+
+        _step("[Step 1] record V1 state");
+        uint64 subWindow = adapter.subscribeDeadlineWindow();
+        uint256 price = adapter.getPosTokenPrice();
+        address st = adapter.stToken();
+        _step(string.concat("  subscribeDeadlineWindow = ", vm.toString(uint256(subWindow))));
+        _step(string.concat("  getPosTokenPrice = ", vm.toString(price)));
+
+        _step("[Step 2] upgrade to V2WithStorage");
+        UpgradeableBeacon beacon = factory.BEACON();
+        SubRedManagementAdapterV2WithStorage newImpl = new SubRedManagementAdapterV2WithStorage();
+        vm.prank(admin);
+        beacon.upgradeTo(address(newImpl));
+
+        _step("[Step 3] verify V1 state preserved");
+        SubRedManagementAdapterV2WithStorage upgraded = SubRedManagementAdapterV2WithStorage(address(adapter));
+        assertEq(upgraded.subscribeDeadlineWindow(), subWindow, "subscribeDeadlineWindow preserved");
+        assertEq(upgraded.getPosTokenPrice(), price, "getPosTokenPrice preserved");
+        assertEq(upgraded.stToken(), st, "stToken preserved");
+
+        _step("[Step 4] V2 new storage works");
+        assertEq(upgraded.extraParam(), 0, "extraParam default is 0");
+        upgraded.setExtraParam(42);
+        assertEq(upgraded.extraParam(), 42, "extraParam set to 42");
+        assertEq(upgraded.version(), 2, "version is 2");
+
+        _step("[Step 5] V1 state still intact after V2 storage write");
+        assertEq(upgraded.subscribeDeadlineWindow(), subWindow, "subscribeDeadlineWindow still preserved");
+        assertEq(upgraded.getPosTokenPrice(), price, "getPosTokenPrice still preserved");
+        _step("  PASS: V2 new storage compatible with V1 ERC-7201 layout");
 
         _logPass();
     }

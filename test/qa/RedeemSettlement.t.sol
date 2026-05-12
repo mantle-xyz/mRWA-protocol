@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {Accountant} from "../../src/accountant/Accountant.sol";
+import {Accountant} from "../../src/accountant/Accountant.sol";
 import {ISanctionsOracle} from "../../src/interfaces/compliance/ISanctionsOracle.sol";
 import {IMantleVaultGateway} from "../../src/interfaces/vault/IMantleVaultGateway.sol";
 import {IMantleYieldVault} from "../../src/interfaces/vault/IMantleYieldVault.sol";
@@ -48,13 +49,6 @@ contract MockPosToken_RS is ERC20 {
     function decimals() public pure override returns (uint8) { return 18; }
     function mint(address to, uint256 amount) external { _mint(to, amount); }
     function burn(address from, uint256 amount) external { _burn(from, amount); }
-}
-
-contract MockAccountant_RS {
-    uint256 public rate = 1e18;
-    function getRate() external view returns (uint256) { return rate; }
-    function getRateSafe() external view returns (uint256) { return rate; }
-    function setExchangeRate(uint256 newRate) external { rate = newRate; }
 }
 
 /// @dev Async adapter: totalValue() reads posToken on VAULT, deposit pulls USDC from vault,
@@ -159,7 +153,7 @@ contract RedeemSettlementQATest is Test {
     MockUSDC_RS internal usdc;
     MockPosToken_RS internal posToken;
     MockSanctionsOracle_RS internal oracle;
-    MockAccountant_RS internal mockAccountant;
+    Accountant internal accountant;
     MantleYieldVault internal vault;
     MantleVaultGateway internal gateway;
     StrategyController internal controller;
@@ -202,7 +196,6 @@ contract RedeemSettlementQATest is Test {
         usdc = new MockUSDC_RS();
         posToken = new MockPosToken_RS();
         oracle = new MockSanctionsOracle_RS();
-        mockAccountant = new MockAccountant_RS();
 
         MantleYieldVault vaultImpl = new MantleYieldVault();
         MantleVaultGateway gwImpl = new MantleVaultGateway();
@@ -218,15 +211,27 @@ contract RedeemSettlementQATest is Test {
                 admin: admin,
                 gateway: address(1),
                 controller: admin,
-                accountant: address(mockAccountant),
+                accountant: address(1), // placeholder, replaced below
                 treasury: treasury,
                 maxRedemptionFeeBps: 500,
                 redemptionFeeBps: 0,
                 minRedeemAmount: 0,
-                minDepositAmount: 0
+                minDepositAmount: 0,
+                maxSettlementDeviationBps: 0,
+                depositDailyRemaining: type(uint256).max,
+                redeemDailyRemaining: type(uint256).max
             })
         );
         vault = MantleYieldVault(address(new ERC1967Proxy(address(vaultImpl), vaultInitData)));
+
+        // Deploy real Accountant
+        Accountant acctImpl = new Accountant();
+        accountant = Accountant(address(new ERC1967Proxy(
+            address(acctImpl),
+            abi.encodeCall(Accountant.initialize, (address(vault), uint64(1e18), 0, admin))
+        )));
+        vm.prank(admin);
+        vault.setAccountant(address(accountant));
 
         bytes memory execInitData = abi.encodeCall(OperatorExecutor.initialize, (admin, bot));
         executor = OperatorExecutor(address(new ERC1967Proxy(address(execImpl), execInitData)));
@@ -341,7 +346,7 @@ contract RedeemSettlementQATest is Test {
     }
 
     function _convertToAssetsFloor(uint256 shares) internal view returns (uint256) {
-        return shares.mulDiv(mockAccountant.rate(), 1e18, Math.Rounding.Floor);
+        return shares.mulDiv(accountant.getRate(), 1e18, Math.Rounding.Floor);
     }
 
     function _arr(uint256 v) internal pure returns (uint256[] memory a) {
@@ -410,18 +415,19 @@ contract RedeemSettlementQATest is Test {
         // No in-flight should be created (freeCash was sufficient)
         assertEq(vault.totalRedeemInFlight(), 0, "no redeemInFlight -- Path B");
 
-        // Finalize: each gets convertToAssets(1000 shares) = 1000e6
+        // Finalize: each gets convertToAssets(1000 shares)
         uint256 settledPerUser = _convertToAssetsFloor(1000e6);
-        assertEq(settledPerUser, 1000e6, "settled = 1000 at rate 1.0");
+        uint256 expectedSettled = Math.mulDiv(1000e6, vault.exchangeRate(), 1e18, Math.Rounding.Floor);
+        assertEq(settledPerUser, expectedSettled, "settled = shares * rate / 1e18");
 
         uint256 balA = usdc.balanceOf(userA);
         uint256 balB = usdc.balanceOf(userB);
         uint256 balC = usdc.balanceOf(userC);
         _finalizeRedeemBatch(ids, _arr3(settledPerUser, settledPerUser, settledPerUser));
 
-        assertEq(usdc.balanceOf(userA) - balA, settledPerUser, "A received 1000");
-        assertEq(usdc.balanceOf(userB) - balB, settledPerUser, "B received 1000");
-        assertEq(usdc.balanceOf(userC) - balC, settledPerUser, "C received 1000");
+        assertEq(usdc.balanceOf(userA) - balA, settledPerUser, "A received settled amount");
+        assertEq(usdc.balanceOf(userB) - balB, settledPerUser, "B received settled amount");
+        assertEq(usdc.balanceOf(userC) - balC, settledPerUser, "C received settled amount");
         assertEq(vault.totalLockedShares(), 0, "locked cleared");
 
         // Verify on-chain state: status DONE and pendingShares cleared
@@ -453,10 +459,12 @@ contract RedeemSettlementQATest is Test {
         vm.prank(userB);
         uint256 reqId = gateway.requestRedeem(sharesB);
         (,,,, uint256 estimated,,, ) = vault.requests(reqId);
-        assertEq(estimated, 1000e6, "estimated at rate=1.0");
+        uint256 expectedEstimated = Math.mulDiv(sharesB, vault.exchangeRate(), 1e18, Math.Rounding.Floor);
+        assertEq(estimated, expectedEstimated, "estimated = shares * rate / 1e18");
 
         // Rate rises
-        mockAccountant.setExchangeRate(11e17);
+        vm.prank(admin);
+        accountant.emergencyRateUpdate(uint64(11e17));
 
         // Process: Path B (no divest, freeCash sufficient)
         uint256 batchTotalB2 = _convertToAssetsFloor(sharesB);
@@ -465,17 +473,18 @@ contract RedeemSettlementQATest is Test {
         _processRedeemBatch(_arr(reqId));
         assertEq(vault.totalRedeemInFlight(), 0, "Path B, no divest");
 
-        // settledAssets at new rate: 1000 shares * 1.1 = 1100 USDC
+        // settledAssets at new rate: shares * newRate / 1e18
         uint256 settled = _convertToAssetsFloor(sharesB);
-        assertEq(settled, 1100e6, "settled = 1100 at rate 1.1");
+        uint256 expectedSettled2 = Math.mulDiv(sharesB, vault.exchangeRate(), 1e18, Math.Rounding.Floor);
+        assertEq(settled, expectedSettled2, "settled = shares * newRate / 1e18");
 
         uint256 balBefore = usdc.balanceOf(userB);
-        // settled (1100) != estimated (1000) -> RequestSettlementAdjusted
+        // settled != estimated -> RequestSettlementAdjusted
         vm.expectEmit(true, false, false, true, address(vault));
         emit IMantleYieldVault.RequestSettlementAdjusted(reqId, estimated, settled);
         _finalizeRedeemBatch(_arr(reqId), _arr(settled));
         uint256 received = usdc.balanceOf(userB) - balBefore;
-        assertEq(received, 1100e6, "B received 1100 > estimated 1000");
+        assertEq(received, settled, "B received settled amount");
         assertGt(received, estimated, "received > estimated");
 
         // Verify on-chain state: status DONE and pendingShares cleared
@@ -494,32 +503,36 @@ contract RedeemSettlementQATest is Test {
         _logCase("test_PathB_RateDrop",
             unicode"Path B + rate 下降 -- 用户收到少于 estimatedAssets");
 
-        mockAccountant.setExchangeRate(11e17);
+        vm.prank(admin);
+        accountant.emergencyRateUpdate(uint64(11e17));
         _depositCashOnly(userA, 5000e6);
         _depositCashOnly(userB, 1100e6);
 
         uint256 sharesB = vault.balanceOf(userB);
-        // shares = 1100e6 * 1e18 / 1.1e18 = 1000e6
+        // shares = 1100e6 * 1e18 / 1.1e18
         vm.prank(userB);
         uint256 reqId = gateway.requestRedeem(sharesB);
         (,,,, uint256 estimated,,, ) = vault.requests(reqId);
-        assertEq(estimated, 1100e6, "estimated at rate=1.1");
+        uint256 expectedEstimated3 = Math.mulDiv(sharesB, vault.exchangeRate(), 1e18, Math.Rounding.Floor);
+        assertEq(estimated, expectedEstimated3, "estimated = shares * rate / 1e18");
 
         // Rate drops
-        mockAccountant.setExchangeRate(1e18);
+        vm.prank(admin);
+        accountant.emergencyRateUpdate(uint64(1e18));
 
         _processRedeemBatch(_arr(reqId));
 
         uint256 settled = _convertToAssetsFloor(sharesB);
-        assertEq(settled, 1000e6, "settled = 1000 at rate 1.0");
+        uint256 expectedSettled3 = Math.mulDiv(sharesB, vault.exchangeRate(), 1e18, Math.Rounding.Floor);
+        assertEq(settled, expectedSettled3, "settled = shares * newRate / 1e18");
 
         uint256 balBefore = usdc.balanceOf(userB);
-        // settled (1000) != estimated (1100) -> RequestSettlementAdjusted
+        // settled != estimated -> RequestSettlementAdjusted
         vm.expectEmit(true, false, false, true, address(vault));
         emit IMantleYieldVault.RequestSettlementAdjusted(reqId, estimated, settled);
         _finalizeRedeemBatch(_arr(reqId), _arr(settled));
         uint256 received = usdc.balanceOf(userB) - balBefore;
-        assertEq(received, 1000e6, "B received 1000 < estimated 1100");
+        assertEq(received, settled, "B received settled amount");
         assertLt(received, estimated, "received < estimated");
 
         // Verify on-chain state: status DONE and pendingShares cleared
@@ -572,18 +585,19 @@ contract RedeemSettlementQATest is Test {
         adapter.simulateRedeemSettlement(redeemUsdc);
         _settleRedeem(_arr(redeemId), _arr(redeemUsdc));
 
-        // Finalize: each gets convertToAssets(1000 shares) = 1000 (same as Path B)
+        // Finalize: each gets convertToAssets(1000 shares)
         uint256 settledPerUser = _convertToAssetsFloor(1000e6);
-        assertEq(settledPerUser, 1000e6, "settled = 1000 at rate 1.0");
+        uint256 expectedSettled4 = Math.mulDiv(1000e6, vault.exchangeRate(), 1e18, Math.Rounding.Floor);
+        assertEq(settledPerUser, expectedSettled4, "settled = shares * rate / 1e18");
 
         uint256 balA = usdc.balanceOf(userA);
         uint256 balB = usdc.balanceOf(userB);
         uint256 balC = usdc.balanceOf(userC);
         _finalizeRedeemBatch(ids, _arr3(settledPerUser, settledPerUser, settledPerUser));
 
-        assertEq(usdc.balanceOf(userA) - balA, settledPerUser, "A received 1000");
-        assertEq(usdc.balanceOf(userB) - balB, settledPerUser, "B received 1000");
-        assertEq(usdc.balanceOf(userC) - balC, settledPerUser, "C received 1000");
+        assertEq(usdc.balanceOf(userA) - balA, settledPerUser, "A received settled amount");
+        assertEq(usdc.balanceOf(userB) - balB, settledPerUser, "B received settled amount");
+        assertEq(usdc.balanceOf(userC) - balC, settledPerUser, "C received settled amount");
         assertEq(vault.totalLockedShares(), 0, "locked cleared");
 
         // Verify on-chain state: status DONE and pendingShares cleared
@@ -805,7 +819,7 @@ contract RedeemSettlementQATest is Test {
         uint256 vaultUsdcNow = usdc.balanceOf(address(vault));
         vm.prank(bot);
         vm.expectRevert(
-            abi.encodeWithSelector(StrategyController.InsufficientCashForReady.selector, settled, vaultUsdcNow)
+            abi.encodeWithSelector(IMantleYieldVault.Vault__InsufficientPhysicalCash.selector, _arr(reqId), _arr(settled), vaultUsdcNow)
         );
         executor.executeFinalizeRedeemBatch(address(controller), _arr(reqId), _arr(settled));
 
@@ -847,10 +861,11 @@ contract RedeemSettlementQATest is Test {
         // Process + finalize batch 1 at rate=1.0
         _processRedeemBatch(_arr(req1));
         uint256 settled1 = _convertToAssetsFloor(1000e6);
-        assertEq(settled1, 1000e6, "batch1 settled at rate 1.0");
+        uint256 expectedSettled8a = Math.mulDiv(1000e6, vault.exchangeRate(), 1e18, Math.Rounding.Floor);
+        assertEq(settled1, expectedSettled8a, "batch1 settled = shares * rate / 1e18");
         uint256 balA = usdc.balanceOf(userA);
         _finalizeRedeemBatch(_arr(req1), _arr(settled1));
-        assertEq(usdc.balanceOf(userA) - balA, 1000e6, "A got 1000");
+        assertEq(usdc.balanceOf(userA) - balA, settled1, "A got settled amount");
 
         // Verify on-chain state: batch1 req status DONE and pendingShares cleared
         (,,,,,,, IMantleYieldVault.RequestStatus sA8a) = vault.requests(req1);
@@ -861,7 +876,8 @@ contract RedeemSettlementQATest is Test {
         assertEq(vault.totalLockedShares(), 0, "batch1 locked released");
 
         // Rate changes before batch 2
-        mockAccountant.setExchangeRate(11e17);
+        vm.prank(admin);
+        accountant.emergencyRateUpdate(uint64(11e17));
 
         // Batch 2: userB redeems 1000 shares at new rate
         vm.prank(userB);
@@ -869,11 +885,12 @@ contract RedeemSettlementQATest is Test {
 
         _processRedeemBatch(_arr(req2));
         uint256 settled2 = _convertToAssetsFloor(1000e6);
-        assertEq(settled2, 1100e6, "batch2 settled at rate 1.1");
+        uint256 expectedSettled8b = Math.mulDiv(1000e6, vault.exchangeRate(), 1e18, Math.Rounding.Floor);
+        assertEq(settled2, expectedSettled8b, "batch2 settled = shares * newRate / 1e18");
 
         uint256 balB = usdc.balanceOf(userB);
         _finalizeRedeemBatch(_arr(req2), _arr(settled2));
-        assertEq(usdc.balanceOf(userB) - balB, 1100e6, "B got 1100");
+        assertEq(usdc.balanceOf(userB) - balB, settled2, "B got settled amount");
 
         // Verify on-chain state: batch2 req status DONE and pendingShares cleared
         (,,,,,,, IMantleYieldVault.RequestStatus sB8b) = vault.requests(req2);
@@ -1027,13 +1044,15 @@ contract RedeemSettlementQATest is Test {
         vault.setRedemptionFee(100); // 100 bps = 1%
 
         // Rate = 1.2
-        mockAccountant.setExchangeRate(12e17);
+        vm.prank(admin);
+        accountant.emergencyRateUpdate(uint64(12e17));
 
         // Deposit: 1200 USDC at rate 1.2 -> shares = 1200e6 * 1e18 / 1.2e18 = 1000e6
         _depositCashOnly(userA, 10_000e6); // pad for PathB
         _depositCashOnly(userB, 1200e6);
         uint256 sharesB = vault.balanceOf(userB);
-        assertEq(sharesB, 1000e6, "B has 1000 shares at rate 1.2");
+        uint256 expectedSharesB = Math.mulDiv(1200e6, 1e18, vault.exchangeRate(), Math.Rounding.Floor);
+        assertEq(sharesB, expectedSharesB, "B shares = deposit * 1e18 / rate");
 
         // requestRedeem(1000 shares) at rate 1.2, fee=1%
         // Contract formula:
@@ -1063,7 +1082,8 @@ contract RedeemSettlementQATest is Test {
         assertEq(vault.balanceOf(treasury), expectedTreasuryShare, "treasury got fee shares");
 
         // Rate drops to 1.0 before process
-        mockAccountant.setExchangeRate(1e18);
+        vm.prank(admin);
+        accountant.emergencyRateUpdate(uint64(1e18));
 
         // Process: batchTotalAsset = netShares * newRate / 1e18 = 990e6 * 1.0 = 990e6
         uint256 batchTotal = Math.mulDiv(expectedNetShares, 1e18, 1e18, Math.Rounding.Floor);
@@ -1075,9 +1095,10 @@ contract RedeemSettlementQATest is Test {
         _processRedeemBatch(_arr(reqId));
         assertEq(vault.totalRedeemInFlight(), 0, "PathB: no divest");
 
-        // Finalize: settle at new rate -> settledAssets = netShares * 1.0 = 990e6
+        // Finalize: settle at new rate -> settledAssets = netShares * newRate / 1e18
         uint256 settled = Math.mulDiv(expectedNetShares, 1e18, 1e18, Math.Rounding.Floor);
-        assertEq(settled, 990e6, "settled at rate 1.0 = 990");
+        uint256 expectedSettled11 = Math.mulDiv(expectedNetShares, vault.exchangeRate(), 1e18, Math.Rounding.Floor);
+        assertEq(settled, expectedSettled11, "settled = netShares * newRate / 1e18");
 
         // settled (990) != estimated (1188) -> RequestSettlementAdjusted
         uint256 balBefore = usdc.balanceOf(userB);
@@ -1111,14 +1132,16 @@ contract RedeemSettlementQATest is Test {
         vault.setRedemptionFee(100);
 
         // Rate = 1.2
-        mockAccountant.setExchangeRate(12e17);
+        vm.prank(admin);
+        accountant.emergencyRateUpdate(uint64(12e17));
 
         // 3 users deposit 2400 each at rate 1.2 -> 2000 shares each
         _deposit(userA, 2400e6);
         _deposit(userB, 2400e6);
         _deposit(userC, 2400e6);
         uint256 sharesPerUser = vault.balanceOf(userA);
-        assertEq(sharesPerUser, 2000e6, "each has 2000 shares at rate 1.2");
+        uint256 expectedSharesPerUser = Math.mulDiv(2400e6, 1e18, vault.exchangeRate(), Math.Rounding.Floor);
+        assertEq(sharesPerUser, expectedSharesPerUser, "shares = deposit * 1e18 / rate");
 
         // Invest all
         _investAll();

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import {SanctionsOracle} from "../../src/compliance/SanctionsOracle.sol";
+import {SanctionsOracleFactory} from "../../src/compliance/SanctionsOracleFactory.sol";
 import {ISanctionsOracle} from "../../src/interfaces/compliance/ISanctionsOracle.sol";
 import {IMantleVaultGateway} from "../../src/interfaces/vault/IMantleVaultGateway.sol";
 import {IMantleYieldVault} from "../../src/interfaces/vault/IMantleYieldVault.sol";
@@ -11,6 +13,8 @@ import {VaultFactory} from "../../src/vault/VaultFactory.sol";
 import {Accountant} from "../../src/accountant/Accountant.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
+import {IAccessControlDefaultAdminRules} from "@openzeppelin/contracts/access/extensions/IAccessControlDefaultAdminRules.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {Test, console2} from "forge-std/Test.sol";
 import {VmSafe} from "forge-std/Vm.sol";
@@ -39,81 +43,6 @@ contract MockERC20_Role is ERC20 {
     }
 }
 
-contract MockSanctionsOracle_Role is ISanctionsOracle {
-    mapping(address => bool) public sanctioned;
-    mapping(address => bool) public whitelisted;
-
-    function initialize(address, address) external override {}
-
-    function isSanctioned(address a) external view override returns (bool) {
-        return sanctioned[a];
-    }
-
-    function isWhitelisted(address a) external view override returns (bool) {
-        return whitelisted[a];
-    }
-
-    function setSanctioned(address a, bool s) external {
-        sanctioned[a] = s;
-    }
-
-    function setWhitelisted(address a, bool s) external {
-        whitelisted[a] = s;
-    }
-
-    function totalSanctionedCount() external pure override returns (uint256) {
-        return 0;
-    }
-
-    function totalWhitelistedCount() external pure override returns (uint256) {
-        return 0;
-    }
-
-    function lastUpdateTimestamp() external pure override returns (uint256) {
-        return 0;
-    }
-
-    function batchNonce() external pure override returns (uint256) {
-        return 0;
-    }
-
-    function MAX_BATCH_SIZE() external pure override returns (uint256) {
-        return 100;
-    }
-
-    function updateSanctionStatus(address, bool) external override {}
-    function updateSanctionStatusBatch(address[] calldata, bool) external override {}
-    function updateWhitelistStatus(address, bool) external override {}
-    function updateWhitelistStatusBatch(address[] calldata, bool) external override {}
-}
-
-contract MockAccountant_Role {
-    bool public pauseStatus;
-    uint256 public exchangeRate = 1e18;
-    uint32 public managementFeeRate = 0;
-
-    error EnforcedPause();
-
-    function getRate() external view returns (uint256) {
-        return exchangeRate;
-    }
-
-    function getRateSafe() external view returns (uint256) {
-        if (pauseStatus) revert EnforcedPause();
-        return exchangeRate;
-    }
-
-    function setPauseStatus(bool p) external {
-        pauseStatus = p;
-    }
-
-    function setExchangeRate(uint256 r) external {
-        exchangeRate = r;
-    }
-
-    function mintFeeShares(uint256) external {}
-}
-
 // ---------------------------------------------------------------------------
 // QA Test: Role & Permission Scenarios (from role.xlsx)
 // ---------------------------------------------------------------------------
@@ -121,8 +50,8 @@ contract MockAccountant_Role {
 contract RoleQATest is Test {
     MockUSDC_Role internal usdc;
     MockERC20_Role internal mockToken;
-    MockSanctionsOracle_Role internal oracle;
-    MockAccountant_Role internal mockAccountant;
+    SanctionsOracle internal oracle;
+    Accountant internal accountant;
 
     MantleYieldVault internal vault;
     MantleVaultGateway internal gateway;
@@ -130,6 +59,7 @@ contract RoleQATest is Test {
     GatewayFactory internal gatewayFactory;
 
     address internal admin = makeAddr("admin");
+    address internal complianceBot = makeAddr("complianceBot");
     address internal pauser = makeAddr("pauser");
     address internal controllerAddr = makeAddr("controller");
     address internal treasuryAddr = makeAddr("treasury");
@@ -144,8 +74,11 @@ contract RoleQATest is Test {
     function setUp() public {
         usdc = new MockUSDC_Role();
         mockToken = new MockERC20_Role();
-        oracle = new MockSanctionsOracle_Role();
-        mockAccountant = new MockAccountant_Role();
+
+        SanctionsOracle oracleImpl = new SanctionsOracle();
+        SanctionsOracleFactory oracleFactory = new SanctionsOracleFactory(address(oracleImpl), admin);
+        vm.prank(admin);
+        oracle = SanctionsOracle(oracleFactory.deployAndInitOracle(admin, complianceBot));
 
         MantleYieldVault impl = new MantleYieldVault();
         MantleVaultGateway gwImpl = new MantleVaultGateway();
@@ -157,6 +90,8 @@ contract RoleQATest is Test {
         vault = MantleYieldVault(vaultAddr);
         gateway = MantleVaultGateway(gwAddr);
 
+        accountant = _deployRealAccountantWithRate(1e18);
+
         vm.prank(admin);
         vault.initialize(
             IMantleYieldVault.InitParams({
@@ -166,12 +101,15 @@ contract RoleQATest is Test {
                 admin: admin,
                 gateway: gwAddr,
                 controller: controllerAddr,
-                accountant: address(mockAccountant),
+                accountant: address(accountant),
                 treasury: treasuryAddr,
                 maxRedemptionFeeBps: MAX_FEE_BPS,
                 redemptionFeeBps: FEE_BPS,
                 minRedeemAmount: 1e6,
-                minDepositAmount: 1e6
+                minDepositAmount: 1e6,
+                maxSettlementDeviationBps: 0,
+                depositDailyRemaining: type(uint256).max,
+                redeemDailyRemaining: type(uint256).max
             })
         );
 
@@ -219,6 +157,23 @@ contract RoleQATest is Test {
         return Accountant(address(new ERC1967Proxy(address(acctImpl), data)));
     }
 
+    function _deployRealAccountantWithRate(uint64 initialRate) internal returns (Accountant) {
+        Accountant acctImpl = new Accountant();
+        bytes memory data =
+            abi.encodeCall(Accountant.initialize, (address(vault), initialRate, uint32(0), admin));
+        return Accountant(address(new ERC1967Proxy(address(acctImpl), data)));
+    }
+
+    function _setWhitelisted(address user, bool status) internal {
+        vm.prank(complianceBot);
+        oracle.updateWhitelistStatus(user, status);
+    }
+
+    function _setSanctioned(address user, bool status) internal {
+        vm.prank(complianceBot);
+        oracle.updateSanctionStatus(user, status);
+    }
+
     // -----------------------------------------------------------------------
     // Logging helpers
     // -----------------------------------------------------------------------
@@ -257,8 +212,11 @@ contract RoleQATest is Test {
 
         _step("[Step 1] non-admin (nobody) calls setRedemptionFee(200)");
         _step(string.concat("  caller = ", vm.toString(nobody)));
+        bytes32 vAdminRole = vault.DEFAULT_ADMIN_ROLE();
         vm.prank(nobody);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(
+            IAccessControl.AccessControlUnauthorizedAccount.selector, nobody, vAdminRole
+        ));
         vault.setRedemptionFee(200);
         _step("  reverted as expected (non-admin denied)");
 
@@ -362,14 +320,14 @@ contract RoleQATest is Test {
         _step("[Step 1] non-accountant (nobody) calls mintFeeShares(100e18)");
         _step(string.concat("  caller = ", vm.toString(nobody)));
         vm.prank(nobody);
-        vm.expectRevert();
+        vm.expectRevert(IMantleYieldVault.Vault__OnlyAccountant.selector);
         vault.mintFeeShares(100e18);
         _step("  reverted as expected");
 
         _step("[Step 2] accountant calls mintFeeShares(100e18)");
         uint256 treasuryBefore = vault.balanceOf(treasuryAddr);
         _step(string.concat("  treasury shares before = ", vm.toString(treasuryBefore)));
-        vm.prank(address(mockAccountant));
+        vm.prank(address(accountant));
         vault.mintFeeShares(100e18);
         uint256 treasuryAfter = vault.balanceOf(treasuryAddr);
         _step(string.concat("  treasury shares after = ", vm.toString(treasuryAfter)));
@@ -388,8 +346,11 @@ contract RoleQATest is Test {
 
         // ── Vault ──
         _step("[Step 1] nobody calls vault.pause() -> revert");
+        bytes32 vPauserRole = vault.PAUSER_ROLE();
         vm.prank(nobody);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(
+            IAccessControl.AccessControlUnauthorizedAccount.selector, nobody, vPauserRole
+        ));
         vault.pause();
         _step("  reverted (non-pauser denied)");
 
@@ -401,7 +362,9 @@ contract RoleQATest is Test {
 
         _step("[Step 3] nobody calls vault.unpause() -> revert");
         vm.prank(nobody);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(
+            IAccessControl.AccessControlUnauthorizedAccount.selector, nobody, bytes32(0)
+        ));
         vault.unpause();
         _step("  reverted (non-admin denied)");
 
@@ -415,10 +378,14 @@ contract RoleQATest is Test {
         _step("[Step 5] deploy real Accountant for pause/unpause test");
         Accountant acct = _deployRealAccountant();
         _step(string.concat("  accountant addr = ", vm.toString(address(acct))));
+        bytes32 acctPauserRole = acct.PAUSER_ROLE();
+        bytes32 acctAdminRole = acct.DEFAULT_ADMIN_ROLE();
 
         _step("[Step 6] nobody calls acct.pause() -> revert");
         vm.prank(nobody);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(
+            IAccessControl.AccessControlUnauthorizedAccount.selector, nobody, acctPauserRole
+        ));
         acct.pause();
         _step("  reverted (non-pauser denied)");
 
@@ -430,7 +397,9 @@ contract RoleQATest is Test {
 
         _step("[Step 8] nobody calls acct.unpause() -> revert");
         vm.prank(nobody);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(
+            IAccessControl.AccessControlUnauthorizedAccount.selector, nobody, acctAdminRole
+        ));
         acct.unpause();
         _step("  reverted (non-admin denied)");
 
@@ -543,7 +512,10 @@ contract RoleQATest is Test {
         _step("  beginDefaultAdminTransfer called");
 
         _step("[Step 2] newAdmin tries to accept immediately -> revert");
-        vm.expectRevert();
+        (, uint48 gwSchedule) = gateway.pendingDefaultAdmin();
+        vm.expectRevert(abi.encodeWithSelector(
+            IAccessControlDefaultAdminRules.AccessControlEnforcedDefaultAdminDelay.selector, gwSchedule
+        ));
         vm.prank(newAdmin);
         gateway.acceptDefaultAdminTransfer();
         _step("  reverted (delay not elapsed)");
@@ -583,7 +555,10 @@ contract RoleQATest is Test {
         _step("  beginDefaultAdminTransfer called");
 
         _step("[Step 2] newAdmin tries to accept immediately -> revert");
-        vm.expectRevert();
+        (, uint48 vaultSchedule) = vault.pendingDefaultAdmin();
+        vm.expectRevert(abi.encodeWithSelector(
+            IAccessControlDefaultAdminRules.AccessControlEnforcedDefaultAdminDelay.selector, vaultSchedule
+        ));
         vm.prank(newAdmin);
         vault.acceptDefaultAdminTransfer();
         _step("  reverted (delay not elapsed)");
@@ -762,9 +737,10 @@ contract RoleQATest is Test {
         assertTrue(shares > 0, "deposit via new gateway should work");
 
         // ── setAccountant ──
-        _step("[Step 4] deploy new accountant with rate=2e18");
-        MockAccountant_Role newAcct = new MockAccountant_Role();
-        newAcct.setExchangeRate(2e18);
+        _step("[Step 4] deploy real accountant and update rate to 2e18 through real path");
+        Accountant newAcct = _deployRealAccountant();
+        vm.prank(admin);
+        newAcct.emergencyRateUpdate(2e18);
 
         _step("[Step 5] admin calls vault.setAccountant(newAccountant)");
         vm.recordLogs();
@@ -790,8 +766,11 @@ contract RoleQATest is Test {
         _logCase("Case-16", unicode"只有 admin 可调用 setWhitelistEnabled");
 
         _step("[Step 1] non-admin calls setWhitelistEnabled(true) -> revert");
+        bytes32 gwDefaultAdmin = gateway.DEFAULT_ADMIN_ROLE();
         vm.prank(nobody);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(
+            IAccessControl.AccessControlUnauthorizedAccount.selector, nobody, gwDefaultAdmin
+        ));
         gateway.setWhitelistEnabled(true);
         _step("  reverted (non-admin denied)");
 
@@ -825,9 +804,11 @@ contract RoleQATest is Test {
         _logCase("Case-17", unicode"whitelistEnabled=false 时，不校验 whitelist");
 
         _step(string.concat("[Step 1] whitelistEnabled = ", gateway.whitelistEnabled() ? "true" : "false"));
-        _step(string.concat("  userA whitelisted = ", oracle.whitelisted(userA) ? "true" : "false"));
+        _step(
+            string.concat("  userA whitelisted = ", oracle.isWhitelisted(userA) ? "true" : "false")
+        );
         assertFalse(gateway.whitelistEnabled());
-        assertFalse(oracle.whitelisted(userA));
+        assertFalse(oracle.isWhitelisted(userA));
 
         _step("[Step 2] userA deposits 1000e6");
         usdc.mint(userA, 1000e6);
@@ -862,8 +843,10 @@ contract RoleQATest is Test {
         vm.prank(admin);
         gateway.setWhitelistEnabled(true);
         _step(string.concat("  whitelistEnabled = ", gateway.whitelistEnabled() ? "true" : "false"));
-        _step(string.concat("  userA whitelisted = ", oracle.whitelisted(userA) ? "true" : "false"));
-        assertFalse(oracle.whitelisted(userA));
+        _step(
+            string.concat("  userA whitelisted = ", oracle.isWhitelisted(userA) ? "true" : "false")
+        );
+        assertFalse(oracle.isWhitelisted(userA));
 
         _step("[Step 2] userA deposit -> revert");
         usdc.mint(userA, 1000e6);
@@ -898,9 +881,11 @@ contract RoleQATest is Test {
         _step("[Step 1] admin enables whitelist and whitelists userA");
         vm.prank(admin);
         gateway.setWhitelistEnabled(true);
-        oracle.setWhitelisted(userA, true);
+        _setWhitelisted(userA, true);
         _step(string.concat("  whitelistEnabled = ", gateway.whitelistEnabled() ? "true" : "false"));
-        _step(string.concat("  userA whitelisted = ", oracle.whitelisted(userA) ? "true" : "false"));
+        _step(
+            string.concat("  userA whitelisted = ", oracle.isWhitelisted(userA) ? "true" : "false")
+        );
 
         _step("[Step 2] userA deposits 1000e6");
         usdc.mint(userA, 1000e6);
@@ -931,9 +916,13 @@ contract RoleQATest is Test {
     function test_Case20_AccountantPauseBlocksGateway() public {
         _logCase("Case-20", unicode"Accountant pause 后 Gateway deposit/redeem/requestRedeem 都被阻断");
 
-        _step("[Step 1] pause accountant");
-        mockAccountant.setPauseStatus(true);
-        _step(string.concat("  accountant pauseStatus = ", mockAccountant.pauseStatus() ? "true" : "false"));
+        _step("[Step 1] swap vault to a real accountant and pause it through the real role-gated path");
+        Accountant acct = _deployRealAccountant();
+        vm.prank(admin);
+        vault.setAccountant(address(acct));
+        vm.prank(admin);
+        acct.pause();
+        _step(string.concat("  accountant paused = ", acct.paused() ? "true" : "false"));
 
         _step("[Step 2] userA deposit -> revert");
         usdc.mint(userA, 1000e6);
@@ -970,8 +959,8 @@ contract RoleQATest is Test {
         assertTrue(shares > 0, "userA should have shares");
 
         _step("[Step 2] mark userA as sanctioned");
-        oracle.setSanctioned(userA, true);
-        _step(string.concat("  userA sanctioned = ", oracle.sanctioned(userA) ? "true" : "false"));
+        _setSanctioned(userA, true);
+        _step(string.concat("  userA sanctioned = ", oracle.isSanctioned(userA) ? "true" : "false"));
 
         uint256 safeBefore = vault.balanceOf(sanctionSafe);
         _step(string.concat("[Step 3] sanctionSafe shares before = ", vm.toString(safeBefore)));
@@ -1004,8 +993,8 @@ contract RoleQATest is Test {
         _step(string.concat("[Step 1] userA shares = ", vm.toString(sharesBefore)));
 
         _step("[Step 2] mark userA as sanctioned");
-        oracle.setSanctioned(userA, true);
-        _step(string.concat("  userA sanctioned = ", oracle.sanctioned(userA) ? "true" : "false"));
+        _setSanctioned(userA, true);
+        _step(string.concat("  userA sanctioned = ", oracle.isSanctioned(userA) ? "true" : "false"));
 
         _step("[Step 3] userA deposit -> revert Vault__Sanctioned");
         usdc.mint(userA, 1000e6);
@@ -1029,32 +1018,32 @@ contract RoleQATest is Test {
     }
 
     // ================================================================
-    // Case 23 – 只有 Gateway 可调用 Vault 的 depositFor/redeemFor/requestRedeemFor/routeSanctionedShares
+    // Case 23 – 只有 Gateway 可调用 Vault 的 deposit/redeem/requestRedeem/routeSanctionedShares
     // ================================================================
 
     function test_Case23_OnlyGatewayCanCallVaultGatewayFunctions() public {
-        _logCase("Case-23", unicode"只有 Gateway 可调用 Vault 的 depositFor/redeemFor/requestRedeemFor/routeSanctionedShares");
+        _logCase("Case-23", unicode"只有 Gateway 可调用 Vault 的 deposit/redeem/requestRedeem/routeSanctionedShares");
 
         vm.startPrank(nobody);
 
-        _step(string.concat("[Step 1] nobody calls vault.depositFor() -> revert"));
+        _step(string.concat("[Step 1] nobody calls vault.deposit() -> revert"));
         vm.expectRevert(IMantleYieldVault.Vault__OnlyGateway.selector);
-        vault.depositFor(nobody, 1e6, nobody);
+        vault.deposit(1e6, nobody);
         _step("  reverted with Vault__OnlyGateway");
 
-        _step("[Step 2] nobody calls vault.redeemFor() -> revert");
+        _step("[Step 2] nobody calls vault.redeem() -> revert");
         vm.expectRevert(IMantleYieldVault.Vault__OnlyGateway.selector);
-        vault.redeemFor(nobody, 1e18, nobody, nobody);
+        vault.redeem(1e18, nobody, nobody);
         _step("  reverted with Vault__OnlyGateway");
 
-        _step("[Step 3] nobody calls vault.requestRedeemFor() -> revert");
+        _step("[Step 3] nobody calls vault.requestRedeem() -> revert");
         vm.expectRevert(IMantleYieldVault.Vault__OnlyGateway.selector);
-        vault.requestRedeemFor(nobody, nobody, 1e18);
+        vault.requestRedeem(nobody, 1e18);
         _step("  reverted with Vault__OnlyGateway");
 
         _step("[Step 4] nobody calls vault.routeSanctionedShares() -> revert");
         vm.expectRevert(IMantleYieldVault.Vault__OnlyGateway.selector);
-        vault.routeSanctionedShares(nobody, nobody, 1e18);
+        vault.routeSanctionedShares(nobody, 1e18);
         _step("  reverted with Vault__OnlyGateway");
 
         vm.stopPrank();
@@ -1105,7 +1094,9 @@ contract RoleQATest is Test {
         _step(string.concat("  block.timestamp = ", vm.toString(block.timestamp)));
 
         _step("[Step 3] nobody tries to accept -> revert");
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(
+            IAccessControlDefaultAdminRules.AccessControlInvalidDefaultAdmin.selector, nobody
+        ));
         vm.prank(nobody);
         gateway.acceptDefaultAdminTransfer();
         _step("  reverted (not the pending admin)");
@@ -1146,8 +1137,11 @@ contract RoleQATest is Test {
         _step(string.concat("  gateway.defaultAdmin() = ", vm.toString(gateway.defaultAdmin())));
 
         _step("[Step 4] old admin loses power -> revert");
+        bytes32 gwAdminRole = gateway.DEFAULT_ADMIN_ROLE();
         vm.prank(admin);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(
+            IAccessControl.AccessControlUnauthorizedAccount.selector, admin, gwAdminRole
+        ));
         gateway.setSyncRedeemDisabled(false);
         _step("  reverted (old admin no longer authorized)");
 
@@ -1191,7 +1185,7 @@ contract RoleQATest is Test {
         _step("[Step 3] old gateway deposit -> revert");
         usdc.mint(userA, 1000e6);
         vm.prank(userA);
-        vm.expectRevert();
+        vm.expectRevert(IMantleYieldVault.Vault__OnlyGateway.selector);
         gateway.deposit(1000e6);
         _step("  reverted (old gateway no longer authorized)");
 
@@ -1213,21 +1207,21 @@ contract RoleQATest is Test {
         _logCase("Case-28", unicode"setAccountant(newAccountant) 后旧 Accountant 失去权限");
 
         _step("[Step 1] old accountant mints fee shares");
-        vm.prank(address(mockAccountant));
+        vm.prank(address(accountant));
         vault.mintFeeShares(10e18);
         uint256 treasuryBal = vault.balanceOf(treasuryAddr);
         _step(string.concat("  treasury shares = ", vm.toString(treasuryBal)));
 
         _step("[Step 2] swap to new accountant");
-        MockAccountant_Role newAcct = new MockAccountant_Role();
+        Accountant newAcct = _deployRealAccountantWithRate(1e18);
         _step(string.concat("  new accountant = ", vm.toString(address(newAcct))));
         vm.prank(admin);
         vault.setAccountant(address(newAcct));
         _step("  accountant swapped");
 
         _step("[Step 3] old accountant mintFeeShares -> revert");
-        vm.prank(address(mockAccountant));
-        vm.expectRevert();
+        vm.prank(address(accountant));
+        vm.expectRevert(IMantleYieldVault.Vault__OnlyAccountant.selector);
         vault.mintFeeShares(10e18);
         _step("  reverted (old accountant no longer authorized)");
 
@@ -1300,8 +1294,11 @@ contract RoleQATest is Test {
         _step(string.concat("  vault mockToken balance = ", vm.toString(mockToken.balanceOf(address(vault)))));
 
         _step("[Step 2] non-admin calls rescueTokens -> revert");
+        bytes32 vaultAdminRole = vault.DEFAULT_ADMIN_ROLE();
         vm.prank(nobody);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(
+            IAccessControl.AccessControlUnauthorizedAccount.selector, nobody, vaultAdminRole
+        ));
         vault.rescueTokens(address(mockToken), nobody, 500e18);
         _step("  reverted (non-admin denied)");
 

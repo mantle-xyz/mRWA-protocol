@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import {Accountant} from "../../src/accountant/Accountant.sol";
 import {IStrategyAdapter} from "../../src/interfaces/adapters/IStrategyAdapter.sol";
 import {IStrategyControllerExecutor} from "../../src/interfaces/strategy/IStrategyControllerExecutor.sol";
 import {ISanctionsOracle} from "../../src/interfaces/compliance/ISanctionsOracle.sol";
@@ -41,12 +42,6 @@ contract MockSanctionsOracle_RT is ISanctionsOracle {
     function updateSanctionStatusBatch(address[] calldata, bool) external override {}
     function updateWhitelistStatus(address, bool) external override {}
     function updateWhitelistStatusBatch(address[] calldata, bool) external override {}
-}
-
-contract MockAccountant_RT {
-    uint256 public exchangeRate = 1e18;
-    function getRate() external view returns (uint256) { return exchangeRate; }
-    function getRateSafe() external view returns (uint256) { return exchangeRate; }
 }
 
 /// @dev Async adapter that tracks retryRedeemAsync calls for test verification.
@@ -220,7 +215,7 @@ contract RetryRedeemInFlightQATest is Test {
     MockUSDC_RT internal posToken;
     MockUSDC_RT internal posTokenSync;
     MockSanctionsOracle_RT internal oracle;
-    MockAccountant_RT internal accountant;
+    Accountant internal accountant;
 
     MantleYieldVault internal vault;
     MantleVaultGateway internal gateway;
@@ -240,7 +235,6 @@ contract RetryRedeemInFlightQATest is Test {
         posToken = new MockUSDC_RT();
         posTokenSync = new MockUSDC_RT();
         oracle = new MockSanctionsOracle_RT();
-        accountant = new MockAccountant_RT();
 
         // Deploy vault + gateway via factory
         MantleYieldVault vImpl = new MantleYieldVault();
@@ -268,13 +262,25 @@ contract RetryRedeemInFlightQATest is Test {
             admin: admin,
             gateway: gatewayAddr,
             controller: address(executor),
-            accountant: address(accountant),
+            accountant: address(1), // placeholder, replaced below
             treasury: treasury,
             maxRedemptionFeeBps: 500,
             redemptionFeeBps: 0,
             minRedeemAmount: 0,
-            minDepositAmount: 0
+            minDepositAmount: 0,
+            maxSettlementDeviationBps: 0,
+            depositDailyRemaining: type(uint256).max,
+            redeemDailyRemaining: type(uint256).max
         }));
+
+        // Deploy real Accountant
+        Accountant acctImpl = new Accountant();
+        accountant = Accountant(address(new ERC1967Proxy(
+            address(acctImpl),
+            abi.encodeCall(Accountant.initialize, (address(vault), uint64(1e18), 0, admin))
+        )));
+        vm.prank(admin);
+        vault.setAccountant(address(accountant));
 
         // Deploy real StrategyController (manager = DEFAULT_ADMIN_ROLE)
         StrategyController cImpl = new StrategyController();
@@ -528,7 +534,7 @@ contract RetryRedeemInFlightQATest is Test {
         (uint256 redeemId, ) = _createRedeemInFlight(1000e6);
 
         _step("[Step 3] Admin attempts retry targeting sync adapter");
-        vm.expectRevert(abi.encodeWithSelector(StrategyController.RetryOnlyAsyncStrategy.selector, address(syncAdapter)));
+        vm.expectRevert(abi.encodeWithSelector(StrategyController.Controller__RetryOnlyAsyncStrategy.selector, address(syncAdapter)));
         vm.prank(manager);
         controller.retryRedeemInFlight(address(syncAdapter), redeemId, 100e6);
 
@@ -555,7 +561,7 @@ contract RetryRedeemInFlightQATest is Test {
         assertEq(uint8(status), uint8(IMantleYieldVault.InFlightStatus.CONFIRMED), "should be CONFIRMED after settle");
 
         _step("[Step 2] Admin attempts retry on CONFIRMED in-flight");
-        vm.expectRevert(abi.encodeWithSelector(StrategyController.InvalidRedeemInFlight.selector, redeemId));
+        vm.expectRevert(abi.encodeWithSelector(StrategyController.Controller__InvalidRedeemInFlight.selector, redeemId));
         vm.prank(manager);
         controller.retryRedeemInFlight(address(asyncAdapter), redeemId, 100e6);
 
@@ -584,7 +590,7 @@ contract RetryRedeemInFlightQATest is Test {
         vm.stopPrank();
 
         _step("[Step 3] Admin attempts retry with wrong adapter");
-        vm.expectRevert(abi.encodeWithSelector(StrategyController.InvalidRedeemInFlight.selector, redeemId));
+        vm.expectRevert(abi.encodeWithSelector(StrategyController.Controller__InvalidRedeemInFlight.selector, redeemId));
         vm.prank(manager);
         controller.retryRedeemInFlight(address(asyncAdapter2), redeemId, 100e6);
 
@@ -607,7 +613,7 @@ contract RetryRedeemInFlightQATest is Test {
 
         _step("[Step 2] Admin attempts retry with amount > original");
         uint256 excessAmount = tokenAmount + 1;
-        vm.expectRevert(StrategyController.InvalidRetryAmount.selector);
+        vm.expectRevert(StrategyController.Controller__InvalidRetryAmount.selector);
         vm.prank(manager);
         controller.retryRedeemInFlight(address(asyncAdapter), redeemId, excessAmount);
 
@@ -631,7 +637,7 @@ contract RetryRedeemInFlightQATest is Test {
         assertEq(uint8(status), uint8(IMantleYieldVault.InFlightStatus.PENDING));
 
         _step("[Step 2] Admin attempts retry on invest in-flight");
-        vm.expectRevert(abi.encodeWithSelector(StrategyController.InvalidRedeemInFlight.selector, investId));
+        vm.expectRevert(abi.encodeWithSelector(StrategyController.Controller__InvalidRedeemInFlight.selector, investId));
         vm.prank(manager);
         controller.retryRedeemInFlight(address(asyncAdapter), investId, 100e6);
 
@@ -650,7 +656,7 @@ contract RetryRedeemInFlightQATest is Test {
 
         (uint256 redeemId, ) = _createRedeemInFlight(1000e6);
 
-        vm.expectRevert(StrategyController.InvalidRetryAmount.selector);
+        vm.expectRevert(StrategyController.Controller__InvalidRetryAmount.selector);
         vm.prank(manager);
         controller.retryRedeemInFlight(address(asyncAdapter), redeemId, 0);
 
@@ -664,7 +670,7 @@ contract RetryRedeemInFlightQATest is Test {
     function test_RetryRedeemInFlight_ThenSettle_Success() public {
         _logCase(
             "test_RetryRedeemInFlight_ThenSettle_Success",
-            unicode"retry 后正常 settle：retry -> DiGiFT 处理 -> settleAdapter sweep -> in-flight CONFIRMED"
+            unicode"retry 后正常 settle：retry -> DiGiFT 处理 -> settleAdapter sweep -> in-flight CONFIRMED -> finalize -> 用户收到 USDC"
         );
 
         _step("[Step 1] Create PENDING redeem in-flight");
@@ -730,7 +736,7 @@ contract RetryRedeemInFlightQATest is Test {
 
         _step("[Step 2] Admin attempts retry with unregistered adapter address");
         address fakeAdapter = makeAddr("unregistered");
-        vm.expectRevert(abi.encodeWithSelector(StrategyController.InvalidStrategy.selector, fakeAdapter));
+        vm.expectRevert(abi.encodeWithSelector(StrategyController.Controller__InvalidStrategy.selector, fakeAdapter));
         vm.prank(manager);
         controller.retryRedeemInFlight(fakeAdapter, redeemId, 100e6);
 
@@ -753,7 +759,7 @@ contract RetryRedeemInFlightQATest is Test {
         _step("[Step 2] Admin attempts retry with non-existent ID");
         // vault.inFlightRecords(999) returns defaults: adapter=address(0), status=NONE
         // recordAdapter(0x0) != asyncAdapter -> revert InvalidRedeemInFlight
-        vm.expectRevert(abi.encodeWithSelector(StrategyController.InvalidRedeemInFlight.selector, fakeId));
+        vm.expectRevert(abi.encodeWithSelector(StrategyController.Controller__InvalidRedeemInFlight.selector, fakeId));
         vm.prank(manager);
         controller.retryRedeemInFlight(address(asyncAdapter), fakeId, 100e6);
 

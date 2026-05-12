@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import {SanctionsOracle} from "../../src/compliance/SanctionsOracle.sol";
 import {ISanctionsOracle} from "../../src/interfaces/compliance/ISanctionsOracle.sol";
 import {IStrategyAdapter} from "../../src/interfaces/adapters/IStrategyAdapter.sol";
 import {IMantleVaultGateway} from "../../src/interfaces/vault/IMantleVaultGateway.sol";
@@ -8,15 +9,16 @@ import {IMantleYieldVault} from "../../src/interfaces/vault/IMantleYieldVault.so
 import {MantleVaultGateway} from "../../src/vault/MantleVaultGateway.sol";
 import {MantleYieldVault} from "../../src/vault/MantleYieldVault.sol";
 import {StrategyController} from "../../src/protocol/StrategyController.sol";
+import {OperatorExecutor} from "../../src/protocol/OperatorExecutor.sol";
+import {Accountant} from "../../src/accountant/Accountant.sol";
+import {AccountantExecutor} from "../../src/accountant/AccountantExecutor.sol";
 import {VaultFactory} from "../../src/vault/VaultFactory.sol";
 import {GatewayFactory} from "../../src/vault/GatewayFactory.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import {IStrategyControllerExecutor} from "../../src/interfaces/strategy/IStrategyControllerExecutor.sol";
 import {Test, console2} from "forge-std/Test.sol";
-
-/// @dev Dummy contract to satisfy StrategyController operatorExecutor code-length check.
-contract DummyExecutor_VQ {}
 
 // ---------------------------------------------------------------------------
 // Mock contracts
@@ -32,85 +34,6 @@ contract MockUSDC_VQ is ERC20 {
     function mint(address to, uint256 amount) external {
         _mint(to, amount);
     }
-}
-
-contract MockSanctionsOracle_VQ is ISanctionsOracle {
-    mapping(address => bool) public sanctioned;
-    mapping(address => bool) public whitelisted;
-
-    function initialize(address, address) external override {}
-
-    function isSanctioned(address account) external view override returns (bool) {
-        return sanctioned[account];
-    }
-
-    function isWhitelisted(address account) external view override returns (bool) {
-        return whitelisted[account];
-    }
-
-    function setSanctioned(address account, bool status) external {
-        sanctioned[account] = status;
-    }
-
-    function setWhitelisted(address account, bool status) external {
-        whitelisted[account] = status;
-    }
-
-    function totalSanctionedCount() external pure override returns (uint256) {
-        return 0;
-    }
-
-    function totalWhitelistedCount() external pure override returns (uint256) {
-        return 0;
-    }
-
-    function lastUpdateTimestamp() external pure override returns (uint256) {
-        return 0;
-    }
-
-    function batchNonce() external pure override returns (uint256) {
-        return 0;
-    }
-
-    function MAX_BATCH_SIZE() external pure override returns (uint256) {
-        return 100;
-    }
-
-    function updateSanctionStatus(address, bool) external override {}
-    function updateSanctionStatusBatch(address[] calldata, bool) external override {}
-    function updateWhitelistStatus(address, bool) external override {}
-    function updateWhitelistStatusBatch(address[] calldata, bool) external override {}
-}
-
-contract MockAccountant_VQ {
-    bool public pauseStatus;
-    uint256 public exchangeRate = 1e18;
-    uint32 public managementFeeRate_ = 100;
-
-    error EnforcedPause();
-
-    function getRate() external view returns (uint256) {
-        return exchangeRate;
-    }
-
-    function getRateSafe() external view returns (uint256) {
-        if (pauseStatus) revert EnforcedPause();
-        return exchangeRate;
-    }
-
-    function managementFeeRate() external view returns (uint32) {
-        return managementFeeRate_;
-    }
-
-    function setPauseStatus(bool paused_) external {
-        pauseStatus = paused_;
-    }
-
-    function setExchangeRate(uint256 newRate) external {
-        exchangeRate = newRate;
-    }
-
-    function mintFeeShares(uint256) external pure {}
 }
 
 contract MockPosToken_VQ is ERC20 {
@@ -133,9 +56,11 @@ contract MockStrategyAdapter_VQ is IStrategyAdapter {
     MockPosToken_VQ public mockPosToken;
     uint256 public mockPrice = 1e18;
     address public immutable ASSET;
+    address public immutable VAULT;
 
-    constructor(address asset_) {
+    constructor(address asset_, address vault_) {
         ASSET = asset_;
+        VAULT = vault_;
         mockPosToken = new MockPosToken_VQ();
     }
 
@@ -178,7 +103,7 @@ contract MockStrategyAdapter_VQ is IStrategyAdapter {
     {
         ok = assetAmount > 0;
         executableAssetAmount = assetAmount;
-        expectedPosAmount = 0;
+        expectedPosAmount = assetAmount; // 1:1 at price 1e18
     }
 
     function previewRedeem(uint256 assetAmount)
@@ -189,29 +114,37 @@ contract MockStrategyAdapter_VQ is IStrategyAdapter {
     {
         ok = assetAmount > 0;
         executableAssetAmount = assetAmount;
-        expectedPosAmount = 0;
+        expectedPosAmount = assetAmount;
     }
 
-    function vault() external pure override returns (address) {
-        return address(0);
+    function vault() external view override returns (address) {
+        return VAULT;
     }
 
-    function totalValue() external pure override returns (uint256) {
-        return 0;
+    function totalValue() external view override returns (uint256) {
+        return IERC20(ASSET).balanceOf(address(this));
     }
 
-    function deposit(uint256, address) external pure override returns (uint256) {
-        return 0;
+    function deposit(uint256 amount, address) external override returns (uint256) {
+        IERC20(ASSET).transferFrom(VAULT, address(this), amount);
+        mockPosToken.mint(address(this), amount);
+        return amount;
     }
 
-    function withdrawSync(uint256, address) external pure override returns (uint256) {
-        return 0;
+    function withdrawSync(uint256 posAmount, address) external override returns (uint256) {
+        uint256 bal = IERC20(ASSET).balanceOf(address(this));
+        uint256 actual = posAmount > bal ? bal : posAmount;
+        if (actual > 0) mockPosToken.burn(address(this), actual);
+        return actual;
     }
 
     function requestRedeemAsync(uint256, address) external pure override {}
 
-    function sweepToVault(address, uint256) external pure override returns (uint256) {
-        return 0;
+    function sweepToVault(address token, uint256 amount) external override returns (uint256) {
+        uint256 bal = IERC20(token).balanceOf(address(this));
+        uint256 actual = amount > bal ? bal : amount;
+        if (actual > 0) IERC20(token).transfer(VAULT, actual);
+        return actual;
     }
 
     function setPaused(bool) external pure override {}
@@ -225,17 +158,20 @@ contract MockStrategyAdapter_VQ is IStrategyAdapter {
  */
 contract ViewQuoteQATest is Test {
     MockUSDC_VQ internal usdc;
-    MockSanctionsOracle_VQ internal oracle;
-    MockAccountant_VQ internal mockAccountant;
+    SanctionsOracle internal oracle;
+    Accountant internal accountant;
+    AccountantExecutor internal accountantExecutor;
     MockStrategyAdapter_VQ internal adapter;
     MantleYieldVault internal vault;
     MantleVaultGateway internal gateway;
     StrategyController internal controller;
+    OperatorExecutor internal executor;
     VaultFactory internal vaultFactory;
     GatewayFactory internal gatewayFactory;
-    DummyExecutor_VQ internal dummyExecutor;
 
     address internal admin = makeAddr("admin");
+    address internal compliance = makeAddr("compliance");
+    address internal bot = makeAddr("bot");
     address internal treasury = makeAddr("treasury");
     address internal alice = makeAddr("alice");
     address internal sanctionedUser = makeAddr("sanctionedUser");
@@ -257,9 +193,9 @@ contract ViewQuoteQATest is Test {
         _step("----------------------------------------");
     }
 
-    function _step(string memory msg) internal {
-        console2.log(msg);
-        _buf = string.concat(_buf, msg, "\n");
+    function _step(string memory msg_) internal {
+        console2.log(msg_);
+        _buf = string.concat(_buf, msg_, "\n");
     }
 
     function _logPass() internal {
@@ -271,20 +207,40 @@ contract ViewQuoteQATest is Test {
         vm.warp(1000);
 
         usdc = new MockUSDC_VQ();
-        oracle = new MockSanctionsOracle_VQ();
-        mockAccountant = new MockAccountant_VQ();
-        dummyExecutor = new DummyExecutor_VQ();
+        SanctionsOracle oracleImpl = new SanctionsOracle();
+        oracle = SanctionsOracle(address(new ERC1967Proxy(
+            address(oracleImpl),
+            abi.encodeCall(SanctionsOracle.initialize, (admin, compliance))
+        )));
 
         // Deploy vault + gateway via factories
         MantleYieldVault vaultImpl = new MantleYieldVault();
         MantleVaultGateway gwImpl = new MantleVaultGateway();
+        OperatorExecutor execImpl = new OperatorExecutor();
+        Accountant accountantImpl = new Accountant();
+        AccountantExecutor accountantExecutorImpl = new AccountantExecutor();
         vaultFactory = new VaultFactory(address(vaultImpl), admin);
         gatewayFactory = new GatewayFactory(address(gwImpl), admin);
 
         address vaultAddr = vaultFactory.deployVault();
         address gwAddr = gatewayFactory.deployGateway();
+        address accountantAddr = address(new ERC1967Proxy(
+            address(accountantImpl),
+            abi.encodeCall(Accountant.initialize, (vaultAddr, uint64(1e18), uint32(100), admin))
+        ));
+        address accountantExecutorAddr = address(new ERC1967Proxy(
+            address(accountantExecutorImpl),
+            abi.encodeCall(AccountantExecutor.initialize, (admin))
+        ));
         vault = MantleYieldVault(vaultAddr);
         gateway = MantleVaultGateway(gwAddr);
+        accountant = Accountant(accountantAddr);
+        accountantExecutor = AccountantExecutor(accountantExecutorAddr);
+
+        vm.startPrank(admin);
+        accountant.grantRole(accountant.ACCOUNTANT_EXECUTOR_ROLE(), address(accountantExecutor));
+        accountantExecutor.grantRole(accountantExecutor.BOT_ROLE(), bot);
+        vm.stopPrank();
 
         // Initialize vault with a temp controller (will be replaced)
         address tempController = makeAddr("tempController");
@@ -297,20 +253,29 @@ contract ViewQuoteQATest is Test {
                 admin: admin,
                 gateway: gwAddr,
                 controller: tempController,
-                accountant: address(mockAccountant),
+                accountant: accountantAddr,
                 treasury: treasury,
                 maxRedemptionFeeBps: 500,
                 redemptionFeeBps: 100,
                 minRedeemAmount: 0,
-                minDepositAmount: 0
+                minDepositAmount: 0,
+                maxSettlementDeviationBps: 0,
+                depositDailyRemaining: type(uint256).max,
+                redeemDailyRemaining: type(uint256).max
             })
         );
 
-        // Deploy controller via ERC1967Proxy with vault address
+        // Deploy real OperatorExecutor via ERC1967Proxy
+        executor = OperatorExecutor(address(new ERC1967Proxy(
+            address(execImpl),
+            abi.encodeCall(OperatorExecutor.initialize, (admin, bot))
+        )));
+
+        // Deploy controller via ERC1967Proxy with real executor
         StrategyController controllerImpl = new StrategyController();
         bytes memory initData = abi.encodeCall(
             StrategyController.initialize,
-            (vaultAddr, admin, address(dummyExecutor), admin, 1000, 200, 1 hours)
+            (vaultAddr, admin, address(executor), admin, 1000, 200, 0)
         );
         controller = StrategyController(address(new ERC1967Proxy(address(controllerImpl), initData)));
 
@@ -329,11 +294,8 @@ contract ViewQuoteQATest is Test {
             })
         );
 
-        // Deploy adapter
-        adapter = new MockStrategyAdapter_VQ(address(usdc));
-
-        // Sanction one user
-        oracle.setSanctioned(sanctionedUser, true);
+        // Deploy adapter (needs vault address for real token transfers)
+        adapter = new MockStrategyAdapter_VQ(address(usdc), address(vault));
 
         // Fund and deposit for alice
         usdc.mint(alice, INITIAL_DEPOSIT * 10);
@@ -343,14 +305,52 @@ contract ViewQuoteQATest is Test {
         vm.stopPrank();
     }
 
+    function _depositForUser(address user, uint256 amount) internal {
+        usdc.mint(user, amount);
+        vm.startPrank(user);
+        usdc.approve(address(vault), type(uint256).max);
+        gateway.deposit(amount);
+        vm.stopPrank();
+    }
+
+    function _updateSanctionStatus(address account, bool status) internal {
+        vm.prank(compliance);
+        oracle.updateSanctionStatus(account, status);
+    }
+
+    function _setRateReal(uint64 newRate) internal {
+        uint256 currentRate = accountant.lastExchangeRate();
+        if (newRate == currentRate) {
+            return;
+        }
+
+        uint256 larger = newRate > currentRate ? uint256(newRate) : currentRate;
+        uint256 smaller = newRate > currentRate ? currentRate : uint256(newRate);
+        uint256 deviationBps = larger > 0 ? ((larger - smaller) * 10_000) / larger : 0;
+        uint32 maxDeviationCeiling = accountant.MAX_DEVIATION_CEILING();
+
+        if (deviationBps <= maxDeviationCeiling) {
+            vm.prank(admin);
+            accountant.setRiskParams(maxDeviationCeiling, 0);
+            vm.warp(block.timestamp + 1);
+            vm.prank(bot);
+            accountantExecutor.executeUpdateRate(address(accountant), newRate, uint64(block.timestamp));
+            return;
+        }
+
+        vm.prank(admin);
+        accountant.emergencyRateUpdate(newRate);
+    }
+
     // =============================================================
     //  P0 - maxDeposit / maxRedeem for sanctioned users
     // =============================================================
 
     function test_MaxDeposit_SanctionedReturnsZero() public {
-        _logCase("test_MaxDeposit_SanctionedReturnsZero", unicode"gateway.maxDeposit 对被制裁用户返回 0");
+        _logCase("test_MaxDeposit_SanctionedReturnsZero", unicode"`gateway.maxDeposit` 对被制裁用户返回 0");
 
-        _step("[Step 1] Verify sanctionedUser is sanctioned");
+        _step("[Step 1] Sanction sanctionedUser through the real oracle flow");
+        _updateSanctionStatus(sanctionedUser, true);
         assertTrue(oracle.isSanctioned(sanctionedUser));
         _step("  PASS: sanctionedUser is sanctioned");
 
@@ -364,13 +364,20 @@ contract ViewQuoteQATest is Test {
     }
 
     function test_MaxRedeem_SanctionedReturnsZero() public {
-        _logCase("test_MaxRedeem_SanctionedReturnsZero", unicode"gateway.maxRedeem 对被制裁用户返回 0");
+        _logCase("test_MaxRedeem_SanctionedReturnsZero", unicode"`gateway.maxRedeem` 对被制裁用户返回 0");
 
-        _step("[Step 1] Verify sanctionedUser is sanctioned");
+        _step("[Step 1] Fund sanctionedUser and deposit so the account really holds shares");
+        _depositForUser(sanctionedUser, INITIAL_DEPOSIT);
+        uint256 sharesBefore = vault.balanceOf(sanctionedUser);
+        assertTrue(sharesBefore > 0, "sanctioned user should hold shares before sanction");
+        _step(string.concat("  sanctionedUser shares before sanction: ", vm.toString(sharesBefore)));
+
+        _step("[Step 2] Sanction sanctionedUser through the real oracle flow");
+        _updateSanctionStatus(sanctionedUser, true);
         assertTrue(oracle.isSanctioned(sanctionedUser));
         _step("  PASS: sanctionedUser is sanctioned");
 
-        _step("[Step 2] Call gateway.maxRedeem(sanctionedUser)");
+        _step("[Step 3] Call gateway.maxRedeem(sanctionedUser)");
         uint256 maxRed = gateway.maxRedeem(sanctionedUser);
         assertEq(maxRed, 0);
         _step(string.concat("  maxRedeem: ", vm.toString(maxRed)));
@@ -386,7 +393,7 @@ contract ViewQuoteQATest is Test {
     function test_AccountantPaused_MaxDepositMaxRedeemZero() public {
         _logCase(
             "test_AccountantPaused_MaxDepositMaxRedeemZero",
-            unicode"Accountant 暂停时 Gateway 的 maxDeposit/maxRedeem 返回 0"
+            unicode"Accountant 暂停时 Gateway 的 `maxDeposit/maxRedeem` 返回 0"
         );
 
         _step("[Step 1] Verify alice holds shares before pausing");
@@ -395,9 +402,10 @@ contract ViewQuoteQATest is Test {
         _step(string.concat("  alice share balance: ", vm.toString(aliceShares)));
         _step("  PASS: alice holds shares");
 
-        _step("[Step 2] Pause the mock accountant");
-        mockAccountant.setPauseStatus(true);
-        _step("  mockAccountant paused");
+        _step("[Step 2] Pause the real accountant");
+        vm.prank(admin);
+        accountant.pause();
+        _step("  accountant paused");
 
         _step("[Step 3] Call gateway.maxDeposit(alice) -- alice is not sanctioned, has shares");
         uint256 maxDep = gateway.maxDeposit(alice);
@@ -421,7 +429,7 @@ contract ViewQuoteQATest is Test {
     function test_SyncRedeemDisabled_MaxRedeemStillNonZero() public {
         _logCase(
             "test_SyncRedeemDisabled_MaxRedeemStillNonZero",
-            unicode"syncRedeemDisabled 当前不影响 gateway.maxRedeem 的展示值"
+            unicode"`syncRedeemDisabled` 当前不影响 `gateway.maxRedeem` 的展示值"
         );
 
         _step("[Step 1] Enable syncRedeemDisabled");
@@ -452,11 +460,11 @@ contract ViewQuoteQATest is Test {
     function test_PreviewRedeem_PreviewDeposit_Consistency() public {
         _logCase(
             "test_PreviewRedeem_PreviewDeposit_Consistency",
-            unicode"Gateway previewRedeem/previewDeposit 与 Vault 一致"
+            unicode"Gateway `previewRedeem/previewDeposit` 与 Vault 一致"
         );
 
         _step("[Step 1] Set rate to 1.1e18 for interesting values");
-        mockAccountant.setExchangeRate(1.1e18);
+        _setRateReal(1.1e18);
 
         _step("[Step 2] Compare gateway.previewRedeem vs vault.previewRedeem");
         uint256 shares = 100e6;
@@ -484,14 +492,14 @@ contract ViewQuoteQATest is Test {
     // =============================================================
 
     function test_ExchangeRate_ConsistentWithAccountant() public {
-        _logCase("test_ExchangeRate_ConsistentWithAccountant", unicode"exchangeRate() 与 Accountant 当前值一致");
+        _logCase("test_ExchangeRate_ConsistentWithAccountant", unicode"`exchangeRate()` 与 Accountant 当前值一致");
 
         _step("[Step 1] Set accountant rate to 1.05e18");
-        mockAccountant.setExchangeRate(1.05e18);
+        _setRateReal(1.05e18);
 
         _step("[Step 2] Verify vault.exchangeRate() matches");
         uint256 vaultRate = vault.exchangeRate();
-        uint256 accountantRate = mockAccountant.exchangeRate();
+        uint256 accountantRate = accountant.lastExchangeRate();
         assertEq(vaultRate, accountantRate);
         _step(string.concat("  vault.exchangeRate(): ", vm.toString(vaultRate)));
         _step(string.concat("  accountant.exchangeRate(): ", vm.toString(accountantRate)));
@@ -505,7 +513,7 @@ contract ViewQuoteQATest is Test {
     // =============================================================
 
     function test_Share_ReturnsVaultAddress() public {
-        _logCase("test_Share_ReturnsVaultAddress", unicode"share() 返回 Vault 自身地址");
+        _logCase("test_Share_ReturnsVaultAddress", unicode"`share()` 返回 Vault 自身地址");
 
         _step("[Step 1] Call vault.share()");
         address shareAddr = vault.share();
@@ -522,7 +530,7 @@ contract ViewQuoteQATest is Test {
     // =============================================================
 
     function test_GetFreeCash_GatewayMatchesVault() public {
-        _logCase("test_GetFreeCash_GatewayMatchesVault", unicode"Gateway getFreeCash() 转调 Vault 结果一致");
+        _logCase("test_GetFreeCash_GatewayMatchesVault", unicode"Gateway 新增 `getFreeCash()` 转调 Vault 结果一致");
 
         _step("[Step 1] Query gateway.getFreeCash() and vault.getFreeCash()");
         uint256 gwFreeCash = gateway.getFreeCash();
@@ -540,7 +548,7 @@ contract ViewQuoteQATest is Test {
     // =============================================================
 
     function test_StrategyOrderLength_Consistent() public {
-        _logCase("test_StrategyOrderLength_Consistent", unicode"strategyOrderLength() 与实际 order 一致");
+        _logCase("test_StrategyOrderLength_Consistent", unicode"`strategyOrderLength()` 与实际 order 一致");
 
         _step("[Step 1] Initial strategyOrderLength should be 0");
         uint256 len0 = controller.strategyOrderLength();
@@ -549,8 +557,8 @@ contract ViewQuoteQATest is Test {
         _step("  PASS: initial length == 0");
 
         _step("[Step 2] Register, activate 2 adapters, then setStrategyOrder([A, B])");
-        MockStrategyAdapter_VQ adapterA = new MockStrategyAdapter_VQ(address(usdc));
-        MockStrategyAdapter_VQ adapterB = new MockStrategyAdapter_VQ(address(usdc));
+        MockStrategyAdapter_VQ adapterA = new MockStrategyAdapter_VQ(address(usdc), address(vault));
+        MockStrategyAdapter_VQ adapterB = new MockStrategyAdapter_VQ(address(usdc), address(vault));
 
         vm.startPrank(admin);
         controller.registerStrategy(address(adapterA), 5000, 1, false);
@@ -569,28 +577,30 @@ contract ViewQuoteQATest is Test {
         _step(string.concat("  strategyOrderLength after setStrategyOrder([A,B]): ", vm.toString(len2)));
         _step("  PASS: length == 2");
 
-        _step("[Step 3] Transition from 2 strategies to 1 via updateStrategiesAndOrder");
-        // Use updateStrategiesAndOrder to atomically:
-        //   - update A weight from 5000 -> 10000
-        //   - set order to [A] only (removes B from order)
-        address[] memory updateAdapters = new address[](1);
+        _step("[Step 3] Move all active weight to A, then shrink order with setStrategyOrder([A])");
+        address[] memory updateAdapters = new address[](2);
         updateAdapters[0] = address(adapterA);
-        uint16[] memory newWeights = new uint16[](1);
+        updateAdapters[1] = address(adapterB);
+        uint16[] memory newWeights = new uint16[](2);
         newWeights[0] = 10000;
-        uint16[] memory newPriorities = new uint16[](1);
+        newWeights[1] = 0;
+        uint16[] memory newPriorities = new uint16[](2);
         newPriorities[0] = 1;
-        bool[] memory newAsync = new bool[](1);
+        newPriorities[1] = 2;
+        bool[] memory newAsync = new bool[](2);
         newAsync[0] = false;
+        newAsync[1] = false;
         address[] memory orderedA = new address[](1);
         orderedA[0] = address(adapterA);
 
         vm.startPrank(admin);
-        controller.updateStrategiesAndOrder(updateAdapters, newWeights, newPriorities, newAsync, orderedA);
+        controller.updateStrategies(updateAdapters, newWeights, newPriorities, newAsync);
+        controller.setStrategyOrder(orderedA);
         vm.stopPrank();
 
         uint256 len1 = controller.strategyOrderLength();
         assertEq(len1, 1);
-        _step(string.concat("  strategyOrderLength after updateStrategiesAndOrder([A]): ", vm.toString(len1)));
+        _step(string.concat("  strategyOrderLength after setStrategyOrder([A]): ", vm.toString(len1)));
         _step("  PASS: length == 1 (2 -> 1 transition verified)");
 
         _logPass();
@@ -603,7 +613,7 @@ contract ViewQuoteQATest is Test {
     function test_PendingRedeemRequest_Tracking() public {
         _logCase(
             "test_PendingRedeemRequest_Tracking",
-            unicode"pendingRedeemRequest(owner) 在请求创建和结算后正确反映"
+            unicode"`pendingRedeemRequest(owner)` 在请求创建和结算后正确反映"
         );
 
         _step("[Step 1] Initial pendingRedeemRequest(alice) should be 0");
@@ -612,34 +622,42 @@ contract ViewQuoteQATest is Test {
         _step(string.concat("  pendingRedeemRequest(alice): ", vm.toString(pending0)));
         _step("  PASS: initially 0");
 
-        _step("[Step 2] Alice requests async redeem of 500 shares");
-        uint256 redeemShares = 500e6;
+        _step("[Step 2] Alice requests async redeem of 1000 shares");
+        uint256 redeemShares = 1_000e6;
         vm.prank(alice);
         uint256 requestId = gateway.requestRedeem(redeemShares);
         _step(string.concat("  requestId: ", vm.toString(requestId)));
 
         uint256 pending1 = vault.pendingRedeemRequest(alice);
-        // redemptionFeeBps = 100 (1%), so net shares = redeemShares * 99 / 100
-        uint256 expectedPending = redeemShares * (10_000 - vault.redemptionFeeBps()) / 10_000;
-        assertEq(pending1, expectedPending, "pendingRedeemRequest should equal shares after fee");
+        uint256 treasuryShare = (redeemShares * vault.redemptionFeeBps() + 9999) / 10_000;
+        uint256 expectedPending = redeemShares - treasuryShare;
+        (,, uint256 reqShares, uint256 feeShares, uint256 estimatedAssets,, , IMantleYieldVault.RequestStatus status) =
+            vault.requests(requestId);
+        assertEq(uint8(status), uint8(IMantleYieldVault.RequestStatus.PENDING), "request should be pending");
+        assertEq(reqShares, expectedPending, "stored request shares should equal net shares after fee");
+        assertEq(feeShares, treasuryShare, "stored fee shares should match ceil fee formula");
+        assertEq(pending1, expectedPending, "pendingRedeemRequest should equal pending net shares");
         _step(string.concat("  pendingRedeemRequest after request: ", vm.toString(pending1)));
-        _step(string.concat("  expected (after ", vm.toString(vault.redemptionFeeBps()), " bps fee): ", vm.toString(expectedPending)));
-        _step("  PASS: pendingRedeemRequest == redeemShares - fee");
+        _step(string.concat("  request.shares (netShares): ", vm.toString(reqShares)));
+        _step(string.concat("  request.feeShares: ", vm.toString(feeShares)));
+        _step(string.concat("  request.estimatedAssets: ", vm.toString(estimatedAssets)));
+        _step(string.concat("  expected feeShares (ceil): ", vm.toString(treasuryShare)));
+        _step(string.concat("  expected net shares after fee: ", vm.toString(expectedPending)));
+        assertEq(estimatedAssets, vault.previewRedeem(redeemShares), "request estimatedAssets should match request-time preview");
+        _step("  PASS: pendingRedeemRequest and stored request data match real request semantics");
 
-        _step("[Step 3] Settle the request via markRequestsDone");
-        // First transition: PENDING -> PROCESSING
+        _step("[Step 3] Settle the request via processRedeemBatch + finalizeRedeemBatch");
+        // PENDING -> PROCESSING via real call chain: bot -> executor -> controller -> vault
         uint256[] memory ids = new uint256[](1);
         ids[0] = requestId;
-        vm.prank(address(controller));
-        vault.updateRequestBatch(ids, IMantleYieldVault.RequestStatus.PROCESSING);
+        vm.prank(bot);
+        executor.executeProcessRedeemBatch(address(controller), ids);
 
-        // Then PROCESSING -> DONE
+        // PROCESSING -> DONE via real call chain
         uint256[] memory settled = new uint256[](1);
         settled[0] = vault.previewRedeem(pending1);
-        // Fund vault with enough USDC for settlement
-        usdc.mint(address(vault), 10_000e6);
-        vm.prank(address(controller));
-        vault.markRequestsDone(ids, settled);
+        vm.prank(bot);
+        executor.executeFinalizeRedeemBatch(address(controller), ids, settled);
 
         _step("[Step 4] Verify pendingRedeemRequest(alice) is now 0");
         uint256 pending2 = vault.pendingRedeemRequest(alice);
@@ -657,15 +675,21 @@ contract ViewQuoteQATest is Test {
     function test_GetTokenInfos_TotalAssets_Transparency() public {
         _logCase(
             "test_GetTokenInfos_TotalAssets_Transparency",
-            unicode"Gateway getTokenInfos() / totalAssets() 透传 Vault"
+            unicode"Gateway `getTokenInfos() / totalAssets()` 透传 Vault"
         );
 
-        _step("[Step 1] Register adapter on vault so getTokenInfos has data");
-        vm.prank(address(controller));
-        vault.registerAdapter(address(adapter));
+        _step("[Step 1] Register adapter via controller and invest via rebalance");
+        vm.startPrank(admin);
+        controller.registerStrategy(address(adapter), 10_000, 1, false);
+        controller.activateStrategy(address(adapter));
+        address[] memory order = new address[](1);
+        order[0] = address(adapter);
+        controller.setStrategyOrder(order);
+        vm.stopPrank();
 
-        // Give some pos tokens to the vault
-        adapter.mockPosToken().mint(address(vault), 100e6);
+        // Trigger rebalance to invest vault cash into adapter (real call chain)
+        vm.prank(bot);
+        executor.executeRebalance(address(controller));
 
         _step("[Step 2] Compare gateway.getTokenInfos() with vault.getTokenInfos()");
         IMantleYieldVault.tokenInfo[] memory gwInfos = gateway.getTokenInfos();

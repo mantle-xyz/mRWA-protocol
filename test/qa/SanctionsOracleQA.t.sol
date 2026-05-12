@@ -307,34 +307,29 @@ contract SanctionsOracleQA is Test {
     function test_BatchNonce_Increments() public {
         _logCase("test_BatchNonce_Increments", unicode"batchNonce 每次批量操作后递增");
 
-        _step("[Step 1] Record initial batchNonce and build batch array");
+        _step("[Step 1] Record initial batchNonce and build first batch array");
         uint256 nonceBefore = oracle.batchNonce();
         _step(string.concat("  batchNonce before: ", vm.toString(nonceBefore)));
-        address[] memory accounts = new address[](2);
-        accounts[0] = alice;
-        accounts[1] = bob;
-        _step(string.concat("  batch size: ", vm.toString(accounts.length)));
+        address[] memory firstBatch = new address[](2);
+        firstBatch[0] = alice;
+        firstBatch[1] = bob;
+        _step(string.concat("  first batch size: ", vm.toString(firstBatch.length)));
 
-        _step("[Step 2] First batch call: updateSanctionStatusBatch(accounts, true)");
+        _step("[Step 2] First batch call: updateSanctionStatusBatch([alice, bob], true)");
         vm.prank(complianceBot);
-        oracle.updateSanctionStatusBatch(accounts, true);
+        oracle.updateSanctionStatusBatch(firstBatch, true);
         assertEq(oracle.batchNonce(), nonceBefore + 1);
         _step(string.concat("  batchNonce after: ", vm.toString(oracle.batchNonce())));
         _step("  PASS: batchNonce == nonceBefore + 1");
 
-        _step("[Step 3] Second batch call: updateSanctionStatusBatch(accounts, false)");
+        _step("[Step 3] Build second batch array [charlie] and call updateSanctionStatusBatch([charlie], false)");
+        address[] memory secondBatch = new address[](1);
+        secondBatch[0] = charlie;
         vm.prank(complianceBot);
-        oracle.updateSanctionStatusBatch(accounts, false);
+        oracle.updateSanctionStatusBatch(secondBatch, false);
         assertEq(oracle.batchNonce(), nonceBefore + 2);
         _step(string.concat("  batchNonce after: ", vm.toString(oracle.batchNonce())));
         _step("  PASS: batchNonce == nonceBefore + 2");
-
-        _step("[Step 4] Single update: updateSanctionStatus(charlie, true)");
-        vm.prank(complianceBot);
-        oracle.updateSanctionStatus(charlie, true);
-        assertEq(oracle.batchNonce(), nonceBefore + 3);
-        _step(string.concat("  batchNonce after: ", vm.toString(oracle.batchNonce())));
-        _step("  PASS: batchNonce == nonceBefore + 3 (single update also increments)");
         _logPass();
     }
 

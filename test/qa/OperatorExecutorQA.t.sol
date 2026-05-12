@@ -488,7 +488,7 @@ contract OperatorExecutorQATest is Test {
     function _emitAndFinalize(uint256[] memory ids, uint256[] memory settledAssets) internal {
         for (uint256 i = 0; i < ids.length; i++) {
             (,,,,,,, IMantleYieldVault.RequestStatus sPre) = vault.requests(ids[i]);
-            assertTrue(sPre != IMantleYieldVault.RequestStatus.DONE, "batch should not be ready yet");
+            assertEq(uint8(sPre), uint8(IMantleYieldVault.RequestStatus.PROCESSING), "batch should be PROCESSING before finalize");
         }
 
         vm.expectEmit(true, true, false, true);
@@ -677,7 +677,7 @@ contract OperatorExecutorQATest is Test {
 
         _step("[Step 2] Attempt initialize with admin=address(0), expect revert InvalidAddress");
         // zero admin
-        vm.expectRevert(OperatorExecutor.InvalidAddress.selector);
+        vm.expectRevert(OperatorExecutor.OperatorExecutor__InvalidAddress.selector);
         new ERC1967Proxy(address(impl), abi.encodeCall(OperatorExecutor.initialize, (address(0), bot)));
         _step("  PASS: reverted as expected for zero admin");
 
@@ -685,7 +685,7 @@ contract OperatorExecutorQATest is Test {
         // zero bot
         impl = new OperatorExecutor();
         _step(string.concat("  new implementation address: ", vm.toString(address(impl))));
-        vm.expectRevert(OperatorExecutor.InvalidAddress.selector);
+        vm.expectRevert(OperatorExecutor.OperatorExecutor__InvalidAddress.selector);
         new ERC1967Proxy(address(impl), abi.encodeCall(OperatorExecutor.initialize, (admin, address(0))));
         _step("  PASS: reverted as expected for zero bot");
 
@@ -697,7 +697,7 @@ contract OperatorExecutorQATest is Test {
     // =======================================================================
 
     function test_BotRole_OnlyAdminCanManage() public {
-        _logCase("test_BotRole_OnlyAdminCanManage", unicode"只有 admin 可以管理 BOT_ROLE");
+        _logCase("test_BotRole_OnlyAdminCanManage", unicode"只有 admin 可以管理 `BOT_ROLE`");
         address nobody = makeAddr("nobody");
         address newBot = makeAddr("newBot");
         _step(string.concat("[Step 1] Create non-admin address: ", vm.toString(nobody)));
@@ -759,7 +759,7 @@ contract OperatorExecutorQATest is Test {
     // =======================================================================
 
     function test_AdminRole_NotAutoBot() public {
-        _logCase("test_AdminRole_NotAutoBot", unicode"admin 不自动拥有 BOT_ROLE");
+        _logCase("test_AdminRole_NotAutoBot", unicode"admin 不自动拥有 `BOT_ROLE`");
 
         _step("[Step 1] Query whether admin has BOT_ROLE");
         _step(string.concat("  admin address: ", vm.toString(admin)));
@@ -778,7 +778,7 @@ contract OperatorExecutorQATest is Test {
     // =======================================================================
 
     function test_ExecuteRebalance_Success() public {
-        _logCase("test_ExecuteRebalance_Success", unicode"Bot 通过 Executor 执行 rebalance，资金从 Vault 进入 Adapter 并创建 invest in-flight");
+        _logCase("test_ExecuteRebalance_Success", unicode"合法 bot 可成功执行 `rebalance`");
 
         _step("[Step 1] Deposit asset to vault to trigger invest on rebalance");
         uint256 investAmount = 100e6;
@@ -847,7 +847,7 @@ contract OperatorExecutorQATest is Test {
     // =======================================================================
 
     function test_ExecuteRebalance_RevertNotBot() public {
-        _logCase("test_ExecuteRebalance_RevertNotBot", unicode"非 BOT_ROLE 账户不能执行 rebalance");
+        _logCase("test_ExecuteRebalance_RevertNotBot", unicode"非 `BOT_ROLE` 账户不能执行 `rebalance`");
 
         address notBot = makeAddr("notBot");
         _step(string.concat("[Step 1] Create non-bot address: ", vm.toString(notBot)));
@@ -880,7 +880,7 @@ contract OperatorExecutorQATest is Test {
 
         _step("[Step 2] Expect revert with InvalidAddress selector");
         vm.prank(bot);
-        vm.expectRevert(OperatorExecutor.InvalidAddress.selector);
+        vm.expectRevert(OperatorExecutor.OperatorExecutor__InvalidAddress.selector);
         executor.executeRebalance(address(0));
         _step("  PASS: reverted as expected");
 
@@ -902,7 +902,7 @@ contract OperatorExecutorQATest is Test {
 
         _step("[Step 3] Expect revert with InvalidController selector");
         vm.prank(bot);
-        vm.expectRevert(abi.encodeWithSelector(OperatorExecutor.InvalidController.selector, eoaController));
+        vm.expectRevert(abi.encodeWithSelector(OperatorExecutor.OperatorExecutor__InvalidController.selector, eoaController));
         executor.executeRebalance(eoaController);
         _step("  PASS: reverted as expected");
 
@@ -926,7 +926,7 @@ contract OperatorExecutorQATest is Test {
         _step("[Step 2] Attempt another rebalance immediately (within cooldown), expect CooldownNotElapsed");
         _step("  This triggers a real downstream revert from StrategyController");
         vm.prank(bot);
-        vm.expectRevert(StrategyController.CooldownNotElapsed.selector);
+        vm.expectRevert(StrategyController.Controller__CooldownNotElapsed.selector);
         executor.executeRebalance(address(controller));
         _step("  PASS: downstream CooldownNotElapsed revert propagated through executor");
 
@@ -938,7 +938,7 @@ contract OperatorExecutorQATest is Test {
     // =======================================================================
 
     function test_ProcessRedeemBatch_Success() public {
-        _logCase("test_ProcessRedeemBatch_Success", unicode"BOT_ROLE 可成功执行 processRedeemBatch");
+        _logCase("test_ProcessRedeemBatch_Success", unicode"`BOT_ROLE` 可成功执行 `processRedeemBatch`");
 
         _step("[Step 1] Create real redeem requests in vault");
         address user = makeAddr("redeemer");
@@ -991,7 +991,7 @@ contract OperatorExecutorQATest is Test {
     // =======================================================================
 
     function test_ProcessRedeemBatch_IdsHashCorrect() public {
-        _logCase("test_ProcessRedeemBatch_IdsHashCorrect", unicode"processRedeemBatch 事件中的 idsHash 正确");
+        _logCase("test_ProcessRedeemBatch_IdsHashCorrect", unicode"`processRedeemBatch` 事件中的 `idsHash` 正确");
 
         _step("[Step 1] Create real redeem requests and prepare sorted ids");
         address user = makeAddr("redeemer");
@@ -1043,7 +1043,7 @@ contract OperatorExecutorQATest is Test {
     // =======================================================================
 
     function test_FinalizeRedeemBatch_Success() public {
-        _logCase("test_FinalizeRedeemBatch_Success", unicode"BOT_ROLE 可成功执行 finalizeRedeemBatch");
+        _logCase("test_FinalizeRedeemBatch_Success", unicode"`BOT_ROLE` 可成功执行 `finalizeRedeemBatch`");
 
         _step("[Step 1] Create real redeem requests");
         address user = makeAddr("redeemer");
@@ -1079,8 +1079,9 @@ contract OperatorExecutorQATest is Test {
         _step("  PASS: all requests moved to DONE status");
 
         _step("[Step 9] Verify owners received USDC from vault");
-        assertGe(asset.balanceOf(owner1), settled1, "owner1 should receive USDC");
-        assertGe(asset.balanceOf(owner2), settled2, "owner2 should receive USDC");
+        // Both requests from same user, so owner1 == owner2
+        assertEq(owner1, owner2, "sanity: both requests from same user");
+        assertEq(asset.balanceOf(owner1), settled1 + settled2, "owner should receive exact total settled USDC");
         _step("  PASS: owners received USDC");
 
         _logPass();
@@ -1091,7 +1092,7 @@ contract OperatorExecutorQATest is Test {
     // =======================================================================
 
     function test_FinalizeRedeemBatch_HashesCorrect() public {
-        _logCase("test_FinalizeRedeemBatch_HashesCorrect", unicode"finalizeRedeemBatch 事件中的 idsHash / settledAssetsHash 正确");
+        _logCase("test_FinalizeRedeemBatch_HashesCorrect", unicode"`finalizeRedeemBatch` 事件中的 `idsHash / settledAssetsHash` 正确");
 
         _step("[Step 1] Create real redeem requests and process them first");
         address user = makeAddr("redeemer");
@@ -1159,7 +1160,7 @@ contract OperatorExecutorQATest is Test {
     // =======================================================================
 
     function test_SettleAdapter_Success() public {
-        _logCase("test_SettleAdapter_Success", unicode"BOT_ROLE 可成功执行单个 adapter 结算");
+        _logCase("test_SettleAdapter_Success", unicode"`BOT_ROLE` 可成功执行单个 adapter 结算");
 
         _step("[Step 1] Create invest in-flight via rebalance");
         uint256 investAmount = 100e6;
@@ -1224,7 +1225,7 @@ contract OperatorExecutorQATest is Test {
     // =======================================================================
 
     function test_SettleAdapters_Success() public {
-        _logCase("test_SettleAdapters_Success", unicode"BOT_ROLE 可成功执行批量 adapter 结算");
+        _logCase("test_SettleAdapters_Success", unicode"`BOT_ROLE` 可成功执行批量 adapter 结算");
 
         _step("[Step 1] Create invest in-flight via rebalance");
         uint256 investAmount = 100e6;
@@ -1283,7 +1284,7 @@ contract OperatorExecutorQATest is Test {
     // =======================================================================
 
     function test_SettleAdapters_HashCorrect() public {
-        _logCase("test_SettleAdapters_HashCorrect", unicode"executeSettleAdapters 事件中的 adaptersHash 正确");
+        _logCase("test_SettleAdapters_HashCorrect", unicode"`executeSettleAdapters` 事件中的 `adaptersHash` 正确");
 
         _step("[Step 1] Use real registered adapter with empty settlement arrays");
         address[] memory adapters = new address[](1);
@@ -1498,22 +1499,26 @@ contract OperatorExecutorQATest is Test {
     function test_ProcessRedeemBatch_EmptyIds() public {
         _logCase("test_ProcessRedeemBatch_EmptyIds", unicode"空 ids 数组是否允许取决于下游 Controller");
 
-        _step("[Step 1] Prepare empty ids array");
+        _step("[Step 1] Prepare empty ids array and capture pre-call state");
         uint256[] memory ids = new uint256[](0);
         _step(string.concat("  ids.length = ", vm.toString(ids.length)));
+        uint256 pendingBefore = vault.pendingRequestCount();
+        uint256 nextReqBefore = vault.nextRequestId();
 
         _step("[Step 2] Bot calls executeProcessRedeemBatch with empty ids");
         vm.prank(bot);
         executor.executeProcessRedeemBatch(address(controller), ids);
         _step("  PASS: OperatorExecutor does not validate empty array; call forwarded to downstream");
 
-        _step("[Step 3] Empty batch has no per-request state to observe (M-3: state lives on Vault requests)");
+        _step("[Step 3] Verify no state changed from empty batch");
+        assertEq(vault.pendingRequestCount(), pendingBefore, "pendingRequestCount unchanged after empty batch");
+        assertEq(vault.nextRequestId(), nextReqBefore, "nextRequestId unchanged after empty batch");
         _step("  downstream updateRequestBatch loops over 0 ids, no state change, no revert");
 
         _step("[Step 4] Call again with same empty ids - still a no-op (no batch-level guard remains)");
-        _step("  M-1: StrategyController.BatchAlreadyProcessed has been removed; idempotency check is per-request on Vault");
         vm.prank(bot);
         executor.executeProcessRedeemBatch(address(controller), ids);
+        assertEq(vault.pendingRequestCount(), pendingBefore, "pendingRequestCount still unchanged after second empty call");
         _step("  PASS: second empty call does not revert (no batch key, no per-request state to conflict with)");
 
         _logPass();
@@ -1524,7 +1529,7 @@ contract OperatorExecutorQATest is Test {
     // =======================================================================
 
     function test_FinalizeRedeemBatch_LengthMismatch() public {
-        _logCase("test_FinalizeRedeemBatch_LengthMismatch", unicode"ids 与 settledAssets 长度不一致时是否回滚由下游决定");
+        _logCase("test_FinalizeRedeemBatch_LengthMismatch", unicode"ids 与 `settledAssets` 长度不一致时是否回滚由下游决定");
 
         _step("[Step 1] Create real requests and process them first");
         address user = makeAddr("redeemer");
@@ -1551,7 +1556,7 @@ contract OperatorExecutorQATest is Test {
         _step("[Step 4] Bot calls executeFinalizeRedeemBatch with mismatched lengths");
         _step("  OperatorExecutor does not validate array lengths; downstream controller does");
         vm.prank(bot);
-        vm.expectRevert(StrategyController.ClaimInputsLengthMismatch.selector);
+        vm.expectRevert(StrategyController.Controller__ClaimInputsLengthMismatch.selector);
         executor.executeFinalizeRedeemBatch(address(controller), ids, settledAssets);
         _step("  PASS: downstream ClaimInputsLengthMismatch revert propagated; entire call reverted");
 
@@ -1559,7 +1564,7 @@ contract OperatorExecutorQATest is Test {
         for (uint256 i = 0; i < ids.length; i++) {
             (,,,,,,, IMantleYieldVault.RequestStatus s) = vault.requests(ids[i]);
             _step(string.concat("  request[", vm.toString(ids[i]), "] status = ", vm.toString(uint8(s))));
-            assertTrue(s != IMantleYieldVault.RequestStatus.DONE, "request should not be DONE after failed finalize");
+            assertEq(uint8(s), uint8(IMantleYieldVault.RequestStatus.PROCESSING), "request should remain PROCESSING after failed finalize");
         }
         _step("  PASS: downstream revert prevented state change");
 
@@ -1571,7 +1576,7 @@ contract OperatorExecutorQATest is Test {
     // =======================================================================
 
     function test_SettleAdapter_DownstreamParamValidation() public {
-        _logCase("test_SettleAdapter_DownstreamParamValidation", unicode"executeSettleAdapter 是否回滚取决于下游参数校验");
+        _logCase("test_SettleAdapter_DownstreamParamValidation", unicode"`executeSettleAdapter` 是否回滚取决于下游参数校验");
 
         _step("[Step 1] Prepare mismatched settle input (investIds len != settledPosAmounts len)");
         uint256[] memory investIds = new uint256[](2);
@@ -1588,7 +1593,7 @@ contract OperatorExecutorQATest is Test {
         _step("[Step 2] Bot calls executeSettleAdapter with mismatched lengths");
         _step("  OperatorExecutor does not validate array lengths; downstream controller does");
         vm.prank(bot);
-        vm.expectRevert(StrategyController.SettleAmountsLengthMismatch.selector);
+        vm.expectRevert(StrategyController.Controller__SettleAmountsLengthMismatch.selector);
         executor.executeSettleAdapter(
             address(controller),
             address(asyncAdapter),
@@ -1597,19 +1602,25 @@ contract OperatorExecutorQATest is Test {
         );
         _step("  PASS: downstream SettleAmountsLengthMismatch revert propagated");
 
-        _step("[Step 3] Verify with correctly-lengthed but non-zero posAmount and no adapter balance");
-        _step("  Adapter has no posToken, so sweep fails before in-flight validation");
+        _step("[Step 3] Create a real invest in-flight, then strip adapter posToken to force sweep mismatch");
+        uint256 realInvestId = _createInvestInFlightViaExecutor(100);
+        _step(string.concat("  realInvestId = ", vm.toString(realInvestId)));
+        uint256 realPosAmount = _vIfTokenAmt(realInvestId);
+        _step(string.concat("  real invest tokenAmount = ", vm.toString(realPosAmount)));
+        MockAssetOE(address(posToken)).burn(address(asyncAdapter), realPosAmount);
+        _step("  burned adapter posToken balance down to 0");
+
         uint256[] memory fakeIds = new uint256[](1);
-        fakeIds[0] = 999;
+        fakeIds[0] = realInvestId;
         uint256[] memory fakeAmounts = new uint256[](1);
-        fakeAmounts[0] = 100;
+        fakeAmounts[0] = realPosAmount;
         uint256[] memory fakeRefunds = new uint256[](1);
         fakeRefunds[0] = 0;
 
         vm.prank(bot);
         vm.expectRevert(
             abi.encodeWithSelector(
-                StrategyController.InvestSweepAmountMismatch.selector, address(asyncAdapter), uint256(100), uint256(0)
+                StrategyController.Controller__InvestSweepAmountMismatch.selector, address(asyncAdapter), realPosAmount, uint256(0)
             )
         );
         executor.executeSettleAdapter(
@@ -1628,7 +1639,7 @@ contract OperatorExecutorQATest is Test {
     // =======================================================================
 
     function test_SettleAdapters_BatchDimensionMismatch() public {
-        _logCase("test_SettleAdapters_BatchDimensionMismatch", unicode"executeSettleAdapters 的批量维度合法性由下游决定");
+        _logCase("test_SettleAdapters_BatchDimensionMismatch", unicode"`executeSettleAdapters` 的批量维度合法性由下游决定");
 
         _step("[Step 1] Prepare mismatched batch dimensions: 2 adapters but 1 investBatch entry");
         address[] memory adapters = new address[](2);
@@ -1652,7 +1663,7 @@ contract OperatorExecutorQATest is Test {
         _step("[Step 2] Bot calls executeSettleAdapters with mismatched batch dimensions");
         _step("  OperatorExecutor does not validate batch dimensions; downstream controller does");
         vm.prank(bot);
-        vm.expectRevert(StrategyController.SettleAmountsLengthMismatch.selector);
+        vm.expectRevert(StrategyController.Controller__SettleAmountsLengthMismatch.selector);
         executor.executeSettleAdapters(
             address(controller), adapters, investBatch, redeemBatch
         );

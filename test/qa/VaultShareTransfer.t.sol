@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import {SanctionsOracle} from "../../src/compliance/SanctionsOracle.sol";
 import {ISanctionsOracle} from "../../src/interfaces/compliance/ISanctionsOracle.sol";
 import {IMantleVaultGateway} from "../../src/interfaces/vault/IMantleVaultGateway.sol";
 import {IMantleYieldVault} from "../../src/interfaces/vault/IMantleYieldVault.sol";
@@ -8,6 +9,8 @@ import {MantleVaultGateway} from "../../src/vault/MantleVaultGateway.sol";
 import {MantleYieldVault} from "../../src/vault/MantleYieldVault.sol";
 import {GatewayFactory} from "../../src/vault/GatewayFactory.sol";
 import {VaultFactory} from "../../src/vault/VaultFactory.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Test, console2} from "forge-std/Test.sol";
@@ -25,54 +28,6 @@ contract MockUSDC6 is ERC20 {
 
     function mint(address to, uint256 amount) external {
         _mint(to, amount);
-    }
-}
-
-contract MockSanctionsOracle is ISanctionsOracle {
-    mapping(address => bool) public sanctioned;
-    mapping(address => bool) public whitelisted;
-
-    function initialize(address, address) external override {}
-
-    function isSanctioned(address account) external view override returns (bool) {
-        return sanctioned[account];
-    }
-
-    function isWhitelisted(address account) external view override returns (bool) {
-        return whitelisted[account];
-    }
-
-    function setSanctioned(address account, bool status) external {
-        sanctioned[account] = status;
-    }
-
-    function setWhitelisted(address account, bool status) external {
-        whitelisted[account] = status;
-    }
-
-    function totalSanctionedCount() external pure override returns (uint256) {
-        return 0;
-    }
-
-    function totalWhitelistedCount() external pure override returns (uint256) {
-        return 0;
-    }
-
-    function lastUpdateTimestamp() external pure override returns (uint256) {
-        return 0;
-    }
-
-    function batchNonce() external pure override returns (uint256) {
-        return 0;
-    }
-
-    function updateSanctionStatus(address, bool) external override {}
-    function updateSanctionStatusBatch(address[] calldata, bool) external override {}
-    function updateWhitelistStatus(address, bool) external override {}
-    function updateWhitelistStatusBatch(address[] calldata, bool) external override {}
-
-    function MAX_BATCH_SIZE() external pure override returns (uint256) {
-        return 200;
     }
 }
 
@@ -102,13 +57,14 @@ contract MockAccountant {
 
 contract VaultShareTransferQATest is Test {
     MockUSDC6 internal usdc;
-    MockSanctionsOracle internal sanctionsOracle;
+    SanctionsOracle internal sanctionsOracle;
     MockAccountant internal accountant;
 
     MantleYieldVault internal vault;
     MantleVaultGateway internal gateway;
 
     address internal adminAddr = makeAddr("admin");
+    address internal complianceAddr = makeAddr("compliance");
     address internal controllerAddr = makeAddr("controller");
     address internal treasuryAddr = makeAddr("treasury");
     address internal sanctionSafeAddr = makeAddr("sanctionSafe");
@@ -149,13 +105,22 @@ contract VaultShareTransferQATest is Test {
         _step("test result: passed");
     }
 
+    function _updateSanctionStatus(address account, bool status) internal {
+        vm.prank(complianceAddr);
+        sanctionsOracle.updateSanctionStatus(account, status);
+    }
+
     // -----------------------------------------------------------------------
     // Setup
     // -----------------------------------------------------------------------
 
     function setUp() public {
         usdc = new MockUSDC6();
-        sanctionsOracle = new MockSanctionsOracle();
+        SanctionsOracle sanctionsOracleImpl = new SanctionsOracle();
+        sanctionsOracle = SanctionsOracle(address(new ERC1967Proxy(
+            address(sanctionsOracleImpl),
+            abi.encodeCall(SanctionsOracle.initialize, (adminAddr, complianceAddr))
+        )));
         accountant = new MockAccountant();
 
         MantleYieldVault impl = new MantleYieldVault();
@@ -180,7 +145,10 @@ contract VaultShareTransferQATest is Test {
             maxRedemptionFeeBps: 500,
             redemptionFeeBps: 0,
             minRedeemAmount: 0,
-            minDepositAmount: 0
+            minDepositAmount: 0,
+            maxSettlementDeviationBps: 0,
+            depositDailyRemaining: type(uint256).max,
+            redeemDailyRemaining: type(uint256).max
         });
         vm.prank(adminAddr);
         vault.initialize(params);
@@ -244,14 +212,14 @@ contract VaultShareTransferQATest is Test {
         _step("  PASS: Share balances updated correctly");
 
         _step("[Step 4] Sanction userB, then verify transfer reverts -- proves gateway sanctions oracle is consulted");
-        sanctionsOracle.setSanctioned(userB, true);
+        _updateSanctionStatus(userB, true);
         vm.prank(userA);
         vm.expectRevert(abi.encodeWithSelector(IMantleYieldVault.Vault__Sanctioned.selector, userB));
         vault.transfer(userB, TRANSFER_AMOUNT);
         _step("  PASS: Transfer reverted with Vault__Sanctioned(userB) after sanctions update");
 
         _step("[Step 5] Lift sanction on userB, verify transfer succeeds again");
-        sanctionsOracle.setSanctioned(userB, false);
+        _updateSanctionStatus(userB, false);
         vm.prank(userA);
         bool success2 = vault.transfer(userB, TRANSFER_AMOUNT);
         assertTrue(success2, "transfer should succeed after lifting sanction");
@@ -272,7 +240,7 @@ contract VaultShareTransferQATest is Test {
         );
 
         _step("[Step 1] Sanction userA");
-        sanctionsOracle.setSanctioned(userA, true);
+        _updateSanctionStatus(userA, true);
 
         _step("[Step 2] userA calls vault.transfer(userB, 100e6)");
         uint256 userABefore = vault.balanceOf(userA);
@@ -302,7 +270,7 @@ contract VaultShareTransferQATest is Test {
         );
 
         _step("[Step 1] Sanction userB");
-        sanctionsOracle.setSanctioned(userB, true);
+        _updateSanctionStatus(userB, true);
 
         _step("[Step 2] userA calls vault.transfer(userB, 100e6)");
         uint256 userABefore = vault.balanceOf(userA);
@@ -344,7 +312,7 @@ contract VaultShareTransferQATest is Test {
         uint256 userBBefore = vault.balanceOf(userB);
 
         vm.prank(userA);
-        vm.expectRevert();
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
         vault.transfer(userB, TRANSFER_AMOUNT);
         _step("  PASS: Transaction reverted (EnforcedPause)");
 
@@ -404,7 +372,7 @@ contract VaultShareTransferQATest is Test {
         uint256 sanctionedShares = vault.balanceOf(sanctionedUser);
         _step(string.concat("  sanctionedUser shares: ", vm.toString(sanctionedShares)));
 
-        sanctionsOracle.setSanctioned(sanctionedUser, true);
+        _updateSanctionStatus(sanctionedUser, true);
         _step("  sanctionedUser is now sanctioned");
 
         _step("[Step 2] sanctionedUser calls gateway.requestRedeem(shares)");
@@ -442,7 +410,7 @@ contract VaultShareTransferQATest is Test {
         vm.prank(userA);
         vault.transfer(sanctionedUser, 500e6);
         uint256 sanctionedShares = vault.balanceOf(sanctionedUser);
-        sanctionsOracle.setSanctioned(sanctionedUser, true);
+        _updateSanctionStatus(sanctionedUser, true);
         _step(string.concat("  sanctionedUser shares: ", vm.toString(sanctionedShares)));
 
         _step("[Step 2] sanctionedUser calls gateway.requestRedeem - triggers routeSanctionedShares");
@@ -474,7 +442,7 @@ contract VaultShareTransferQATest is Test {
         _step("[Step 1] Non-gateway address directly calls vault.routeSanctionedShares(...)");
         vm.prank(nonGateway);
         vm.expectRevert(IMantleYieldVault.Vault__OnlyGateway.selector);
-        vault.routeSanctionedShares(userA, userA, 100e6);
+        vault.routeSanctionedShares(userA, 100e6);
         _step("  PASS: Transaction reverted with Vault__OnlyGateway");
 
         _logPass();
