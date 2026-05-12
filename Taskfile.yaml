@@ -25,7 +25,7 @@ tasks:
     cmds:
       - task: _config_yaml2json
       - |
-        export $(yq '.envs | ... comments="" | to_entries | .[] | select((.value|tostring) != "") | .key + "=" + (.value|tostring)' {{.CONFIG_YAML}})
+        eval "$(yq '.envs | ... comments="" | to_entries | .[] | select((.value|tostring) != "" and (.key|test("^[A-Za-z_][A-Za-z0-9_]*$"))) | "export " + .key + "=" + (.value|tostring|@sh)' {{.CONFIG_YAML}})"
         source {{.ROOT_DIR}}/lib/func.sh
         if [[ -z "${NETWORK}" ]]; then
           log_error "NETWORK env is empty: NETWORK=anvil task yourTask"
@@ -37,7 +37,7 @@ tasks:
     internal: true
     cmds: 
       - |
-        export $(yq '.envs | ... comments="" | to_entries | .[] | select((.value|tostring) != "") | .key + "=" + (.value|tostring)' {{.CONFIG_YAML}})
+        eval "$(yq '.envs | ... comments="" | to_entries | .[] | select((.value|tostring) != "" and (.key|test("^[A-Za-z_][A-Za-z0-9_]*$"))) | "export " + .key + "=" + (.value|tostring|@sh)' {{.CONFIG_YAML}})"
         source {{.ROOT_DIR}}/lib/func.sh
         forge_test {{.EXTRA_ARGS}}
   #InitAnvilNetwork:
@@ -51,7 +51,7 @@ tasks:
     # silent: true
     cmds:
       - |
-        export $(yq '.envs | ... comments="" | to_entries | .[] | select((.value|tostring) != "") | .key + "=" + (.value|tostring)' {{.CONFIG_YAML}})
+        eval "$(yq '.envs | ... comments="" | to_entries | .[] | select((.value|tostring) != "" and (.key|test("^[A-Za-z_][A-Za-z0-9_]*$"))) | "export " + .key + "=" + (.value|tostring|@sh)' {{.CONFIG_YAML}})"
         source {{.ROOT_DIR}}/lib/func.sh
         sender_impersonate_safe_signer_on_forked_network deployerSafeAddress
   
