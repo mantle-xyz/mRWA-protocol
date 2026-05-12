@@ -180,7 +180,7 @@ contract UpgradeAndInitVaultAndAdapter is Script {
         Accountant accountant = Accountant(accountantProxy);
         if (!_proxyHasAdmin(accountantProxy, admin)) {
             vm.startBroadcast();
-            accountant.initialize(vaultProxy, initialRate, managementFeeBps, admin);
+            accountant.initialize(vaultProxy, initialRate, managementFeeBps, admin, pauser, accountantExecutor);
             vm.stopBroadcast();
             console2.log("[5/9] Accountant initialized");
             _settleBlock(settleMs);
@@ -192,6 +192,20 @@ contract UpgradeAndInitVaultAndAdapter is Script {
             accountant.grantRole(accountant.ACCOUNTANT_EXECUTOR_ROLE(), accountantExecutor);
             vm.stopBroadcast();
             console2.log("      Accountant ACCOUNTANT_EXECUTOR_ROLE -> AccountantExecutor");
+            _settleBlock(settleMs);
+        }
+        if (!accountant.hasRole(accountant.PAUSER_ROLE(), pauser)) {
+            vm.startBroadcast();
+            accountant.grantRole(accountant.PAUSER_ROLE(), pauser);
+            vm.stopBroadcast();
+            console2.log("      Accountant PAUSER_ROLE -> pauser");
+            _settleBlock(settleMs);
+        }
+        if (!accountant.hasRole(accountant.PAUSER_ROLE(), accountantExecutor)) {
+            vm.startBroadcast();
+            accountant.grantRole(accountant.PAUSER_ROLE(), accountantExecutor);
+            vm.stopBroadcast();
+            console2.log("      Accountant PAUSER_ROLE -> AccountantExecutor");
             _settleBlock(settleMs);
         }
 

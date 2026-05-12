@@ -17,6 +17,7 @@ envs:
   F_ADMIN_ADDRESS: "0x207E804758e28F2b3fD6E4219671B327100b82f8"
   F_COMPLIANCE_BOT_ADDRESS: "" # Phase A 前填写 KMS Compliance Bot, grants SanctionsOracle COMPLIANCE_ROLE
   F_BOT_ADDRESS: "" # Phase A 前填写 KMS Accountant Bot, grants AccountantExecutor BOT_ROLE
+  F_FEE_SETTLER_ADDRESS: "0x..." # AccountantExecutor FEE_SETTLER_ROLE
   F_SIGNER_ADDRESS: "" # Phase A 前填写 KMS Operator Bot, grants OperatorExecutor BOT_ROLE
   F_TREASURY_ADDRESS: "" # Phase A 前填写 fee recipient / sanction safe
   F_PAUSER_ADDRESS: "" # Phase B 前填写 Vault + StrategyController PAUSER_ROLE

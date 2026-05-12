@@ -16,11 +16,16 @@ contract MockAccountant {
     uint256 public lastNewRate;
     uint256 public lastComputeTimestamp;
     uint256 public callCount;
+    uint256 public settleCallCount;
 
     function updateExchangeRate(uint64 newRate, uint64 computeTimestamp) external {
         lastNewRate = newRate;
         lastComputeTimestamp = computeTimestamp;
         callCount++;
+    }
+
+    function settleManagementFee() external {
+        settleCallCount++;
     }
 }
 
@@ -77,16 +82,9 @@ contract AccountantTest is Test {
 
         Accountant impl = new Accountant();
         beacon = new UpgradeableBeacon(address(impl), admin);
-        BeaconProxy proxy = new BeaconProxy(
-            address(beacon),
-            abi.encodeCall(Accountant.initialize, (address(vault), INITIAL_RATE, MANAGEMENT_FEE_BPS, admin))
-        );
+        BeaconProxy proxy =
+            new BeaconProxy(address(beacon), _initData(address(vault), INITIAL_RATE, MANAGEMENT_FEE_BPS));
         accountant = Accountant(address(proxy));
-
-        vm.startPrank(admin);
-        accountant.grantRole(accountant.ACCOUNTANT_EXECUTOR_ROLE(), executor);
-        accountant.grantRole(accountant.PAUSER_ROLE(), pauser);
-        vm.stopPrank();
     }
 
     // ── helpers ───────────────────────────────────────────────────
@@ -103,6 +101,14 @@ contract AccountantTest is Test {
     function _settleFee() internal {
         vm.prank(executor);
         accountant.settleManagementFee();
+    }
+
+    function _initData(address vault_, uint64 initialRate, uint32 managementFeeRate_)
+        internal
+        view
+        returns (bytes memory)
+    {
+        return abi.encodeCall(Accountant.initialize, (vault_, initialRate, managementFeeRate_, admin, pauser, executor));
     }
 
     // =============================================================
@@ -124,60 +130,74 @@ contract AccountantTest is Test {
 
     function test_initialize_setsRolesCorrectly() public view {
         assertTrue(accountant.hasRole(accountant.DEFAULT_ADMIN_ROLE(), admin));
-        assertTrue(accountant.hasRole(accountant.PAUSER_ROLE(), admin));
-        assertTrue(accountant.hasRole(accountant.ACCOUNTANT_EXECUTOR_ROLE(), admin));
+        assertFalse(accountant.hasRole(accountant.PAUSER_ROLE(), admin));
+        assertFalse(accountant.hasRole(accountant.ACCOUNTANT_EXECUTOR_ROLE(), admin));
+        assertTrue(accountant.hasRole(accountant.PAUSER_ROLE(), pauser));
+        assertTrue(accountant.hasRole(accountant.PAUSER_ROLE(), executor));
+        assertTrue(accountant.hasRole(accountant.ACCOUNTANT_EXECUTOR_ROLE(), executor));
         assertEq(accountant.getRoleAdmin(accountant.PAUSER_ROLE()), accountant.DEFAULT_ADMIN_ROLE());
         assertEq(accountant.getRoleAdmin(accountant.ACCOUNTANT_EXECUTOR_ROLE()), accountant.DEFAULT_ADMIN_ROLE());
     }
 
     function test_initialize_revertsOnDoubleInit() public {
         vm.expectRevert();
-        accountant.initialize(address(vault), INITIAL_RATE, MANAGEMENT_FEE_BPS, admin);
+        accountant.initialize(address(vault), INITIAL_RATE, MANAGEMENT_FEE_BPS, admin, pauser, executor);
     }
 
     function test_initialize_revertsWhenVaultIsZero() public {
         vm.expectRevert(Accountant.Accountant__ZeroAddress.selector);
-        new BeaconProxy(
-            address(beacon),
-            abi.encodeCall(Accountant.initialize, (address(0), INITIAL_RATE, MANAGEMENT_FEE_BPS, admin))
-        );
+        new BeaconProxy(address(beacon), _initData(address(0), INITIAL_RATE, MANAGEMENT_FEE_BPS));
     }
 
     function test_initialize_revertsWhenAdminIsZero() public {
         vm.expectRevert(Accountant.Accountant__ZeroAddress.selector);
         new BeaconProxy(
             address(beacon),
-            abi.encodeCall(Accountant.initialize, (address(vault), INITIAL_RATE, MANAGEMENT_FEE_BPS, address(0)))
+            abi.encodeCall(
+                Accountant.initialize, (address(vault), INITIAL_RATE, MANAGEMENT_FEE_BPS, address(0), pauser, executor)
+            )
+        );
+    }
+
+    function test_initialize_revertsWhenPauserIsZero() public {
+        vm.expectRevert(Accountant.Accountant__ZeroAddress.selector);
+        new BeaconProxy(
+            address(beacon),
+            abi.encodeCall(
+                Accountant.initialize, (address(vault), INITIAL_RATE, MANAGEMENT_FEE_BPS, admin, address(0), executor)
+            )
+        );
+    }
+
+    function test_initialize_revertsWhenExecutorIsZero() public {
+        vm.expectRevert(Accountant.Accountant__ZeroAddress.selector);
+        new BeaconProxy(
+            address(beacon),
+            abi.encodeCall(
+                Accountant.initialize, (address(vault), INITIAL_RATE, MANAGEMENT_FEE_BPS, admin, pauser, address(0))
+            )
         );
     }
 
     function test_initialize_revertsWhenRateIsZero() public {
         vm.expectRevert(Accountant.Accountant__InvalidRate.selector);
-        new BeaconProxy(
-            address(beacon), abi.encodeCall(Accountant.initialize, (address(vault), 0, MANAGEMENT_FEE_BPS, admin))
-        );
+        new BeaconProxy(address(beacon), _initData(address(vault), 0, MANAGEMENT_FEE_BPS));
     }
 
     function test_initialize_revertsWhenFeeExceedsCap() public {
         uint32 tooHigh = accountant.MAX_MANAGEMENT_FEE_BPS() + 1;
         vm.expectRevert(abi.encodeWithSelector(Accountant.Accountant__InvalidFeeRate.selector, tooHigh));
-        new BeaconProxy(
-            address(beacon), abi.encodeCall(Accountant.initialize, (address(vault), INITIAL_RATE, tooHigh, admin))
-        );
+        new BeaconProxy(address(beacon), _initData(address(vault), INITIAL_RATE, tooHigh));
     }
 
     function test_initialize_allowsZeroFeeRate() public {
-        BeaconProxy proxy = new BeaconProxy(
-            address(beacon), abi.encodeCall(Accountant.initialize, (address(vault), INITIAL_RATE, uint32(0), admin))
-        );
+        BeaconProxy proxy = new BeaconProxy(address(beacon), _initData(address(vault), INITIAL_RATE, uint32(0)));
         assertEq(Accountant(address(proxy)).managementFeeRate(), 0);
     }
 
     function test_initialize_allowsMaxFeeRate() public {
         uint32 maxFee = accountant.MAX_MANAGEMENT_FEE_BPS();
-        BeaconProxy proxy = new BeaconProxy(
-            address(beacon), abi.encodeCall(Accountant.initialize, (address(vault), INITIAL_RATE, maxFee, admin))
-        );
+        BeaconProxy proxy = new BeaconProxy(address(beacon), _initData(address(vault), INITIAL_RATE, maxFee));
         assertEq(Accountant(address(proxy)).managementFeeRate(), maxFee);
     }
 
@@ -260,7 +280,7 @@ contract AccountantTest is Test {
     // =============================================================
 
     function test_updateExchangeRate_revertsWhenPaused() public {
-        vm.prank(admin);
+        vm.prank(pauser);
         accountant.pause();
 
         _skipCooldown();
@@ -580,7 +600,7 @@ contract AccountantTest is Test {
     }
 
     function test_settleManagementFee_revertsWhenPaused() public {
-        vm.prank(admin);
+        vm.prank(pauser);
         accountant.pause();
 
         vm.expectRevert();
@@ -603,7 +623,7 @@ contract AccountantTest is Test {
     }
 
     function test_getRate_worksWhenPaused() public {
-        vm.prank(admin);
+        vm.prank(pauser);
         accountant.pause();
         assertEq(accountant.getRate(), INITIAL_RATE);
     }
@@ -613,7 +633,7 @@ contract AccountantTest is Test {
     }
 
     function test_getRateSafe_revertsWhenPaused() public {
-        vm.prank(admin);
+        vm.prank(pauser);
         accountant.pause();
 
         vm.expectRevert();
@@ -621,7 +641,7 @@ contract AccountantTest is Test {
     }
 
     function test_getRateSafe_worksAfterUnpause() public {
-        vm.prank(admin);
+        vm.prank(pauser);
         accountant.pause();
 
         vm.prank(admin);
@@ -698,7 +718,7 @@ contract AccountantTest is Test {
     }
 
     function test_emergencyRateUpdate_unpausesWhenAlreadyPaused() public {
-        vm.prank(admin);
+        vm.prank(pauser);
         accountant.pause();
         assertTrue(accountant.paused());
 
@@ -994,10 +1014,12 @@ contract AccountantTest is Test {
         assertTrue(accountant.paused());
     }
 
-    function test_pause_adminCanPause() public {
+    function test_pause_adminCannotPause() public {
+        bytes32 role = accountant.PAUSER_ROLE();
+
+        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, admin, role));
         vm.prank(admin);
         accountant.pause();
-        assertTrue(accountant.paused());
     }
 
     function test_pause_revertsWhenNotPauser() public {
@@ -1009,7 +1031,7 @@ contract AccountantTest is Test {
     }
 
     function test_unpause_succeeds() public {
-        vm.prank(admin);
+        vm.prank(pauser);
         accountant.pause();
 
         vm.prank(admin);
@@ -1018,7 +1040,7 @@ contract AccountantTest is Test {
     }
 
     function test_unpause_revertsWhenNotAdmin() public {
-        vm.prank(admin);
+        vm.prank(pauser);
         accountant.pause();
 
         bytes32 adminRole = accountant.DEFAULT_ADMIN_ROLE();
@@ -1031,7 +1053,7 @@ contract AccountantTest is Test {
     }
 
     function test_unpause_revertsWhenExecutorCalls() public {
-        vm.prank(admin);
+        vm.prank(pauser);
         accountant.pause();
 
         bytes32 adminRole = accountant.DEFAULT_ADMIN_ROLE();
@@ -1138,10 +1160,7 @@ contract AccountantTest is Test {
     function testFuzz_initialize_validFeeRange(uint256 feeBps) public {
         feeBps = bound(feeBps, 0, accountant.MAX_MANAGEMENT_FEE_BPS());
 
-        BeaconProxy proxy = new BeaconProxy(
-            address(beacon),
-            abi.encodeCall(Accountant.initialize, (address(vault), INITIAL_RATE, uint32(feeBps), admin))
-        );
+        BeaconProxy proxy = new BeaconProxy(address(beacon), _initData(address(vault), INITIAL_RATE, uint32(feeBps)));
         assertEq(Accountant(address(proxy)).managementFeeRate(), feeBps);
     }
 }
@@ -1157,6 +1176,7 @@ contract AccountantExecutorTest is Test {
 
     address public admin = makeAddr("admin");
     address public bot = makeAddr("bot");
+    address public feeSettler = makeAddr("feeSettler");
     address public user = makeAddr("user");
 
     function setUp() public {
@@ -1168,8 +1188,11 @@ contract AccountantExecutorTest is Test {
         executor = AccountantExecutor(address(proxy));
 
         bytes32 executeRole = executor.BOT_ROLE();
+        bytes32 feeSettlerRole = executor.FEE_SETTLER_ROLE();
         vm.prank(admin);
         executor.grantRole(executeRole, bot);
+        vm.prank(admin);
+        executor.grantRole(feeSettlerRole, feeSettler);
     }
 
     // =============================================================
@@ -1179,6 +1202,7 @@ contract AccountantExecutorTest is Test {
     function test_initialize_setsStateCorrectly() public view {
         assertTrue(executor.hasRole(executor.DEFAULT_ADMIN_ROLE(), admin));
         assertEq(executor.getRoleAdmin(executor.BOT_ROLE()), executor.DEFAULT_ADMIN_ROLE());
+        assertEq(executor.getRoleAdmin(executor.FEE_SETTLER_ROLE()), executor.DEFAULT_ADMIN_ROLE());
         assertEq(executor.getRoleAdmin(executor.DEFAULT_ADMIN_ROLE()), executor.DEFAULT_ADMIN_ROLE());
     }
 
@@ -1280,6 +1304,31 @@ contract AccountantExecutorTest is Test {
     }
 
     // =============================================================
+    //              EXECUTE SETTLE MANAGEMENT FEE TESTS
+    // =============================================================
+
+    function test_executeSettleManagementFee_succeedsWithFeeSettlerRole() public {
+        vm.prank(feeSettler);
+        executor.executeSettleManagementFee(address(mockAccountant));
+
+        assertEq(mockAccountant.settleCallCount(), 1);
+    }
+
+    function test_executeSettleManagementFee_revertsWhenOnlyBotRole() public {
+        bytes32 role = executor.FEE_SETTLER_ROLE();
+
+        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, bot, role));
+        vm.prank(bot);
+        executor.executeSettleManagementFee(address(mockAccountant));
+    }
+
+    function test_executeSettleManagementFee_revertsWhenAccountantIsZero() public {
+        vm.expectRevert(AccountantExecutor.AccountantExecutor__ZeroAddress.selector);
+        vm.prank(feeSettler);
+        executor.executeSettleManagementFee(address(0));
+    }
+
+    // =============================================================
     //                  ADMIN / ROLE TESTS
     // =============================================================
 
@@ -1369,6 +1418,8 @@ contract AccountantExecutorIntegrationTest is Test {
 
     address public admin = makeAddr("admin");
     address public bot = makeAddr("bot");
+    address public feeSettler = makeAddr("feeSettler");
+    address public pauser = makeAddr("pauser");
 
     uint64 public constant INITIAL_RATE = 1e18;
     uint32 public constant MANAGEMENT_FEE_BPS = 50; // 0.5%
@@ -1378,26 +1429,26 @@ contract AccountantExecutorIntegrationTest is Test {
 
         vault = new MockVault();
 
-        Accountant accImpl = new Accountant();
-        accBeacon = new UpgradeableBeacon(address(accImpl), admin);
-        BeaconProxy accProxy = new BeaconProxy(
-            address(accBeacon),
-            abi.encodeCall(Accountant.initialize, (address(vault), INITIAL_RATE, MANAGEMENT_FEE_BPS, admin))
-        );
-        accountant = Accountant(address(accProxy));
-
         AccountantExecutor execImpl = new AccountantExecutor();
         execBeacon = new UpgradeableBeacon(address(execImpl), admin);
         BeaconProxy execProxy =
             new BeaconProxy(address(execBeacon), abi.encodeCall(AccountantExecutor.initialize, (admin)));
         executor = AccountantExecutor(address(execProxy));
 
+        Accountant accImpl = new Accountant();
+        accBeacon = new UpgradeableBeacon(address(accImpl), admin);
+        BeaconProxy accProxy = new BeaconProxy(
+            address(accBeacon),
+            abi.encodeCall(
+                Accountant.initialize,
+                (address(vault), INITIAL_RATE, MANAGEMENT_FEE_BPS, admin, pauser, address(executor))
+            )
+        );
+        accountant = Accountant(address(accProxy));
+
         vm.startPrank(admin);
-        accountant.grantRole(accountant.ACCOUNTANT_EXECUTOR_ROLE(), address(executor));
-        // Grant admin ACCOUNTANT_EXECUTOR_ROLE so integration tests can settle fees directly,
-        // alongside the AccountantExecutor relay path.
-        accountant.grantRole(accountant.ACCOUNTANT_EXECUTOR_ROLE(), admin);
         executor.grantRole(executor.BOT_ROLE(), bot);
+        executor.grantRole(executor.FEE_SETTLER_ROLE(), feeSettler);
         vm.stopPrank();
     }
 
@@ -1413,8 +1464,13 @@ contract AccountantExecutorIntegrationTest is Test {
     }
 
     function _settleFee() internal {
-        vm.prank(admin);
-        accountant.settleManagementFee();
+        vm.prank(feeSettler);
+        executor.executeSettleManagementFee(address(accountant));
+    }
+
+    function _pauseViaExecutor() internal {
+        vm.prank(bot);
+        executor.executePause(address(accountant));
     }
 
     // =============================================================
@@ -1620,8 +1676,7 @@ contract AccountantExecutorIntegrationTest is Test {
     // =============================================================
 
     function test_integration_revertsWhenPaused() public {
-        vm.prank(admin);
-        accountant.pause();
+        _pauseViaExecutor();
 
         _skipCooldown();
 
@@ -1630,8 +1685,7 @@ contract AccountantExecutorIntegrationTest is Test {
     }
 
     function test_integration_succeedsAfterUnpause() public {
-        vm.prank(admin);
-        accountant.pause();
+        _pauseViaExecutor();
 
         vm.prank(admin);
         accountant.unpause();
@@ -1643,13 +1697,13 @@ contract AccountantExecutorIntegrationTest is Test {
     }
 
     function test_integration_pauseRoleCanPause() public {
-        address pauser = makeAddr("pauser");
+        address extraPauser = makeAddr("extraPauser");
 
         vm.startPrank(admin);
-        accountant.grantRole(accountant.PAUSER_ROLE(), pauser);
+        accountant.grantRole(accountant.PAUSER_ROLE(), extraPauser);
         vm.stopPrank();
 
-        vm.prank(pauser);
+        vm.prank(extraPauser);
         accountant.pause();
 
         _skipCooldown();
@@ -1659,11 +1713,8 @@ contract AccountantExecutorIntegrationTest is Test {
     }
 
     function test_integration_unpauseRequiresAdmin() public {
-        address pauser = makeAddr("pauser");
-        vm.startPrank(admin);
-        accountant.grantRole(accountant.PAUSER_ROLE(), pauser);
+        vm.prank(pauser);
         accountant.pause();
-        vm.stopPrank();
 
         bytes32 adminRole = accountant.DEFAULT_ADMIN_ROLE();
 
@@ -1714,8 +1765,7 @@ contract AccountantExecutorIntegrationTest is Test {
     }
 
     function test_integration_emergencyRateUpdate_unpausesWhenPaused() public {
-        vm.prank(admin);
-        accountant.pause();
+        _pauseViaExecutor();
         assertTrue(accountant.paused());
 
         vm.prank(admin);

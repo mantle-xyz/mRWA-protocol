@@ -43,7 +43,7 @@ import {Script, console2} from "forge-std/Script.sol";
 ///         │  SanctionsOracle     → BeaconProxy (initialized, no deps)      │
 ///         │  MantleYieldVault    → BeaconProxy (UNINIT — deferred)         │
 ///         │  StrategyController  → BeaconProxy (UNINIT — deferred)         │
-///         │  Accountant          → BeaconProxy (init: vault)               │
+///         │  Accountant          → BeaconProxy (init: vault + acct exec)   │
 ///         │  OperatorExecutor    → UUPS proxy (init: admin, bot)           │
 ///         │  AccountantExecutor  → UUPS proxy (init: accountant)           │
 ///         └─────────────────────────────────────────────────────────────────┘
@@ -55,6 +55,7 @@ import {Script, console2} from "forge-std/Script.sol";
 ///         ┌─ Phase 4: Wire roles ──────────────────────────────────────────┐
 ///         │  Accountant   → ACCOUNTANT_EXECUTOR_ROLE → AccountantExecutor  │
 ///         │  AcctExecutor → BOT_ROLE       → bot                           │
+///         │  AcctExecutor → FEE_SETTLER_ROLE → feeSettler                  │
 ///         │  Vault        → PAUSER_ROLE    → pauser                        │
 ///         │  Vault        → CAP_MANAGER_ROLE → capManager                  │
 ///         └─────────────────────────────────────────────────────────────────┘
@@ -64,6 +65,7 @@ import {Script, console2} from "forge-std/Script.sol";
 ///   F_USDC_ADDRESS               – USDC token address
 ///   F_COMPLIANCE_BOT_ADDRESS     – SanctionsOracle COMPLIANCE_ROLE
 ///   F_BOT_ADDRESS                – AccountantExecutor BOT_ROLE
+///   F_FEE_SETTLER_ADDRESS        – AccountantExecutor FEE_SETTLER_ROLE
 ///   F_SIGNER_ADDRESS             – OperatorExecutor BOT_ROLE (initial bot, legacy env name)
 ///   F_TREASURY_ADDRESS           – fee share recipient
 ///   (also used as gateway sanctionSafe init)
@@ -115,6 +117,7 @@ contract DeployAll is Script {
         address usdc = vm.envAddress("F_USDC_ADDRESS");
         address complianceBot = vm.envAddress("F_COMPLIANCE_BOT_ADDRESS");
         address bot = vm.envAddress("F_BOT_ADDRESS");
+        address feeSettler = vm.envAddress("F_FEE_SETTLER_ADDRESS");
         address signer = vm.envAddress("F_SIGNER_ADDRESS");
         address treasury = vm.envAddress("F_TREASURY_ADDRESS");
         address pauser = vm.envAddress("F_PAUSER_ADDRESS");
@@ -208,22 +211,22 @@ contract DeployAll is Script {
         // 2d. Controller — UNINIT BeaconProxy (needs vault + opExec)
         address controllerAddr = d.controllerFactory.deployController();
 
-        // 2e. Accountant — init now (vault address is known)
-        address accountantAddr =
-            d.accountantFactory.deployAndInitAccountant(vaultAddr, initialRate, managementFeeBps, admin);
-        d.accountant = Accountant(accountantAddr);
-
-        // 2f. OperatorExecutor — UUPS, init now (independent of controller address)
+        // 2e. OperatorExecutor — UUPS, init now (independent of controller address)
         address opExecAddr = address(
             new ERC1967Proxy(address(operatorExecImpl), abi.encodeCall(OperatorExecutor.initialize, (admin, signer)))
         );
         d.operatorExecutor = OperatorExecutor(opExecAddr);
 
-        // 2g. AccountantExecutor — UUPS, init now (accountant address is known)
+        // 2f. AccountantExecutor — UUPS, init now
         address acctExecAddr = address(
             new ERC1967Proxy(address(accountantExecImpl), abi.encodeCall(AccountantExecutor.initialize, (admin)))
         );
         d.accountantExecutor = AccountantExecutor(acctExecAddr);
+
+        // 2g. Accountant — init now (vault + AccountantExecutor addresses are known)
+        address accountantAddr = d.accountantFactory
+            .deployAndInitAccountant(vaultAddr, initialRate, managementFeeBps, admin, pauser, acctExecAddr);
+        d.accountant = Accountant(accountantAddr);
 
         console2.log("");
         console2.log("[Phase 2] Proxies deployed");
@@ -288,17 +291,17 @@ contract DeployAll is Script {
         //  Phase 4: Wire roles
         // ═════════════════════════════════════════════════════════════
 
-        d.accountant.grantRole(d.accountant.ACCOUNTANT_EXECUTOR_ROLE(), address(d.accountantExecutor));
         d.accountantExecutor.grantRole(d.accountantExecutor.BOT_ROLE(), bot);
+        d.accountantExecutor.grantRole(d.accountantExecutor.FEE_SETTLER_ROLE(), feeSettler);
         d.vault.grantRole(d.vault.PAUSER_ROLE(), pauser);
         d.vault.grantRole(d.vault.CAP_MANAGER_ROLE(), capManager);
 
         console2.log("");
         console2.log("[Phase 4] Roles wired");
-        console2.log("  Accountant ACCOUNTANT_EXECUTOR_ROLE -> AcctExecutor");
-        console2.log("  AcctExecutor BOT_ROLE    -> bot   :", bot);
-        console2.log("  Vault PAUSER_ROLE        -> pauser:", pauser);
-        console2.log("  Vault CAP_MANAGER_ROLE   -> capMgr:", capManager);
+        console2.log("  AcctExecutor BOT_ROLE         -> bot       :", bot);
+        console2.log("  AcctExecutor FEE_SETTLER_ROLE -> feeSettler:", feeSettler);
+        console2.log("  Vault PAUSER_ROLE             -> pauser    :", pauser);
+        console2.log("  Vault CAP_MANAGER_ROLE        -> capMgr    :", capManager);
 
         // ═════════════════════════════════════════════════════════════
         //  Phase 5 (optional): Deploy upgradeable SubRedManagementAdapter
@@ -377,6 +380,9 @@ contract DeployAll is Script {
             "  Admin:           ", d.accountantExecutor.hasRole(d.accountantExecutor.DEFAULT_ADMIN_ROLE(), admin)
         );
         console2.log("  Has BOT:         ", d.accountantExecutor.hasRole(d.accountantExecutor.BOT_ROLE(), bot));
+        console2.log(
+            "  Has FEE_SETTLER: ", d.accountantExecutor.hasRole(d.accountantExecutor.FEE_SETTLER_ROLE(), feeSettler)
+        );
         console2.log("");
         console2.log("--- StrategyController ---");
         console2.log("  Vault:           ", address(d.controller.vault()));

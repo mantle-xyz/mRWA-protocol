@@ -130,19 +130,20 @@ contract DeployInstance is Script {
         console2.log("[2] Gteway (uninit):", gatewayAddr);
         console2.log("[2] Ctrl   (uninit):", controllerAddr);
 
-        // ── Phase 3: Accountant (vault addr known) ────────────────────
-        address accountantAddr =
-            accountantFactory.deployAndInitAccountant(vaultAddr, initialRate, managementFeeBps, admin);
-        d.accountant = Accountant(accountantAddr);
-        console2.log("[3] Accountant     :", accountantAddr);
-
-        // ── Phase 4: Reuse existing UUPS executor proxies ────────────
+        // ── Phase 3: Reuse existing UUPS executor proxies ────────────
         address opExecAddr = vm.envAddress("F_OPERATOR_EXECUTOR");
         address acctExecAddr = vm.envAddress("F_ACCOUNTANT_EXECUTOR");
         d.operatorExecutor = OperatorExecutor(opExecAddr);
         d.accountantExecutor = AccountantExecutor(acctExecAddr);
-        console2.log("[4] OpExecutor (reused)  :", opExecAddr);
-        console2.log("[4] AcctExecutor (reused):", acctExecAddr);
+        console2.log("[3] OpExecutor (reused)  :", opExecAddr);
+        console2.log("[3] AcctExecutor (reused):", acctExecAddr);
+
+        // ── Phase 4: Accountant (vault + executor addrs known) ───────
+        address accountantAddr = accountantFactory.deployAndInitAccountant(
+            vaultAddr, initialRate, managementFeeBps, admin, pauser, acctExecAddr
+        );
+        d.accountant = Accountant(accountantAddr);
+        console2.log("[4] Accountant     :", accountantAddr);
 
         // ── Phase 5: Initialize deferred proxies ──────────────────────
         // Vault first — Controller.initialize reads vault.asset()

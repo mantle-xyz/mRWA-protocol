@@ -26,7 +26,7 @@ import {Script, console2} from "forge-std/Script.sol";
 ///
 ///         Initialized in this script:
 ///           • SanctionsOracle (factory + proxy + admin/compliance roles)
-///           • AccountantExecutor (UUPS, admin + BOT_ROLE)
+///           • AccountantExecutor (UUPS, admin + BOT_ROLE + FEE_SETTLER_ROLE)
 ///           • OperatorExecutor (UUPS, admin + BOT_ROLE — granted in initialize())
 ///           • MantleVaultGateway (factory + proxy; init only stores pointers, no vault calls)
 ///
@@ -42,6 +42,7 @@ import {Script, console2} from "forge-std/Script.sol";
 ///   F_ADMIN_ADDRESS              – DEFAULT_ADMIN_ROLE on every new proxy + Beacon owner
 ///   F_COMPLIANCE_BOT_ADDRESS     – SanctionsOracle COMPLIANCE_ROLE
 ///   F_BOT_ADDRESS                – AccountantExecutor BOT_ROLE
+///   F_FEE_SETTLER_ADDRESS        – AccountantExecutor FEE_SETTLER_ROLE
 ///   F_SIGNER_ADDRESS             – OperatorExecutor BOT_ROLE (initial bot, legacy env name)
 ///   F_TREASURY_ADDRESS           – Gateway sanctionSafe init param (also Vault treasury in Phase B)
 ///   F_SYNC_REDEEM_DISABLED       – Gateway syncRedeemDisabled init param (true/false)
@@ -73,6 +74,7 @@ contract DeployRemainingForExistingFactories is Script {
         address admin = vm.envAddress("F_ADMIN_ADDRESS");
         address complianceBot = vm.envAddress("F_COMPLIANCE_BOT_ADDRESS");
         address bot = vm.envAddress("F_BOT_ADDRESS");
+        address feeSettler = vm.envAddress("F_FEE_SETTLER_ADDRESS");
         address signer = vm.envAddress("F_SIGNER_ADDRESS");
         address treasury = vm.envAddress("F_TREASURY_ADDRESS");
         address vaultProxy = vm.envAddress("EXISTING_VAULT_PROXY");
@@ -87,6 +89,7 @@ contract DeployRemainingForExistingFactories is Script {
         console2.log("Existing vault     :", vaultProxy);
         console2.log("Compliance bot     :", complianceBot);
         console2.log("Acct bot           :", bot);
+        console2.log("Fee settler        :", feeSettler);
         console2.log("Op signer          :", signer);
         console2.log("Treasury           :", treasury);
         console2.log("Sync redeem disabled:", syncRedeemDisabled);
@@ -113,6 +116,7 @@ contract DeployRemainingForExistingFactories is Script {
         );
         d.accountantExecutor = AccountantExecutor(acctExecAddr);
         d.accountantExecutor.grantRole(d.accountantExecutor.BOT_ROLE(), bot);
+        d.accountantExecutor.grantRole(d.accountantExecutor.FEE_SETTLER_ROLE(), feeSettler);
         console2.log("[3/6] AccountantExec   :", acctExecAddr);
 
         // ─── 4. OperatorExecutor UUPS (init now; initialize() already grants BOT_ROLE) ───
@@ -177,6 +181,9 @@ contract DeployRemainingForExistingFactories is Script {
             "AcctExec has ADMIN   :", d.accountantExecutor.hasRole(d.accountantExecutor.DEFAULT_ADMIN_ROLE(), admin)
         );
         console2.log("AcctExec has BOT     :", d.accountantExecutor.hasRole(d.accountantExecutor.BOT_ROLE(), bot));
+        console2.log(
+            "AcctExec has FEE     :", d.accountantExecutor.hasRole(d.accountantExecutor.FEE_SETTLER_ROLE(), feeSettler)
+        );
         console2.log(
             "OpExec has ADMIN     :", d.operatorExecutor.hasRole(d.operatorExecutor.DEFAULT_ADMIN_ROLE(), admin)
         );

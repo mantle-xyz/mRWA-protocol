@@ -7,14 +7,16 @@ import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/U
 
 /// @title AccountantExecutor
 /// @notice Authorized relay for Accountant.updateExchangeRate.
-///         Only accounts holding BOT_ROLE can trigger exchange rate updates.
-///         DEFAULT_ADMIN_ROLE manages BOT_ROLE membership and authorizes upgrades.
+///         BOT_ROLE can trigger exchange rate updates, and FEE_SETTLER_ROLE can
+///         trigger management fee settlement.
+///         DEFAULT_ADMIN_ROLE manages executor role membership and authorizes upgrades.
 contract AccountantExecutor is AccessControlUpgradeable, UUPSUpgradeable {
     // =============================================================
     //                        CONSTANTS
     // =============================================================
 
     bytes32 public constant BOT_ROLE = keccak256("BOT_ROLE");
+    bytes32 public constant FEE_SETTLER_ROLE = keccak256("FEE_SETTLER_ROLE");
 
     // =============================================================
     //                          EVENTS
@@ -44,6 +46,7 @@ contract AccountantExecutor is AccessControlUpgradeable, UUPSUpgradeable {
         __AccessControl_init();
 
         _setRoleAdmin(BOT_ROLE, DEFAULT_ADMIN_ROLE);
+        _setRoleAdmin(FEE_SETTLER_ROLE, DEFAULT_ADMIN_ROLE);
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
     }
 
@@ -66,7 +69,7 @@ contract AccountantExecutor is AccessControlUpgradeable, UUPSUpgradeable {
 
     /// @notice Trigger a management fee settlement on the Accountant.
     /// @param accountant_ The Accountant contract to call
-    function executeSettleManagementFee(address accountant_) external onlyRole(BOT_ROLE) {
+    function executeSettleManagementFee(address accountant_) external onlyRole(FEE_SETTLER_ROLE) {
         if (accountant_ == address(0)) revert AccountantExecutor__ZeroAddress();
         IAccountant(accountant_).settleManagementFee();
         emit ManagementFeeSettled(msg.sender, accountant_);
