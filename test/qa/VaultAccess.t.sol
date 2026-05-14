@@ -102,7 +102,7 @@ contract VaultAccessQATest is Test {
         )));
         accountant = Accountant(address(new ERC1967Proxy(
             address(accountantImpl),
-            abi.encodeCall(Accountant.initialize, (vaultAddr, uint64(1e18), uint32(0), adminAddr))
+            abi.encodeCall(Accountant.initialize, (vaultAddr, uint64(1e18), uint32(0), adminAddr, adminAddr, adminAddr))
         )));
         vault = MantleYieldVault(vaultAddr);
         gateway = MantleVaultGateway(gatewayAddr);

@@ -126,7 +126,7 @@ contract GatewayAdminConfigQATest is Test {
 
         accountant = Accountant(address(new ERC1967Proxy(
             address(acctImpl),
-            abi.encodeCall(Accountant.initialize, (address(vault), 1e18, 0, admin))
+            abi.encodeCall(Accountant.initialize, (address(vault), 1e18, 0, admin, admin, admin))
         )));
 
         executor = OperatorExecutor(address(new ERC1967Proxy(

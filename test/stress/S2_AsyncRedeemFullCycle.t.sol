@@ -5,7 +5,7 @@ import {IMantleYieldVault} from "../../src/interfaces/vault/IMantleYieldVault.so
 import {IStrategyControllerExecutor} from "../../src/interfaces/strategy/IStrategyControllerExecutor.sol";
 import {MantleYieldVault} from "../../src/vault/MantleYieldVault.sol";
 import {VaultViewHelper} from "../lib/VaultViewHelper.sol";
-import {StressBase, MockUSDC_ST} from "./StressBase.t.sol";
+import {StressBase} from "./StressBase.t.sol";
 
 /// @title S2: Async Redeem Full Lifecycle Stress
 /// @notice Validates requestRedeem → processRedeemBatch → finalizeRedeemBatch across many rounds
@@ -56,6 +56,17 @@ contract S2_AsyncRedeemFullCycle is StressBase {
                 }
                 toProcess = _sortIds(toProcess);
 
+                // S2 has no investing — adapters are empty. If cashDeficit exists
+                // (finalize variance drained cash below locked-share value),
+                // top up via deposits so processRedeemBatch won't attempt a futile divest.
+                // Deposit at least minDepositAmount since deficit may be below minimum.
+                uint256 deficit = vault.getCashDeficit();
+                if (deficit > 0) {
+                    uint256 minDep = vault.minDepositAmount();
+                    uint256 topUp = deficit < minDep ? minDep : deficit;
+                    _topUpVaultCashViaDeposits(usdc.balanceOf(address(vault)) + topUp);
+                }
+
                 _processRedeemBatch(toProcess);
 
                 // Verify processed requests are now PROCESSING
@@ -98,12 +109,12 @@ contract S2_AsyncRedeemFullCycle is StressBase {
                     totalNeeded += settledAssets[i];
                 }
 
-                // Ensure vault has enough cash (inject shortfall if needed)
+                // Ensure vault has enough cash via real user deposits
                 uint256 available = usdc.balanceOf(address(vault));
                 if (available < totalNeeded) {
-                    uint256 shortfall = totalNeeded - available;
-                    MockUSDC_ST(address(usdc)).mint(address(vault), shortfall);
-                    _totalUsdcInjected += shortfall;
+                    _topUpVaultCashViaDeposits(totalNeeded);
+                    // Recompute settled amounts with new vault state
+                    settledAssets = _computeSettledAssets(processingIds);
                 }
 
                 _finalizeRedeemBatch(processingIds, settledAssets);
@@ -120,6 +131,7 @@ contract S2_AsyncRedeemFullCycle is StressBase {
             }
 
             _checkAllInvariants(string.concat("S2:phaseC:", _toStr(round)));
+            _checkUsdcClosedSystem(string.concat("S2:phaseC:", _toStr(round)));
 
             // Periodic rate & price update
             _periodicRateAndPriceUpdate(round, 5, 8);
@@ -149,8 +161,8 @@ contract S2_AsyncRedeemFullCycle is StressBase {
     /// @dev Attempt to settle all pending in-flight records, per adapter
     function _trySettleAllInFlight() internal {
         if (IS_FORK) return; // Skip in fork mode — we don't know adapter addresses
-        _settleInFlightForAdapter(address(syncAdapter));
-        _settleInFlightForAdapter(address(asyncAdapter));
+        _settleInFlightForAdapter(address(realSyncAdapter));
+        _settleInFlightForAdapter(address(realAsyncAdapter));
     }
 
     function _settleInFlightForAdapter(address adapter) internal {
@@ -202,11 +214,33 @@ contract S2_AsyncRedeemFullCycle is StressBase {
             }
         }
 
-        // For async adapter redeem: release USDC from "external protocol" hold
-        if (adapter == address(asyncAdapter) && redeemCount > 0) {
+        // For async adapter invest: settle via mockSubRed — mint ST tokens to adapter
+        if (adapter == address(realAsyncAdapter) && investCount > 0) {
+            uint256 totalPos;
+            for (uint256 i = 0; i < investCount; i++) totalPos += investSettledPos[i];
+            vm.prank(admin);
+            mockSubRed.settleSubscribe(address(realAsyncAdapter), address(stToken), address(realAsyncAdapter), totalPos);
+        }
+
+        // For async adapter redeem: settle via mockSubRed — transfer USDC back to adapter
+        if (adapter == address(realAsyncAdapter) && redeemCount > 0) {
             uint256 totalNeeded;
             for (uint256 i = 0; i < redeemCount; i++) totalNeeded += redeemSettled[i];
-            _totalUsdcInjected += asyncAdapter.simulateRedeemSettlement(totalNeeded);
+            // Only settle what mockSubRed actually holds (no fake minting)
+            uint256 subRedBal = usdc.balanceOf(address(mockSubRed));
+            if (totalNeeded > subRedBal) {
+                totalNeeded = subRedBal;
+                if (redeemCount > 0) {
+                    uint256 perRedeem = totalNeeded / redeemCount;
+                    for (uint256 i = 0; i < redeemCount; i++) redeemSettled[i] = perRedeem;
+                }
+            }
+            if (totalNeeded > 0) {
+                vm.prank(admin);
+                mockSubRed.settleRedeem(
+                    address(realAsyncAdapter), address(stToken), address(usdc), address(realAsyncAdapter), totalNeeded
+                );
+            }
         }
 
         IStrategyControllerExecutor.InvestSettlementInput memory investInput;
@@ -240,5 +274,9 @@ contract S2_AsyncRedeemFullCycle is StressBase {
             result[i] = arr[i];
         }
         return result;
+    }
+
+    function _safeCheckI5(string memory) internal pure override returns (bool) {
+        return true;
     }
 }

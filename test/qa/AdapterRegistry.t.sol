@@ -205,7 +205,7 @@ contract AdapterRegistryQATest is Test {
         vault = MantleYieldVault(vaultAddr);
 
         // Deploy accountant
-        address acctAddr = accountantFactory.deployAndInitAccountant(vaultAddr, 1e18, 100, admin);
+        address acctAddr = accountantFactory.deployAndInitAccountant(vaultAddr, 1e18, 100, admin, admin, admin);
         acct = Accountant(acctAddr);
 
         // Deploy gateway (uninitialized)

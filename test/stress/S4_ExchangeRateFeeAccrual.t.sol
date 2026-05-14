@@ -125,6 +125,7 @@ contract S4_ExchangeRateFeeAccrual is StressBase {
             }
 
             _checkAllInvariants(string.concat("S4:round:", _toStr(round)));
+            _checkUsdcClosedSystem(string.concat("S4:round:", _toStr(round)));
 
             // Periodic price update
             if (!IS_FORK && round > 0 && round % 5 == 0) {

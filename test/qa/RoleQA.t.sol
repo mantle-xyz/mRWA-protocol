@@ -153,14 +153,14 @@ contract RoleQATest is Test {
     function _deployRealAccountant() internal returns (Accountant) {
         Accountant acctImpl = new Accountant();
         bytes memory data =
-            abi.encodeCall(Accountant.initialize, (address(vault), uint64(1e18), uint32(0), admin));
+            abi.encodeCall(Accountant.initialize, (address(vault), uint64(1e18), uint32(0), admin, admin, admin));
         return Accountant(address(new ERC1967Proxy(address(acctImpl), data)));
     }
 
     function _deployRealAccountantWithRate(uint64 initialRate) internal returns (Accountant) {
         Accountant acctImpl = new Accountant();
         bytes memory data =
-            abi.encodeCall(Accountant.initialize, (address(vault), initialRate, uint32(0), admin));
+            abi.encodeCall(Accountant.initialize, (address(vault), initialRate, uint32(0), admin, admin, admin));
         return Accountant(address(new ERC1967Proxy(address(acctImpl), data)));
     }
 

@@ -450,7 +450,7 @@ contract SubRedAdapterQATest is Test {
 
         vaultAccountant = Accountant(address(new ERC1967Proxy(
             address(accountantImpl),
-            abi.encodeCall(Accountant.initialize, (address(vault), 1e18, 0, admin))
+            abi.encodeCall(Accountant.initialize, (address(vault), 1e18, 0, admin, admin, admin))
         )));
 
         accountantExecutor = AccountantExecutor(address(new ERC1967Proxy(
@@ -1706,7 +1706,7 @@ contract SubRedAdapterQATest is Test {
         _step("[Step 1] controller-role holder calls directAdapter.sweepToVault(address(0), 100e18)");
         _step("  token = address(0)");
         vm.prank(controller);
-        vm.expectRevert(abi.encodeWithSelector(BaseAdapterUpgradeable.InvalidToken.selector, address(0)));
+        vm.expectRevert(abi.encodeWithSelector(BaseAdapterUpgradeable.InvalidToken.selector, address(0), address(0), address(0)));
         directAdapter.sweepToVault(address(0), 100e18);
         _step("  reverted with InvalidToken(address(0))");
         _step("  PASS: zero address token correctly rejected");
@@ -1774,7 +1774,7 @@ contract SubRedAdapterQATest is Test {
         _step("[Step 1] admin calls sweep(address(0), receiver)");
         _step("  token = address(0)");
         vm.prank(admin);
-        vm.expectRevert(abi.encodeWithSelector(BaseAdapterUpgradeable.InvalidToken.selector, address(0)));
+        vm.expectRevert(abi.encodeWithSelector(BaseAdapterUpgradeable.InvalidToken.selector, address(0), address(0), address(0)));
         adapter.sweep(address(0), receiver);
         _step("  reverted with InvalidToken(address(0))");
         _step("  PASS: zero address token correctly rejected");
@@ -1897,7 +1897,7 @@ contract SubRedAdapterQATest is Test {
 
         _step("[Step 1] beaconOwner upgrades to address(0), expect revert");
         vm.prank(admin);
-        vm.expectRevert(abi.encodeWithSelector(UpgradeableBeacon.BeaconInvalidImplementation.selector, address(0)));
+        vm.expectRevert(abi.encodeWithSelector(UpgradeableBeacon.BeaconInvalidImplementation.selector, address(0), address(0), address(0)));
         beacon.upgradeTo(address(0));
         _step("  PASS: reverted BeaconInvalidImplementation");
 

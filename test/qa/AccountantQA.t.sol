@@ -172,7 +172,7 @@ contract AccountantQATest is Test {
         UpgradeableBeacon beacon = new UpgradeableBeacon(address(impl), admin);
         BeaconProxy proxy = new BeaconProxy(
             address(beacon),
-            abi.encodeCall(Accountant.initialize, (address(mockVault), INITIAL_RATE, MANAGEMENT_FEE_BPS, admin))
+            abi.encodeCall(Accountant.initialize, (address(mockVault), INITIAL_RATE, MANAGEMENT_FEE_BPS, admin, admin, admin))
         );
         accountant = Accountant(address(proxy));
 
@@ -184,6 +184,7 @@ contract AccountantQATest is Test {
         vm.startPrank(admin);
         accountant.grantRole(accountant.ACCOUNTANT_EXECUTOR_ROLE(), address(accountantExecutor));
         accountantExecutor.grantRole(accountantExecutor.BOT_ROLE(), bot);
+        accountantExecutor.grantRole(accountantExecutor.FEE_SETTLER_ROLE(), bot);
         vm.stopPrank();
 
         // --- Full stack for Gateway integration sub-tests ---
@@ -204,7 +205,7 @@ contract AccountantQATest is Test {
             address(
                 new ERC1967Proxy(
                     address(gatewayAccountantImpl),
-                    abi.encodeCall(Accountant.initialize, (vaultAddr, INITIAL_RATE, MANAGEMENT_FEE_BPS, admin))
+                    abi.encodeCall(Accountant.initialize, (vaultAddr, INITIAL_RATE, MANAGEMENT_FEE_BPS, admin, admin, admin))
                 )
             )
         );
@@ -344,7 +345,7 @@ contract AccountantQATest is Test {
         _step("[Step 2] vault = address(0) should revert with ZeroAddress");
         vm.expectRevert(Accountant.Accountant__ZeroAddress.selector);
         new ERC1967Proxy(
-            address(impl), abi.encodeCall(Accountant.initialize, (address(0), INITIAL_RATE, MANAGEMENT_FEE_BPS, admin))
+            address(impl), abi.encodeCall(Accountant.initialize, (address(0), INITIAL_RATE, MANAGEMENT_FEE_BPS, admin, admin, admin))
         );
         _step("  PASS: reverted with ZeroAddress for vault=address(0)");
 
@@ -352,16 +353,32 @@ contract AccountantQATest is Test {
         vm.expectRevert(Accountant.Accountant__ZeroAddress.selector);
         new ERC1967Proxy(
             address(impl),
-            abi.encodeCall(Accountant.initialize, (address(mockVault), INITIAL_RATE, MANAGEMENT_FEE_BPS, address(0)))
+            abi.encodeCall(Accountant.initialize, (address(mockVault), INITIAL_RATE, MANAGEMENT_FEE_BPS, address(0), admin, admin))
         );
         _step("  PASS: reverted with ZeroAddress for admin=address(0)");
+
+        _step("[Step 3b] pauser = address(0) should revert with ZeroAddress");
+        vm.expectRevert(Accountant.Accountant__ZeroAddress.selector);
+        new ERC1967Proxy(
+            address(impl),
+            abi.encodeCall(Accountant.initialize, (address(mockVault), INITIAL_RATE, MANAGEMENT_FEE_BPS, admin, address(0), admin))
+        );
+        _step("  PASS: reverted with ZeroAddress for pauser=address(0)");
+
+        _step("[Step 3c] executor = address(0) should revert with ZeroAddress");
+        vm.expectRevert(Accountant.Accountant__ZeroAddress.selector);
+        new ERC1967Proxy(
+            address(impl),
+            abi.encodeCall(Accountant.initialize, (address(mockVault), INITIAL_RATE, MANAGEMENT_FEE_BPS, admin, admin, address(0)))
+        );
+        _step("  PASS: reverted with ZeroAddress for executor=address(0)");
 
         _step("[Step 4] feeRate > MAX_MANAGEMENT_FEE_BPS should revert with InvalidFeeRate");
         uint32 tooHighFee = accountant.MAX_MANAGEMENT_FEE_BPS() + 1;
         vm.expectRevert(abi.encodeWithSelector(Accountant.Accountant__InvalidFeeRate.selector, tooHighFee));
         new ERC1967Proxy(
             address(impl),
-            abi.encodeCall(Accountant.initialize, (address(mockVault), INITIAL_RATE, tooHighFee, admin))
+            abi.encodeCall(Accountant.initialize, (address(mockVault), INITIAL_RATE, tooHighFee, admin, admin, admin))
         );
         _step(string.concat("  PASS: reverted with InvalidFeeRate for fee=", vm.toString(uint256(tooHighFee))));
 
@@ -369,9 +386,64 @@ contract AccountantQATest is Test {
         vm.expectRevert(Accountant.Accountant__InvalidRate.selector);
         new ERC1967Proxy(
             address(impl),
-            abi.encodeCall(Accountant.initialize, (address(mockVault), 0, MANAGEMENT_FEE_BPS, admin))
+            abi.encodeCall(Accountant.initialize, (address(mockVault), 0, MANAGEMENT_FEE_BPS, admin, admin, admin))
         );
         _step("  PASS: reverted with InvalidRate for initialRate=0");
+
+        _logPass();
+    }
+
+    // =============================================================
+    //  N-95 — Accountant 初始化角色分离验证
+    // =============================================================
+
+    function test_Accountant_InitRoleSeparation() public {
+        _logCase(
+            "test_Accountant_InitRoleSeparation",
+            unicode"Accountant 初始化角色分离验证 — admin/pauser/executor 三地址各异时互不越权"
+        );
+
+        _step("[Step 1] Deploy fresh Accountant with three distinct addresses");
+        address separateAdmin = makeAddr("separateAdmin");
+        address separatePauser = makeAddr("separatePauser");
+        address separateExecutor = makeAddr("separateExecutor");
+
+        Accountant impl = new Accountant();
+        Accountant acct = Accountant(
+            address(
+                new ERC1967Proxy(
+                    address(impl),
+                    abi.encodeCall(
+                        Accountant.initialize,
+                        (address(mockVault), INITIAL_RATE, MANAGEMENT_FEE_BPS, separateAdmin, separatePauser, separateExecutor)
+                    )
+                )
+            )
+        );
+
+        _step("[Step 2] Verify admin has ONLY DEFAULT_ADMIN_ROLE");
+        assertTrue(acct.hasRole(acct.DEFAULT_ADMIN_ROLE(), separateAdmin));
+        _step("  PASS: admin has DEFAULT_ADMIN_ROLE");
+        assertFalse(acct.hasRole(acct.PAUSER_ROLE(), separateAdmin));
+        _step("  PASS: admin does NOT have PAUSER_ROLE");
+        assertFalse(acct.hasRole(acct.ACCOUNTANT_EXECUTOR_ROLE(), separateAdmin));
+        _step("  PASS: admin does NOT have ACCOUNTANT_EXECUTOR_ROLE");
+
+        _step("[Step 3] Verify pauser has ONLY PAUSER_ROLE");
+        assertTrue(acct.hasRole(acct.PAUSER_ROLE(), separatePauser));
+        _step("  PASS: pauser has PAUSER_ROLE");
+        assertFalse(acct.hasRole(acct.DEFAULT_ADMIN_ROLE(), separatePauser));
+        _step("  PASS: pauser does NOT have DEFAULT_ADMIN_ROLE");
+        assertFalse(acct.hasRole(acct.ACCOUNTANT_EXECUTOR_ROLE(), separatePauser));
+        _step("  PASS: pauser does NOT have ACCOUNTANT_EXECUTOR_ROLE");
+
+        _step("[Step 4] Verify executor has PAUSER_ROLE + ACCOUNTANT_EXECUTOR_ROLE only");
+        assertTrue(acct.hasRole(acct.PAUSER_ROLE(), separateExecutor));
+        _step("  PASS: executor has PAUSER_ROLE");
+        assertTrue(acct.hasRole(acct.ACCOUNTANT_EXECUTOR_ROLE(), separateExecutor));
+        _step("  PASS: executor has ACCOUNTANT_EXECUTOR_ROLE");
+        assertFalse(acct.hasRole(acct.DEFAULT_ADMIN_ROLE(), separateExecutor));
+        _step("  PASS: executor does NOT have DEFAULT_ADMIN_ROLE");
 
         _logPass();
     }

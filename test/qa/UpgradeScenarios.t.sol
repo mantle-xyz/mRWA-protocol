@@ -655,7 +655,7 @@ contract UpgradeScenariosQATest is Test {
         returns (Accountant acct)
     {
         AccountantFactory factory = new AccountantFactory(address(new Accountant()), admin);
-        address acctAddr = factory.deployAndInitAccountant(vaultAddr, initialRate, managementFeeRate_, admin);
+        address acctAddr = factory.deployAndInitAccountant(vaultAddr, initialRate, managementFeeRate_, admin, admin, admin);
         acct = Accountant(acctAddr);
     }
 
@@ -758,7 +758,7 @@ contract UpgradeScenariosQATest is Test {
         (s.vault, s.gateway) = _deployVaultAndGateway(vaultFactory, gatewayFactory);
 
         s.factory = new AccountantFactory(address(new Accountant()), admin);
-        address acctAddr = s.factory.deployAndInitAccountant(address(s.vault), 1e18, 100, admin);
+        address acctAddr = s.factory.deployAndInitAccountant(address(s.vault), 1e18, 100, admin, admin, admin);
         s.accountant = Accountant(acctAddr);
 
         vm.prank(admin);
@@ -770,6 +770,7 @@ contract UpgradeScenariosQATest is Test {
 
         vm.startPrank(admin);
         s.executor.grantRole(s.executor.BOT_ROLE(), bot);
+        s.executor.grantRole(s.executor.FEE_SETTLER_ROLE(), bot);
         s.accountant.grantRole(s.accountant.ACCOUNTANT_EXECUTOR_ROLE(), address(s.executor));
         vm.stopPrank();
     }
@@ -2403,7 +2404,7 @@ contract UpgradeScenariosQATest is Test {
         (MantleYieldVault v,) = _deployVaultAndGateway(vFactory, gFactory);
 
         _step("[Step 1] Deploy and init accountant");
-        address acctAddr = factory.deployAndInitAccountant(address(v), 1e18, 100, admin);
+        address acctAddr = factory.deployAndInitAccountant(address(v), 1e18, 100, admin, admin, admin);
         Accountant acct = Accountant(acctAddr);
         uint256 rateBefore = acct.getRate();
         _step(string.concat("  rate before: ", vm.toString(rateBefore)));
@@ -2476,7 +2477,7 @@ contract UpgradeScenariosQATest is Test {
         _step("[Step 1] Deploy 5 accountants");
         for (uint256 i = 0; i < 5; i++) {
             (MantleYieldVault v,) = _deployVaultAndGateway(vFactory, gFactory);
-            factory.deployAndInitAccountant(address(v), 1e18, 100, admin);
+            factory.deployAndInitAccountant(address(v), 1e18, 100, admin, admin, admin);
         }
         assertEq(factory.accountantCount(), 5);
 
@@ -2548,7 +2549,7 @@ contract UpgradeScenariosQATest is Test {
         (MantleYieldVault v,) = _deployVaultAndGateway(vFactory, gFactory);
 
         _step("[Step 1] Deploy and init accountant");
-        address acctAddr = factory.deployAndInitAccountant(address(v), 1e18, 100, admin);
+        address acctAddr = factory.deployAndInitAccountant(address(v), 1e18, 100, admin, admin, admin);
         Accountant acct = Accountant(acctAddr);
 
         _step("[Step 2] Deploy executor and update rate via bot -> executor -> accountant");
@@ -2558,6 +2559,7 @@ contract UpgradeScenariosQATest is Test {
         )));
         vm.startPrank(admin);
         executor.grantRole(executor.BOT_ROLE(), bot);
+        executor.grantRole(executor.FEE_SETTLER_ROLE(), bot);
         acct.grantRole(acct.ACCOUNTANT_EXECUTOR_ROLE(), address(executor));
         vm.stopPrank();
 
@@ -2592,8 +2594,8 @@ contract UpgradeScenariosQATest is Test {
         (MantleYieldVault v1,) = _deployVaultAndGateway(vFactory, gFactory);
         (MantleYieldVault v2,) = _deployVaultAndGateway(vFactory, gFactory);
 
-        address a1 = factory.deployAndInitAccountant(address(v1), 1e18, 100, admin);
-        address a2 = factory.deployAndInitAccountant(address(v2), 1e18, 100, admin);
+        address a1 = factory.deployAndInitAccountant(address(v1), 1e18, 100, admin, admin, admin);
+        address a2 = factory.deployAndInitAccountant(address(v2), 1e18, 100, admin, admin, admin);
 
         // Deploy executor and grant roles on both accountants
         AccountantExecutor exImpl = new AccountantExecutor();
@@ -2602,6 +2604,7 @@ contract UpgradeScenariosQATest is Test {
         )));
         vm.startPrank(admin);
         executor.grantRole(executor.BOT_ROLE(), bot);
+        executor.grantRole(executor.FEE_SETTLER_ROLE(), bot);
         Accountant(a1).grantRole(Accountant(a1).ACCOUNTANT_EXECUTOR_ROLE(), address(executor));
         Accountant(a2).grantRole(Accountant(a2).ACCOUNTANT_EXECUTOR_ROLE(), address(executor));
         vm.stopPrank();
@@ -2636,7 +2639,7 @@ contract UpgradeScenariosQATest is Test {
         GatewayFactory gFactory = new GatewayFactory(address(new MantleVaultGateway()), admin);
         (MantleYieldVault v,) = _deployVaultAndGateway(vFactory, gFactory);
 
-        address newAcct = factory.deployAndInitAccountant(address(v), 1e18, 100, admin);
+        address newAcct = factory.deployAndInitAccountant(address(v), 1e18, 100, admin, admin, admin);
         assertEq(AccountantV2(newAcct).version(), 2);
         _step("  PASS: New deployment uses new implementation");
 
@@ -2742,7 +2745,7 @@ contract UpgradeScenariosQATest is Test {
     {
         Accountant impl = new Accountant();
         factory = new AccountantFactory(address(impl), admin);
-        address acctAddr = factory.deployAndInitAccountant(address(mockVault), 1e18, 100, admin);
+        address acctAddr = factory.deployAndInitAccountant(address(mockVault), 1e18, 100, admin, admin, admin);
         acct = Accountant(acctAddr);
     }
 
@@ -2759,6 +2762,7 @@ contract UpgradeScenariosQATest is Test {
 
         vm.startPrank(admin);
         executor.grantRole(executor.BOT_ROLE(), bot);
+        executor.grantRole(executor.FEE_SETTLER_ROLE(), bot);
         acct.grantRole(acct.ACCOUNTANT_EXECUTOR_ROLE(), address(executor));
         vm.stopPrank();
     }
@@ -2825,7 +2829,7 @@ contract UpgradeScenariosQATest is Test {
         MockVaultForUpgrade mockVault = new MockVaultForUpgrade(1_000_000e18);
 
         _step("[Step 1] Deploy accountant V1 and write data");
-        address acctAddr = factory.deployAndInitAccountant(address(mockVault), 1e18, 100, admin);
+        address acctAddr = factory.deployAndInitAccountant(address(mockVault), 1e18, 100, admin, admin, admin);
         Accountant acct = Accountant(acctAddr);
 
         // Deploy executor for proper call chain
@@ -2835,6 +2839,7 @@ contract UpgradeScenariosQATest is Test {
         )));
         vm.startPrank(admin);
         executor.grantRole(executor.BOT_ROLE(), bot);
+        executor.grantRole(executor.FEE_SETTLER_ROLE(), bot);
         acct.grantRole(acct.ACCOUNTANT_EXECUTOR_ROLE(), address(executor));
         vm.stopPrank();
 
@@ -3361,7 +3366,7 @@ contract UpgradeScenariosQATest is Test {
         VaultFactory vFactory = new VaultFactory(address(new MantleYieldVault()), admin);
         GatewayFactory gFactory = new GatewayFactory(address(new MantleVaultGateway()), admin);
         (MantleYieldVault v,) = _deployVaultAndGateway(vFactory, gFactory);
-        address acctAddr = acctFactory.deployAndInitAccountant(address(v), 1e18, 100, admin);
+        address acctAddr = acctFactory.deployAndInitAccountant(address(v), 1e18, 100, admin, admin, admin);
         Accountant acct = Accountant(acctAddr);
 
         // Deploy executor
@@ -3372,6 +3377,7 @@ contract UpgradeScenariosQATest is Test {
         // Grant roles
         vm.startPrank(admin);
         executor.grantRole(executor.BOT_ROLE(), bot);
+        executor.grantRole(executor.FEE_SETTLER_ROLE(), bot);
         acct.grantRole(acct.ACCOUNTANT_EXECUTOR_ROLE(), address(executor));
         vm.stopPrank();
 

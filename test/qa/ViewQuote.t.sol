@@ -226,7 +226,7 @@ contract ViewQuoteQATest is Test {
         address gwAddr = gatewayFactory.deployGateway();
         address accountantAddr = address(new ERC1967Proxy(
             address(accountantImpl),
-            abi.encodeCall(Accountant.initialize, (vaultAddr, uint64(1e18), uint32(100), admin))
+            abi.encodeCall(Accountant.initialize, (vaultAddr, uint64(1e18), uint32(100), admin, admin, admin))
         ));
         address accountantExecutorAddr = address(new ERC1967Proxy(
             address(accountantExecutorImpl),

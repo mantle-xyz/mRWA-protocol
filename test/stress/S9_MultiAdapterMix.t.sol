@@ -5,15 +5,12 @@ import {IMantleYieldVault} from "../../src/interfaces/vault/IMantleYieldVault.so
 import {IStrategyControllerExecutor} from "../../src/interfaces/strategy/IStrategyControllerExecutor.sol";
 import {IStrategyAdapter} from "../../src/interfaces/adapters/IStrategyAdapter.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {MantleYieldVault} from "../../src/vault/MantleYieldVault.sol";
+import {MockSync4626Adapter} from "../../src/adapters/mock/MockSync4626Adapter.sol";
+import {MockERC4626Vault} from "../../src/mocks/strategy/MockERC4626Vault.sol";
 import {VaultViewHelper} from "../lib/VaultViewHelper.sol";
-import {
-    StressBase,
-    MockUSDC_ST,
-    MockPosToken_ST,
-    MockAsyncAdapter_ST,
-    MockConfigSyncAdapter_ST
-} from "./StressBase.t.sol";
+import {StressBase} from "./StressBase.t.sol";
 import {console2} from "forge-std/Test.sol";
 
 /// @title S9: Multi-Adapter Asymmetric Weight Mix
@@ -24,16 +21,18 @@ contract S9_MultiAdapterMix is StressBase {
     uint256 constant LARGE_DEPOSIT = 200_000e6;
 
     // Third adapter (deployed in setUp)
-    MockConfigSyncAdapter_ST internal s9Sync2;
-    MockPosToken_ST internal s9PosToken2;
+    MockSync4626Adapter internal s9Sync2;
+    MockERC4626Vault internal s9Target2;
 
     function setUp() public override {
         super.setUp();
         if (IS_FORK) return;
 
-        // Deploy third adapter with its own posToken
-        s9PosToken2 = new MockPosToken_ST("SyncPos2", "sPOS2");
-        s9Sync2 = new MockConfigSyncAdapter_ST(address(usdc), address(s9PosToken2), address(vault));
+        // Deploy third adapter with its own ERC4626 target vault
+        s9Target2 = new MockERC4626Vault(IERC20(address(usdc)), "SyncVault2", "sVLT2");
+        s9Sync2 = new MockSync4626Adapter(
+            address(vault), address(s9Target2), admin, address(controller), address(acctExecutor)
+        );
 
         vm.startPrank(admin);
 
@@ -46,13 +45,13 @@ contract S9_MultiAdapterMix is StressBase {
         uint16[] memory ws = new uint16[](3);
         uint16[] memory ps = new uint16[](3);
         bool[] memory asyncs = new bool[](3);
-        adps[0] = address(syncAdapter);  ws[0] = 4000; ps[0] = 1; asyncs[0] = false;
-        adps[1] = address(asyncAdapter); ws[1] = 3500; ps[1] = 2; asyncs[1] = true;
-        adps[2] = address(s9Sync2);      ws[2] = 2500; ps[2] = 3; asyncs[2] = false;
+        adps[0] = address(realSyncAdapter);  ws[0] = 4000; ps[0] = 1; asyncs[0] = false;
+        adps[1] = address(realAsyncAdapter); ws[1] = 3500; ps[1] = 2; asyncs[1] = true;
+        adps[2] = address(s9Sync2);          ws[2] = 2500; ps[2] = 3; asyncs[2] = false;
 
         address[] memory order = new address[](3);
-        order[0] = address(syncAdapter);
-        order[1] = address(asyncAdapter);
+        order[0] = address(realSyncAdapter);
+        order[1] = address(realAsyncAdapter);
         order[2] = address(s9Sync2);
 
         controller.updateStrategiesAndOrder(adps, ws, ps, asyncs, order);
@@ -122,8 +121,8 @@ contract S9_MultiAdapterMix is StressBase {
         _checkUsdcClosedSystem("S9:final:usdc");
 
         console2.log("[S9] Final totalAssets:", vault.totalAssets());
-        console2.log("[S9] sync1 value:", IStrategyAdapter(address(syncAdapter)).totalValue());
-        console2.log("[S9] async1 value:", IStrategyAdapter(address(asyncAdapter)).totalValue());
+        console2.log("[S9] sync1 value:", IStrategyAdapter(address(realSyncAdapter)).totalValue());
+        console2.log("[S9] async1 value:", IStrategyAdapter(address(realAsyncAdapter)).totalValue());
         console2.log("[S9] sync2 value:", IStrategyAdapter(address(s9Sync2)).totalValue());
 
         _logPass();
@@ -148,8 +147,7 @@ contract S9_MultiAdapterMix is StressBase {
         if (round % 10 == 0 && round > 0) {
             for (uint256 i = 0; i < _min(users.length / 4, 50); i++) {
                 if (usdc.balanceOf(users[i]) < LARGE_DEPOSIT) {
-                    MockUSDC_ST(address(usdc)).mint(users[i], LARGE_DEPOSIT);
-                    _totalUsdcInjected += LARGE_DEPOSIT;
+                    _mintUsdc(users[i], LARGE_DEPOSIT);
                 }
             }
         }
@@ -157,7 +155,7 @@ contract S9_MultiAdapterMix is StressBase {
 
     function _phaseC_settleInvest(uint256 round) internal {
         // sync1: normal settlement
-        _settleInvestForAdapter(address(syncAdapter), 0);
+        _settleInvestForAdapter(address(realSyncAdapter), 0);
 
         // sync2: random partial refund (0-30%)
         uint256 sync2Refund = _randBetween(0, 30);
@@ -165,7 +163,7 @@ contract S9_MultiAdapterMix is StressBase {
 
         // async1: normal or partial (0-20%)
         uint256 asyncRefund = _randBool(30) ? _randBetween(5, 20) : 0;
-        _settleInvestForAdapter(address(asyncAdapter), asyncRefund);
+        _settleInvestForAdapter(address(realAsyncAdapter), asyncRefund);
     }
 
     function _phaseD_redeemCycle(uint256 round) internal {
@@ -189,9 +187,9 @@ contract S9_MultiAdapterMix is StressBase {
 
         // Settle all redeem in-flights
         vm.warp(block.timestamp + 2 days);
-        _settleRedeemForAdapterNormal(address(syncAdapter));
-        _settleRedeemForAdapterNormal(address(s9Sync2));
-        _settleRedeemForAdapterAsync(address(asyncAdapter));
+        _settleRedeemForAdapter(address(realSyncAdapter));
+        _settleRedeemForAdapter(address(s9Sync2));
+        _settleRedeemForAdapter(address(realAsyncAdapter));
 
         // Finalize
         uint256[] memory processingIds = _getRequestIdsByStatus(IMantleYieldVault.RequestStatus.PROCESSING);
@@ -208,12 +206,11 @@ contract S9_MultiAdapterMix is StressBase {
                 totalNeeded += amount;
             }
 
-            // Inject shortfall if needed
+            // Ensure vault has enough cash via real user deposits
             uint256 available = usdc.balanceOf(address(vault));
             if (available < totalNeeded) {
-                uint256 shortfall = totalNeeded - available;
-                MockUSDC_ST(address(usdc)).mint(address(vault), shortfall);
-                _totalUsdcInjected += shortfall;
+                _topUpVaultCashViaDeposits(totalNeeded);
+                settledAssets = _computeSettledAssets(processingIds);
             }
 
             _finalizeRedeemBatch(processingIds, settledAssets);
@@ -221,7 +218,7 @@ contract S9_MultiAdapterMix is StressBase {
     }
 
     // =========================================================================
-    //  Settlement Helpers
+    //  Invest Settlement
     // =========================================================================
 
     function _settleInvestForAdapter(address adapter, uint256 refundPct) internal {
@@ -250,9 +247,11 @@ contract S9_MultiAdapterMix is StressBase {
             if (s != IMantleYieldVault.InFlightStatus.PENDING || !isInvest || ifAdapter != adapter) continue;
 
             ids[idx] = id;
-            _computeInvestEntry(adapter, id, idx, refundPct, settledPos, refunds);
+            _computeInvestEntry(id, idx, refundPct, settledPos, refunds);
             idx++;
         }
+
+        _preSettleInvest(adapter, ids, settledPos, refunds, count);
 
         _settleAdapter(
             adapter,
@@ -265,26 +264,85 @@ contract S9_MultiAdapterMix is StressBase {
         );
     }
 
+    /// @dev Pure math: compute settled pos and refund USDC for an invest entry
     function _computeInvestEntry(
-        address adapter, uint256 id, uint256 idx, uint256 refundPct,
+        uint256 id, uint256 idx, uint256 refundPct,
         uint256[] memory settledPos, uint256[] memory refunds
-    ) internal {
+    ) internal view {
         (uint256 tokenAmt, uint256 usdcAmt) = vault.ifTokenAndUsdc(id);
         uint256 refundUsdc = usdcAmt * refundPct / 100;
         uint256 settled = tokenAmt * (100 - refundPct) / 100;
         settledPos[idx] = settled;
         refunds[idx] = refundUsdc;
+    }
 
-        uint256 excessPos = tokenAmt - settled;
-        if (excessPos > 0) {
-            MockPosToken_ST(_posTokenOfAdapter(adapter)).burn(adapter, excessPos);
-        }
-        if (adapter == address(asyncAdapter) && refundUsdc > 0) {
-            _totalUsdcInjected += MockAsyncAdapter_ST(payable(address(asyncAdapter))).simulateRedeemSettlement(refundUsdc);
+    /// @dev Prepare adapter state before invest settlement
+    function _preSettleInvest(
+        address adapter, uint256[] memory ids, uint256[] memory settledPos, uint256[] memory refunds, uint256 count
+    ) internal {
+        if (adapter == address(realAsyncAdapter)) {
+            // Async adapter: mint ST via settleSubscribe + provide refund USDC
+            uint256 totalPos;
+            uint256 totalRefund;
+            for (uint256 i = 0; i < count; i++) {
+                totalPos += settledPos[i];
+                totalRefund += refunds[i];
+            }
+            if (totalPos > 0) {
+                vm.prank(admin);
+                mockSubRed.settleSubscribe(
+                    address(realAsyncAdapter), address(stToken), address(realAsyncAdapter), totalPos
+                );
+            }
+            if (totalRefund > 0) {
+                // Invest refund: USDC returns from SubRed via direct transfer
+                // (not settleRedeem — that requires a pending redeem position)
+                uint256 subRedBal = usdc.balanceOf(address(mockSubRed));
+                if (totalRefund > subRedBal) {
+                    totalRefund = subRedBal;
+                    if (count > 0) {
+                        uint256 perRefund = totalRefund / count;
+                        for (uint256 i = 0; i < count; i++) refunds[i] = perRefund;
+                    }
+                }
+                if (totalRefund > 0) {
+                    vm.prank(address(mockSubRed));
+                    usdc.transfer(address(realAsyncAdapter), totalRefund);
+                }
+            }
+        } else {
+            // Sync adapter (realSyncAdapter or s9Sync2):
+            // Adapter has all 4626 shares from deposit, but no USDC.
+            // For refund: redeem excess shares from ERC4626 to provide USDC on adapter.
+            uint256 totalExcessShares;
+            for (uint256 i = 0; i < count; i++) {
+                uint256 tokenAmt = vault.ifTokenAmount(ids[i]);
+                totalExcessShares += tokenAmt - settledPos[i];
+            }
+            if (totalExcessShares > 0) {
+                address target = _targetVaultFor(adapter);
+                vm.prank(adapter);
+                uint256 redeemedUsdc = IERC4626(target).redeem(totalExcessShares, adapter, adapter);
+                // Adjust refunds to match actual USDC obtained from redeem
+                uint256 totalOrigRefund;
+                for (uint256 i = 0; i < count; i++) totalOrigRefund += refunds[i];
+                if (totalOrigRefund > 0 && redeemedUsdc != totalOrigRefund) {
+                    uint256 distributed;
+                    for (uint256 i = 0; i < count - 1; i++) {
+                        refunds[i] = redeemedUsdc * refunds[i] / totalOrigRefund;
+                        distributed += refunds[i];
+                    }
+                    refunds[count - 1] = redeemedUsdc - distributed;
+                }
+            }
         }
     }
 
-    function _settleRedeemForAdapterNormal(address adapter) internal {
+    // =========================================================================
+    //  Redeem Settlement
+    // =========================================================================
+
+    function _settleRedeemForAdapter(address adapter) internal {
         uint256 nextIfId = vault.nextInFlightId();
 
         uint256 count;
@@ -295,10 +353,6 @@ contract S9_MultiAdapterMix is StressBase {
         }
         if (count == 0) return;
 
-        _buildAndSettleRedeem(adapter, nextIfId, count);
-    }
-
-    function _buildAndSettleRedeem(address adapter, uint256 nextIfId, uint256 count) internal {
         uint256[] memory ids = new uint256[](count);
         uint256[] memory settled = new uint256[](count);
         uint256 idx;
@@ -313,49 +367,34 @@ contract S9_MultiAdapterMix is StressBase {
             idx++;
         }
 
-        _settleAdapter(
-            adapter,
-            _emptyInvestInput(),
-            IStrategyControllerExecutor.RedeemSettlementInput({
-                inFlightIds: ids,
-                settledAssetAmounts: settled
-            })
-        );
-    }
-
-    function _settleRedeemForAdapterAsync(address adapter) internal {
-        uint256 nextIfId = vault.nextInFlightId();
-
-        uint256 count;
-        for (uint256 id = _baseInFlightId; id < nextIfId; id++) {
-            (address ifAdapter, bool isInvest, IMantleYieldVault.InFlightStatus s) =
-                vault.ifAdapterAndStatus(id);
-            if (s == IMantleYieldVault.InFlightStatus.PENDING && !isInvest && ifAdapter == adapter) count++;
+        // For async adapter: settle redeem via mockSubRed — transfer USDC to adapter
+        if (adapter == address(realAsyncAdapter)) {
+            uint256 totalNeeded;
+            for (uint256 j = 0; j < count; j++) totalNeeded += settled[j];
+            if (totalNeeded > 0) {
+                uint256 subRedBal = usdc.balanceOf(address(mockSubRed));
+                if (totalNeeded > subRedBal) {
+                    totalNeeded = subRedBal;
+                    if (count > 0) {
+                        uint256 perRedeem = totalNeeded / count;
+                        for (uint256 j = 0; j < count; j++) settled[j] = perRedeem;
+                    }
+                }
+                if (totalNeeded > 0) {
+                    (, uint256 redeemPos) = mockSubRed.pending(address(realAsyncAdapter), address(stToken));
+                    if (redeemPos > 0) {
+                        vm.prank(admin);
+                        mockSubRed.settleRedeem(
+                            address(realAsyncAdapter), address(stToken), address(usdc), address(realAsyncAdapter), totalNeeded
+                        );
+                    } else {
+                        vm.prank(address(mockSubRed));
+                        usdc.transfer(address(realAsyncAdapter), totalNeeded);
+                    }
+                }
+            }
         }
-        if (count == 0) return;
-
-        _buildAndSettleRedeemAsync(adapter, nextIfId, count);
-    }
-
-    function _buildAndSettleRedeemAsync(address adapter, uint256 nextIfId, uint256 count) internal {
-        uint256[] memory ids = new uint256[](count);
-        uint256[] memory settled = new uint256[](count);
-        uint256 idx;
-
-        for (uint256 id = _baseInFlightId; id < nextIfId; id++) {
-            (address ifAdapter, bool isInvest, IMantleYieldVault.InFlightStatus s) =
-                vault.ifAdapterAndStatus(id);
-            if (s != IMantleYieldVault.InFlightStatus.PENDING || isInvest || ifAdapter != adapter) continue;
-
-            ids[idx] = id;
-            settled[idx] = vault.ifUsdcAmount(id);
-            idx++;
-        }
-
-        // Release USDC from "external protocol" hold
-        uint256 totalNeeded;
-        for (uint256 j = 0; j < count; j++) totalNeeded += settled[j];
-        _totalUsdcInjected += MockAsyncAdapter_ST(payable(address(asyncAdapter))).simulateRedeemSettlement(totalNeeded);
+        // Sync adapters: USDC already on adapter from withdrawSync during divest
 
         _settleAdapter(
             adapter,
@@ -371,17 +410,23 @@ contract S9_MultiAdapterMix is StressBase {
     //  Periodic Actions
     // =========================================================================
 
+    /// @dev Simulate yield on the sync2 ERC4626 vault to change posToken price
     function _jitterS9Sync2Price() internal {
-        uint256 currentPrice = s9Sync2.posTokenPrice();
-        uint256 delta = currentPrice * _randBetween(1, 500) / 10_000; // ±5%
-        uint256 newPrice;
-        if (_randBool(50)) {
-            newPrice = currentPrice + delta;
-        } else {
-            newPrice = currentPrice > delta ? currentPrice - delta : currentPrice;
+        uint256 totalSupply = s9Target2.totalSupply();
+        if (totalSupply == 0) return;
+
+        uint256 totalAssets = s9Target2.totalAssets();
+        uint256 currentPrice = totalAssets * 1e18 / totalSupply;
+
+        // Simulate yield: mint 0.01-5% of totalAssets as additional USDC
+        uint256 yieldBps = _randBetween(1, 500);
+        uint256 yieldAmount = totalAssets * yieldBps / 10_000;
+        if (yieldAmount > 0) {
+            _simulateYield(s9Target2, yieldAmount);
         }
-        s9Sync2.setPosTokenPrice(newPrice);
-        logInfo(string.concat("[PRICE_UPDATE] token=sync2 old=", _toStr(currentPrice), " new=", _toStr(newPrice)));
+
+        uint256 newPrice = s9Target2.totalAssets() * 1e18 / totalSupply;
+        logInfo(string.concat("[PRICE_UPDATE] sync2 old=", _toStr(currentPrice), " new=", _toStr(newPrice)));
     }
 
     function _rotateWeights(uint256 round) internal {
@@ -401,9 +446,9 @@ contract S9_MultiAdapterMix is StressBase {
         uint16[] memory ps = new uint16[](3);
         bool[] memory asyncs = new bool[](3);
 
-        adps[0] = address(syncAdapter);  ws[0] = w1; ps[0] = 1; asyncs[0] = false;
-        adps[1] = address(asyncAdapter); ws[1] = w2; ps[1] = 2; asyncs[1] = true;
-        adps[2] = address(s9Sync2);      ws[2] = w3; ps[2] = 3; asyncs[2] = false;
+        adps[0] = address(realSyncAdapter);  ws[0] = w1; ps[0] = 1; asyncs[0] = false;
+        adps[1] = address(realAsyncAdapter); ws[1] = w2; ps[1] = 2; asyncs[1] = true;
+        adps[2] = address(s9Sync2);          ws[2] = w3; ps[2] = 3; asyncs[2] = false;
 
         vm.prank(admin);
         controller.updateStrategies(adps, ws, ps, asyncs);
@@ -415,7 +460,7 @@ contract S9_MultiAdapterMix is StressBase {
     //  Overrides
     // =========================================================================
 
-    /// @dev Override USDC closed-system check to include the third adapter
+    /// @dev Override USDC closed-system check to include the third adapter and all related addresses
     function _checkUsdcClosedSystem(string memory ctx) internal view override {
         if (IS_FORK) return;
 
@@ -425,9 +470,15 @@ contract S9_MultiAdapterMix is StressBase {
         }
         totalInSystem += usdc.balanceOf(address(vault));
         totalInSystem += usdc.balanceOf(sanctionSafe);
-        totalInSystem += usdc.balanceOf(address(syncAdapter));
-        totalInSystem += usdc.balanceOf(address(asyncAdapter));
+        // Real sync adapter #1 + its ERC4626 target
+        totalInSystem += usdc.balanceOf(address(realSyncAdapter));
+        totalInSystem += usdc.balanceOf(address(sync4626Target));
+        // Real async adapter + mockSubRed
+        totalInSystem += usdc.balanceOf(address(realAsyncAdapter));
+        totalInSystem += usdc.balanceOf(address(mockSubRed));
+        // Third adapter (sync2) + its ERC4626 target
         totalInSystem += usdc.balanceOf(address(s9Sync2));
+        totalInSystem += usdc.balanceOf(address(s9Target2));
 
         assertEq(totalInSystem, _totalUsdcInjected, string.concat(ctx, " USDC closed system (3-adapter)"));
     }
@@ -436,10 +487,15 @@ contract S9_MultiAdapterMix is StressBase {
     //  Helpers
     // =========================================================================
 
-    function _posTokenOfAdapter(address adapter) internal view returns (address) {
-        if (adapter == address(syncAdapter)) return address(syncPosToken);
-        if (adapter == address(asyncAdapter)) return address(asyncPosToken);
-        if (adapter == address(s9Sync2)) return address(s9PosToken2);
-        revert("S9: unknown adapter");
+    function _targetVaultFor(address adapter) internal view returns (address) {
+        if (adapter == address(realSyncAdapter)) return address(sync4626Target);
+        if (adapter == address(s9Sync2)) return address(s9Target2);
+        revert("S9: no target for adapter");
+    }
+
+    function _adapterTotalValue() internal view override returns (uint256) {
+        return IStrategyAdapter(address(realSyncAdapter)).totalValue()
+            + IStrategyAdapter(address(realAsyncAdapter)).totalValue()
+            + IStrategyAdapter(address(s9Sync2)).totalValue();
     }
 }

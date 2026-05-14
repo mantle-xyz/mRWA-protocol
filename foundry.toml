@@ -7,6 +7,10 @@ optimizer = true
 optimizer_runs = 200
 via_ir = true
 
+[profile.stress]
+memory_limit = 2_147_483_648
+fs_permissions = [{ access = "read-write", path = "stress_logs" }]
+
 [fmt]
 line_length = 120
 tab_width = 4

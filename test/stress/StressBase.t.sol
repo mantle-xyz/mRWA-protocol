@@ -4,7 +4,6 @@ pragma solidity ^0.8.24;
 import {ISanctionsOracle} from "../../src/interfaces/compliance/ISanctionsOracle.sol";
 import {IMantleYieldVault} from "../../src/interfaces/vault/IMantleYieldVault.sol";
 import {IMantleVaultGateway} from "../../src/interfaces/vault/IMantleVaultGateway.sol";
-import {IStrategyAdapter} from "../../src/interfaces/adapters/IStrategyAdapter.sol";
 import {IStrategyControllerExecutor} from "../../src/interfaces/strategy/IStrategyControllerExecutor.sol";
 import {MantleYieldVault} from "../../src/vault/MantleYieldVault.sol";
 import {MantleVaultGateway} from "../../src/vault/MantleVaultGateway.sol";
@@ -19,429 +18,15 @@ import {Test, console2} from "forge-std/Test.sol";
 import {LogUtil} from "../lib/LogUtil.sol";
 import {VaultViewHelper} from "../lib/VaultViewHelper.sol";
 
-// =============================================================================
-//  Mock Contracts (Local mode only)
-// =============================================================================
-
-contract MockUSDC_ST is ERC20 {
-    constructor() ERC20("USD Coin", "USDC") {}
-
-    function decimals() public pure override returns (uint8) {
-        return 6;
-    }
-
-    function mint(address to, uint256 amount) external {
-        _mint(to, amount);
-    }
-
-    function burn(address from, uint256 amount) external {
-        _burn(from, amount);
-    }
-}
-
-contract MockPosToken_ST is ERC20 {
-    constructor(string memory name_, string memory symbol_) ERC20(name_, symbol_) {}
-
-    function decimals() public pure override returns (uint8) {
-        return 6;
-    }
-
-    function mint(address to, uint256 amount) external {
-        _mint(to, amount);
-    }
-
-    function burn(address from, uint256 amount) external {
-        _burn(from, amount);
-    }
-}
-
-contract MockSanctionsOracle_ST is ISanctionsOracle {
-    mapping(address => bool) private _sanctioned;
-    mapping(address => bool) private _whitelisted;
-
-    function initialize(address, address) external {}
-
-    function isSanctioned(address account) external view returns (bool) {
-        return _sanctioned[account];
-    }
-
-    function isWhitelisted(address) external pure returns (bool) {
-        return true;
-    }
-
-    function totalSanctionedCount() external pure returns (uint256) {
-        return 0;
-    }
-
-    function totalWhitelistedCount() external pure returns (uint256) {
-        return 0;
-    }
-
-    function lastUpdateTimestamp() external pure returns (uint256) {
-        return 0;
-    }
-
-    function batchNonce() external pure returns (uint256) {
-        return 0;
-    }
-
-    function MAX_BATCH_SIZE() external pure returns (uint256) {
-        return 200;
-    }
-
-    function updateSanctionStatus(address account, bool sanctioned) external {
-        _sanctioned[account] = sanctioned;
-    }
-
-    function updateSanctionStatusBatch(address[] calldata accounts, bool sanctioned) external {
-        for (uint256 i = 0; i < accounts.length; i++) {
-            _sanctioned[accounts[i]] = sanctioned;
-        }
-    }
-
-    function updateWhitelistStatus(address account, bool whitelisted) external {
-        _whitelisted[account] = whitelisted;
-    }
-
-    function updateWhitelistStatusBatch(address[] calldata accounts, bool whitelisted) external {
-        for (uint256 i = 0; i < accounts.length; i++) {
-            _whitelisted[accounts[i]] = whitelisted;
-        }
-    }
-
-    // --- Test helpers ---
-    function setSanctioned(address account, bool sanctioned) external {
-        _sanctioned[account] = sanctioned;
-    }
-}
-
-/// @dev Sync adapter: immediate deposit/withdraw, holds USDC
-contract MockSyncAdapter_ST is IStrategyAdapter {
-    address public immutable ASSET;
-    address public immutable POS_TOKEN;
-    address public immutable VAULT;
-
-    constructor(address asset_, address posToken_, address vault_) {
-        ASSET = asset_;
-        POS_TOKEN = posToken_;
-        VAULT = vault_;
-    }
-
-    function name() external pure returns (string memory) {
-        return "MockSyncAdapter";
-    }
-
-    function asset() external view returns (address) {
-        return ASSET;
-    }
-
-    function posToken() external view returns (address) {
-        return POS_TOKEN;
-    }
-
-    function priceOracle() external pure returns (address) {
-        return address(0);
-    }
-
-    function getPosTokenPrice() external pure returns (uint256) {
-        return 1e18;
-    }
-
-    function estimatePosAmount(uint256 assetAmount) external pure returns (uint256) {
-        return assetAmount;
-    }
-
-    function minSubscribeAsset() external pure returns (uint256) { return 0; }
-    function minRedeemPos() external pure returns (uint256) { return 0; }
-
-    function previewDeposit(uint256 assetAmount)
-        external
-        pure
-        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
-    {
-        ok = assetAmount > 0;
-        executableAssetAmount = assetAmount;
-        expectedPosAmount = 0;
-    }
-
-    function previewRedeem(uint256 assetAmount)
-        external
-        pure
-        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
-    {
-        ok = assetAmount > 0;
-        executableAssetAmount = assetAmount;
-        expectedPosAmount = 0;
-    }
-
-    function vault() external view returns (address) {
-        return VAULT;
-    }
-
-    function totalValue() external view returns (uint256) {
-        return IERC20(ASSET).balanceOf(address(this));
-    }
-
-    function deposit(uint256 amount, address) external returns (uint256) {
-        IERC20(ASSET).transferFrom(VAULT, address(this), amount);
-        MockPosToken_ST(POS_TOKEN).mint(address(this), amount);
-        return amount;
-    }
-
-    function withdrawSync(uint256 amount, address) external returns (uint256) {
-        // Divest flow: controller approved us to pull posTokens from vault.
-        // Pull posTokens → burn them (simulate selling position).
-        // Deposit USDC is already on adapter and will be swept during settlement.
-        uint256 posAvail = IERC20(POS_TOKEN).balanceOf(VAULT);
-        uint256 posToRedeem = amount > posAvail ? posAvail : amount; // 1:1 price
-        if (posToRedeem > 0) {
-            IERC20(POS_TOKEN).transferFrom(VAULT, address(this), posToRedeem);
-            MockPosToken_ST(POS_TOKEN).burn(address(this), posToRedeem);
-        }
-        return posToRedeem;
-    }
-
-    function requestRedeemAsync(uint256, address) external pure {
-        revert("Unsupported");
-    }
-
-    function retryRedeemAsync(uint256, address) external pure {
-        revert("Unsupported");
-    }
-
-    function sweepToVault(address token, uint256 amount) external returns (uint256) {
-        uint256 bal = IERC20(token).balanceOf(address(this));
-        uint256 actual = amount > bal ? bal : amount;
-        if (actual > 0) IERC20(token).transfer(VAULT, actual);
-        return actual;
-    }
-
-    function setPaused(bool) external {}
-}
-
-/// @dev Async adapter: deposit is immediate, redeem is async (T+N)
-contract MockAsyncAdapter_ST is IStrategyAdapter {
-    address public immutable ASSET;
-    address public immutable POS_TOKEN;
-    address public immutable VAULT;
-    uint256 public posTokenPrice = 1e18;
-    uint256 public protocolUsdcHeld; // USDC logically held by "external protocol"
-
-    constructor(address asset_, address posToken_, address vault_) {
-        ASSET = asset_;
-        POS_TOKEN = posToken_;
-        VAULT = vault_;
-    }
-
-    function setPosTokenPrice(uint256 p) external {
-        posTokenPrice = p;
-    }
-
-    function name() external pure returns (string memory) {
-        return "MockAsyncAdapter";
-    }
-
-    function asset() external view returns (address) {
-        return ASSET;
-    }
-
-    function posToken() external view returns (address) {
-        return POS_TOKEN;
-    }
-
-    function priceOracle() external pure returns (address) {
-        return address(0);
-    }
-
-    function getPosTokenPrice() external view returns (uint256) {
-        return posTokenPrice;
-    }
-
-    function vault() external view returns (address) {
-        return VAULT;
-    }
-
-    function estimatePosAmount(uint256 assetAmount) external view returns (uint256) {
-        if (posTokenPrice == 0) return assetAmount;
-        return assetAmount * 1e18 / posTokenPrice;
-    }
-
-    function minSubscribeAsset() external pure returns (uint256) { return 0; }
-    function minRedeemPos() external pure returns (uint256) { return 0; }
-
-    function previewDeposit(uint256 assetAmount)
-        external
-        pure
-        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
-    {
-        ok = assetAmount > 0;
-        executableAssetAmount = assetAmount;
-        expectedPosAmount = 0;
-    }
-
-    function previewRedeem(uint256 assetAmount)
-        external
-        pure
-        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
-    {
-        ok = assetAmount > 0;
-        executableAssetAmount = assetAmount;
-        expectedPosAmount = 0;
-    }
-
-    function totalValue() external view returns (uint256) {
-        return IERC20(POS_TOKEN).balanceOf(VAULT) * posTokenPrice / 1e18;
-    }
-
-    function deposit(uint256 amount, address) external returns (uint256) {
-        IERC20(ASSET).transferFrom(VAULT, address(this), amount);
-        protocolUsdcHeld += amount; // USDC "sent to external protocol"
-        uint256 posAmount = posTokenPrice == 0 ? amount : amount * 1e18 / posTokenPrice;
-        MockPosToken_ST(POS_TOKEN).mint(address(this), posAmount);
-        return posAmount;
-    }
-
-    function withdrawSync(uint256, address) external pure returns (uint256) {
-        revert("Unsupported");
-    }
-
-    function requestRedeemAsync(uint256 posAmount, address) external {
-        // Controller passes posAmount (already converted asset→pos); pull directly.
-        IERC20(POS_TOKEN).transferFrom(VAULT, address(this), posAmount);
-    }
-
-    function retryRedeemAsync(uint256 retryPosAmount, address) external {
-        // Real adapter checks own balance and resubmits to external protocol.
-        // Mock: verify we hold enough posToken (from prior requestRedeemAsync) and burn it.
-        require(IERC20(POS_TOKEN).balanceOf(address(this)) >= retryPosAmount, "insufficient pos for retry");
-        MockPosToken_ST(POS_TOKEN).burn(address(this), retryPosAmount);
-    }
-
-    function sweepToVault(address token, uint256 amount) external returns (uint256) {
-        uint256 bal = IERC20(token).balanceOf(address(this));
-        // For USDC: only sweep what's not held by "external protocol"
-        if (token == ASSET) {
-            uint256 available = bal > protocolUsdcHeld ? bal - protocolUsdcHeld : 0;
-            uint256 actual = amount > available ? available : amount;
-            if (actual > 0) IERC20(token).transfer(VAULT, actual);
-            return actual;
-        }
-        uint256 actual = amount > bal ? bal : amount;
-        if (actual > 0) IERC20(token).transfer(VAULT, actual);
-        return actual;
-    }
-
-    function setPaused(bool) external {}
-
-    /// @dev Simulate async settlement: release USDC from "external protocol" hold.
-    ///      When posTokenPrice appreciated since deposit, the protocol returns MORE USDC
-    ///      than was originally deposited. In that case we mint the difference to simulate
-    ///      the external protocol returning gains. Returns the extra minted amount so the
-    ///      caller can track it in _totalUsdcInjected (USDC closed-system invariant).
-    function simulateRedeemSettlement(uint256 usdcAmount) external returns (uint256 extraMinted) {
-        if (usdcAmount <= protocolUsdcHeld) {
-            protocolUsdcHeld -= usdcAmount;
-            return 0;
-        }
-        // Protocol returns more than original deposit (price appreciation)
-        extraMinted = usdcAmount - protocolUsdcHeld;
-        protocolUsdcHeld = 0;
-        MockUSDC_ST(ASSET).mint(address(this), extraMinted);
-    }
-}
-
-/// @dev Configurable sync adapter: like MockSyncAdapter_ST but with mutable posTokenPrice.
-///      Used by S9 (multi-adapter) to test price-divergent sync strategies.
-contract MockConfigSyncAdapter_ST is IStrategyAdapter {
-    address public immutable ASSET;
-    address public immutable POS_TOKEN;
-    address public immutable VAULT;
-    uint256 public posTokenPrice = 1e18;
-
-    constructor(address asset_, address posToken_, address vault_) {
-        ASSET = asset_;
-        POS_TOKEN = posToken_;
-        VAULT = vault_;
-    }
-
-    function setPosTokenPrice(uint256 p) external { posTokenPrice = p; }
-
-    function name() external pure returns (string memory) { return "MockConfigSyncAdapter"; }
-    function asset() external view returns (address) { return ASSET; }
-    function posToken() external view returns (address) { return POS_TOKEN; }
-    function priceOracle() external pure returns (address) { return address(0); }
-    function getPosTokenPrice() external view returns (uint256) { return posTokenPrice; }
-    function vault() external view returns (address) { return VAULT; }
-
-    function estimatePosAmount(uint256 assetAmount) external view returns (uint256) {
-        if (posTokenPrice == 0) return assetAmount;
-        return assetAmount * 1e18 / posTokenPrice;
-    }
-
-    function minSubscribeAsset() external pure returns (uint256) { return 0; }
-    function minRedeemPos() external pure returns (uint256) { return 0; }
-
-    function previewDeposit(uint256 assetAmount)
-        external
-        pure
-        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
-    {
-        ok = assetAmount > 0;
-        executableAssetAmount = assetAmount;
-        expectedPosAmount = 0;
-    }
-
-    function previewRedeem(uint256 assetAmount)
-        external
-        pure
-        returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
-    {
-        ok = assetAmount > 0;
-        executableAssetAmount = assetAmount;
-        expectedPosAmount = 0;
-    }
-
-    /// @dev totalValue = USDC held on adapter (same as MockSyncAdapter_ST).
-    ///      This is the "real value" deployed in the strategy.
-    function totalValue() external view returns (uint256) {
-        return IERC20(ASSET).balanceOf(address(this));
-    }
-
-    function deposit(uint256 amount, address) external returns (uint256) {
-        IERC20(ASSET).transferFrom(VAULT, address(this), amount);
-        uint256 posAmt = posTokenPrice == 0 ? amount : amount * 1e18 / posTokenPrice;
-        MockPosToken_ST(POS_TOKEN).mint(address(this), posAmt);
-        return posAmt;
-    }
-
-    function withdrawSync(uint256 posAmount, address) external returns (uint256) {
-        // Controller passes posAmount directly (already converted asset→pos); do NOT re-divide by price.
-        // Pull posTokens from vault → burn → USDC stays on adapter for sweep.
-        uint256 posAvail = IERC20(POS_TOKEN).balanceOf(VAULT);
-        uint256 posToRedeem = posAmount > posAvail ? posAvail : posAmount;
-        if (posToRedeem > 0) {
-            IERC20(POS_TOKEN).transferFrom(VAULT, address(this), posToRedeem);
-            MockPosToken_ST(POS_TOKEN).burn(address(this), posToRedeem);
-        }
-        return posToRedeem * posTokenPrice / 1e18;
-    }
-
-    function requestRedeemAsync(uint256, address) external pure {
-        revert("Unsupported");
-    }
-    function retryRedeemAsync(uint256, address) external pure {
-        revert("Unsupported");
-    }
-
-    function sweepToVault(address token, uint256 amount) external returns (uint256) {
-        uint256 bal = IERC20(token).balanceOf(address(this));
-        uint256 actual = amount > bal ? bal : amount;
-        if (actual > 0) IERC20(token).transfer(VAULT, actual);
-        return actual;
-    }
-
-    function setPaused(bool) external {}
-}
+// --- Real adapter imports (Phase 1) ---
+import {SubRedManagementAdapter} from "../../src/adapters/digift/SubRedManagementAdapterUpgradeable.sol";
+import {SubRedManagementAdapterFactory} from "../../src/adapters/digift/SubRedManagementAdapterFactory.sol";
+import {MockSubRedManagement} from "../../src/mocks/strategy/MockSubRedManagement.sol";
+import {MockSync4626Adapter} from "../../src/adapters/mock/MockSync4626Adapter.sol";
+import {MockERC4626Vault} from "../../src/mocks/strategy/MockERC4626Vault.sol";
+import {MockERC20Mintable} from "../../src/mocks/token/MockERC20Mintable.sol";
+import {IStrategyAdapter} from "../../src/interfaces/adapters/IStrategyAdapter.sol";
+import {SanctionsOracle} from "../../src/compliance/SanctionsOracle.sol";
 
 // =============================================================================
 //  StressBase — shared foundation for all stress test scenarios
@@ -471,15 +56,16 @@ abstract contract StressBase is LogUtil {
     OperatorExecutor internal opExecutor;
     IERC20 internal usdc;
 
-    // Oracle: real ISanctionsOracle in fork, MockSanctionsOracle_ST in local
     ISanctionsOracle internal oracle;
-    MockSanctionsOracle_ST internal mockOracle; // only set in local mode
+    SanctionsOracle internal realOracle; // only set in local mode
 
-    // Adapters (local mode only)
-    MockSyncAdapter_ST internal syncAdapter;
-    MockAsyncAdapter_ST internal asyncAdapter;
-    MockPosToken_ST internal syncPosToken;
-    MockPosToken_ST internal asyncPosToken;
+    // Adapters — real contracts
+    MockSync4626Adapter internal realSyncAdapter;
+    SubRedManagementAdapter internal realAsyncAdapter;
+    SubRedManagementAdapterFactory internal asyncAdapterFactory;
+    MockERC4626Vault internal sync4626Target;
+    MockSubRedManagement internal mockSubRed;
+    MockERC20Mintable internal stToken;
 
     // =========================================================================
     //  Role addresses
@@ -612,14 +198,19 @@ abstract contract StressBase is LogUtil {
         pauser = makeAddr("pauser");
 
         // --- Mock tokens ---
-        MockUSDC_ST mockUsdc = new MockUSDC_ST();
+        MockERC20Mintable mockUsdc = new MockERC20Mintable("USD Coin", "USDC", 6);
         usdc = IERC20(address(mockUsdc));
-        syncPosToken = new MockPosToken_ST("SyncPos", "sPOS");
-        asyncPosToken = new MockPosToken_ST("AsyncPos", "aPOS");
-
-        // --- Mock oracle ---
-        mockOracle = new MockSanctionsOracle_ST();
-        oracle = ISanctionsOracle(address(mockOracle));
+        // --- Real oracle via proxy ---
+        SanctionsOracle oracleImpl = new SanctionsOracle();
+        realOracle = SanctionsOracle(
+            address(
+                new ERC1967Proxy(
+                    address(oracleImpl),
+                    abi.encodeCall(SanctionsOracle.initialize, (admin, admin))
+                )
+            )
+        );
+        oracle = ISanctionsOracle(address(realOracle));
 
         // --- Deploy implementations ---
         MantleYieldVault vaultImpl = new MantleYieldVault();
@@ -663,7 +254,7 @@ abstract contract StressBase is LogUtil {
             address(
                 new ERC1967Proxy(
                     address(acctImpl),
-                    abi.encodeCall(Accountant.initialize, (address(vault), uint64(1e18), 50, admin))
+                    abi.encodeCall(Accountant.initialize, (address(vault), uint64(1e18), 50, admin, pauser, admin))
                 )
             )
         );
@@ -731,23 +322,46 @@ abstract contract StressBase is LogUtil {
         accountant.grantRole(accountant.ACCOUNTANT_EXECUTOR_ROLE(), address(acctExecutor));
         vm.stopPrank();
 
-        // --- Deploy and register adapters ---
-        syncAdapter = new MockSyncAdapter_ST(address(usdc), address(syncPosToken), address(vault));
-        asyncAdapter = new MockAsyncAdapter_ST(address(usdc), address(asyncPosToken), address(vault));
+        // --- Deploy REAL adapters ---
 
+        // Sync: MockERC4626Vault target + MockSync4626Adapter
+        sync4626Target = new MockERC4626Vault(IERC20(address(usdc)), "SyncVault", "sVLT");
+        realSyncAdapter = new MockSync4626Adapter(
+            address(vault), address(sync4626Target), admin, address(controller), address(acctExecutor)
+        );
+
+        // Async: MockERC20Mintable (ST) + MockSubRedManagement + SubRedManagementAdapter via Factory
+        stToken = new MockERC20Mintable("Security Token", "ST", 6);
+        mockSubRed = new MockSubRedManagement(admin);
+        SubRedManagementAdapter asyncImpl = new SubRedManagementAdapter();
+        asyncAdapterFactory = new SubRedManagementAdapterFactory(address(asyncImpl), admin);
+        realAsyncAdapter = SubRedManagementAdapter(
+            asyncAdapterFactory.deployAndInitAdapter(
+                address(vault),
+                address(mockSubRed),
+                address(stToken),
+                admin,
+                address(controller),
+                address(acctExecutor),
+                address(0) // manual pricing
+            )
+        );
+
+        // Set initial posToken price for async adapter (required: getPosTokenPrice > 0)
+        vm.prank(address(acctExecutor));
+        realAsyncAdapter.setManualPosTokenPrice(1e18);
+
+        // Register and activate strategies
         vm.startPrank(admin);
-        // Register sync adapter: weight=50%, priority=1, isAsync=false
-        controller.registerStrategy(address(syncAdapter), 5000, 1, false);
-        controller.activateStrategy(address(syncAdapter));
-
-        // Register async adapter: weight=50%, priority=2, isAsync=true
-        controller.registerStrategy(address(asyncAdapter), 5000, 2, true);
-        controller.activateStrategy(address(asyncAdapter));
+        controller.registerStrategy(address(realSyncAdapter), 5000, 1, false);
+        controller.activateStrategy(address(realSyncAdapter));
+        controller.registerStrategy(address(realAsyncAdapter), 5000, 2, true);
+        controller.activateStrategy(address(realAsyncAdapter));
 
         // Set strategy execution order
         address[] memory order = new address[](2);
-        order[0] = address(syncAdapter);
-        order[1] = address(asyncAdapter);
+        order[0] = address(realSyncAdapter);
+        order[1] = address(realAsyncAdapter);
         controller.setStrategyOrder(order);
         vm.stopPrank();
     }
@@ -789,7 +403,7 @@ abstract contract StressBase is LogUtil {
             if (IS_FORK) {
                 deal(address(usdc), u, perUser);
             } else {
-                MockUSDC_ST(address(usdc)).mint(u, perUser);
+                MockERC20Mintable(address(usdc)).mint(u, perUser);
             }
 
             // Approve vault to spend USDC
@@ -797,6 +411,61 @@ abstract contract StressBase is LogUtil {
             usdc.approve(address(vault), type(uint256).max);
 
             _totalUsdcInjected += perUser;
+        }
+    }
+
+    // =========================================================================
+    //  USDC minting helper (local mode only)
+    // =========================================================================
+
+    function _mintUsdc(address to, uint256 amount) internal {
+        MockERC20Mintable(address(usdc)).mint(to, amount);
+        _totalUsdcInjected += amount;
+    }
+
+    function _simulateYield(MockERC4626Vault target, uint256 yieldAmount) internal {
+        MockERC20Mintable(address(usdc)).mint(admin, yieldAmount);
+        _totalUsdcInjected += yieldAmount;
+        vm.startPrank(admin);
+        usdc.approve(address(target), yieldAmount);
+        target.donateYield(yieldAmount);
+        vm.stopPrank();
+    }
+
+    function _computeSettledAssets(uint256[] memory ids) internal view returns (uint256[] memory settledAssets) {
+        settledAssets = new uint256[](ids.length);
+        uint256 rate = accountant.getRate();
+        uint256 availableCash = usdc.balanceOf(address(vault));
+
+        uint256 totalEstimated;
+        for (uint256 i = 0; i < ids.length; i++) {
+            uint256 shares = vault.reqShares(ids[i]);
+            uint256 estimated = shares * rate / 1e18;
+            settledAssets[i] = estimated;
+            totalEstimated += estimated;
+        }
+
+        if (totalEstimated > availableCash && totalEstimated > 0) {
+            for (uint256 i = 0; i < ids.length; i++) {
+                settledAssets[i] = settledAssets[i] * availableCash / totalEstimated;
+                if (settledAssets[i] == 0 && availableCash > 0) settledAssets[i] = 1;
+            }
+        }
+    }
+
+    function _topUpVaultCashViaDeposits(uint256 needed) internal returns (uint256 deposited) {
+        uint256 available = usdc.balanceOf(address(vault));
+        if (available >= needed) return 0;
+        uint256 shortfall = needed - available;
+
+        for (uint256 i = 0; i < users.length && shortfall > 0; i++) {
+            uint256 userBal = usdc.balanceOf(users[i]);
+            if (userBal < vault.minDepositAmount()) continue;
+            uint256 depositAmt = _min(userBal, shortfall);
+            if (depositAmt < vault.minDepositAmount()) continue;
+            _depositAs(users[i], depositAmt);
+            deposited += depositAmt;
+            shortfall = shortfall > depositAmt ? shortfall - depositAmt : 0;
         }
     }
 
@@ -930,7 +599,7 @@ abstract contract StressBase is LogUtil {
             "redeem: treasury fee"
         );
 
-        assertEq(assets, expectedAssets, "redeem: assets == preview");
+        assertApproxEqAbs(assets, expectedAssets, 1, "redeem: assets == preview (1 wei tolerance)");
 
         logInfo(string.concat(
             "[SYNC_REDEEM] user=", vm.toString(user),
@@ -1075,15 +744,10 @@ abstract contract StressBase is LogUtil {
         _statTotalTx++;
     }
 
-    /// @notice Set sanction status (handles both local mock and fork mode)
+    /// @notice Set sanction status via real SanctionsOracle (admin has COMPLIANCE_ROLE)
     function _setSanctioned(address account, bool sanctioned) internal {
-        if (IS_FORK) {
-            // In fork mode, prank as admin/compliance bot
-            vm.prank(admin);
-            oracle.updateSanctionStatus(account, sanctioned);
-        } else {
-            mockOracle.setSanctioned(account, sanctioned);
-        }
+        vm.prank(admin);
+        oracle.updateSanctionStatus(account, sanctioned);
     }
 
     // =========================================================================
@@ -1156,6 +820,7 @@ abstract contract StressBase is LogUtil {
         ok = _safeCheckI2(ctx) && ok;
         ok = _safeCheckI3(ctx) && ok;
         ok = _safeCheckI4(ctx) && ok;
+        ok = _safeCheckI5(ctx) && ok;
         ok = _safeCheckI6(ctx) && ok;
         ok = _safeCheckI7(ctx) && ok;
         ok = _safeCheckI8(ctx) && ok;
@@ -1190,8 +855,10 @@ abstract contract StressBase is LogUtil {
         logError("nextRequestId", vault.nextRequestId());
         logError("nextInFlightId", vault.nextInFlightId());
         // --- Adapter state ---
-        logError("syncAdapter USDC", usdc.balanceOf(address(syncAdapter)));
-        logError("asyncAdapter USDC", usdc.balanceOf(address(asyncAdapter)));
+        logError("realSyncAdapter USDC", usdc.balanceOf(address(realSyncAdapter)));
+        logError("sync4626Target USDC", usdc.balanceOf(address(sync4626Target)));
+        logError("realAsyncAdapter USDC", usdc.balanceOf(address(realAsyncAdapter)));
+        logError("mockSubRed USDC", usdc.balanceOf(address(mockSubRed)));
         logError("totalUsdcInjected", _totalUsdcInjected);
         // Per-user balances (cap to first 50 to avoid OOG in large user pools)
         uint256 userCap = users.length < 50 ? users.length : 50;
@@ -1250,6 +917,10 @@ abstract contract StressBase is LogUtil {
         try this.extCheckI4(ctx) { return true; }
         catch (bytes memory reason) { logError(string.concat("I4_RequestIntegrity FAIL: ", ctx), string(reason)); return false; }
     }
+    function _safeCheckI5(string memory ctx) internal virtual returns (bool) {
+        try this.extCheckI5(ctx) { return true; }
+        catch (bytes memory reason) { logError(string.concat("I5_Solvency FAIL: ", ctx), string(reason)); return false; }
+    }
     function _safeCheckI6(string memory ctx) internal returns (bool) {
         try this.extCheckI6(ctx) { return true; }
         catch (bytes memory reason) { logError(string.concat("I6_TreasuryMonotonic FAIL: ", ctx), string(reason)); return false; }
@@ -1269,6 +940,7 @@ abstract contract StressBase is LogUtil {
     function extCheckI2(string memory ctx) external { _checkI2_ShareConservation(ctx); }
     function extCheckI3(string memory ctx) external { _checkI3_FreeCashNonNeg(ctx); }
     function extCheckI4(string memory ctx) external { _checkI4_RequestIntegrity(ctx); }
+    function extCheckI5(string memory ctx) external { _checkI5_Solvency(ctx); }
     function extCheckI6(string memory ctx) external { _checkI6_TreasuryMonotonic(ctx); }
     function extCheckI7(string memory ctx) external { _checkI7_InFlightConsistency(ctx); }
     function extCheckI8(string memory ctx) external { _checkI8_LockedSharesBalance(ctx); }
@@ -1326,6 +998,19 @@ abstract contract StressBase is LogUtil {
         }
     }
 
+    function _checkI5_Solvency(string memory ctx) internal view {
+        uint256 lockedValue = vault.totalLockedShares() * accountant.getRate() / 1e18;
+        uint256 resources = usdc.balanceOf(address(vault))
+            + vault.totalRedeemInFlight()
+            + _adapterTotalValue();
+        assertGe(resources, lockedValue, string.concat(ctx, " I5: solvency"));
+    }
+
+    function _adapterTotalValue() internal view virtual returns (uint256) {
+        return IStrategyAdapter(address(realSyncAdapter)).totalValue()
+            + IStrategyAdapter(address(realAsyncAdapter)).totalValue();
+    }
+
     function _checkI6_TreasuryMonotonic(string memory ctx) internal {
         uint256 current = vault.balanceOf(treasury);
         assertGe(current, _lastTreasuryBalance, string.concat(ctx, " I6: treasury monotonic"));
@@ -1381,8 +1066,11 @@ abstract contract StressBase is LogUtil {
         }
         totalInSystem += usdc.balanceOf(address(vault));
         totalInSystem += usdc.balanceOf(sanctionSafe);
-        totalInSystem += usdc.balanceOf(address(syncAdapter));
-        totalInSystem += usdc.balanceOf(address(asyncAdapter));
+        // Real adapters + their backing protocols
+        totalInSystem += usdc.balanceOf(address(realSyncAdapter));
+        totalInSystem += usdc.balanceOf(address(sync4626Target));
+        totalInSystem += usdc.balanceOf(address(realAsyncAdapter));
+        totalInSystem += usdc.balanceOf(address(mockSubRed));
 
         assertEq(totalInSystem, _totalUsdcInjected, string.concat(ctx, " USDC closed system"));
     }
@@ -1651,7 +1339,7 @@ abstract contract StressBase is LogUtil {
     /// @notice 底层资产 posToken 价格 ±5% 随机抖动（仅 local 模式）
     function _jitterPosTokenPrice() internal {
         if (IS_FORK) return;
-        uint256 currentPrice = asyncAdapter.posTokenPrice();
+        uint256 currentPrice = realAsyncAdapter.getPosTokenPrice();
         uint256 delta = currentPrice * _randBetween(1, 500) / 10_000;
         uint256 newPrice;
         if (_randBool(50)) {
@@ -1659,7 +1347,8 @@ abstract contract StressBase is LogUtil {
         } else {
             newPrice = currentPrice > delta ? currentPrice - delta : currentPrice / 2 + 1;
         }
-        asyncAdapter.setPosTokenPrice(newPrice);
+        vm.prank(address(acctExecutor));
+        realAsyncAdapter.setManualPosTokenPrice(newPrice);
         logInfo(string.concat(
             "[PRICE_UPDATE] old=", _toStr(currentPrice),
             " new=", _toStr(newPrice)

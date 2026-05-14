@@ -4,7 +4,9 @@ pragma solidity ^0.8.24;
 import {IMantleYieldVault} from "../../src/interfaces/vault/IMantleYieldVault.sol";
 import {IStrategyControllerExecutor} from "../../src/interfaces/strategy/IStrategyControllerExecutor.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {StressBase, MockUSDC_ST, MockPosToken_ST, MockAsyncAdapter_ST} from "./StressBase.t.sol";
+import {MantleYieldVault} from "../../src/vault/MantleYieldVault.sol";
+import {VaultViewHelper} from "../lib/VaultViewHelper.sol";
+import {StressBase} from "./StressBase.t.sol";
 import {console2} from "forge-std/Test.sol";
 
 /// @title S10: Interleaved Operations Stress
@@ -19,6 +21,7 @@ import {console2} from "forge-std/Test.sol";
 ///
 /// Unlike S1-S9 which clean all state per round, S10 deliberately operates in dirty states.
 contract S10_InterleavedOperations is StressBase {
+    using VaultViewHelper for MantleYieldVault;
     uint256 constant LARGE_DEPOSIT = 200_000e6;
 
     /// @dev Saved batch IDs for overlapping batch tests
@@ -101,7 +104,7 @@ contract S10_InterleavedOperations is StressBase {
         // 1. Ensure enough freeCash to trigger invest on rebalance
         _ensureFreeCash(100_000e6);
 
-        // 2. Rebalance → creates invest in-flights
+        // 2. Rebalance -> creates invest in-flights
         vm.warp(block.timestamp + 3601);
         _rebalance();
 
@@ -123,7 +126,7 @@ contract S10_InterleavedOperations is StressBase {
             }
         }
 
-        // 4. Process batch → may trigger divest → creates redeem IF
+        // 4. Process batch -> may trigger divest -> creates redeem IF
         uint256[] memory pendingIds = _getRequestIdsByStatus(IMantleYieldVault.RequestStatus.PENDING);
         if (pendingIds.length > 0) {
             pendingIds = _sortIds(pendingIds);
@@ -254,7 +257,7 @@ contract S10_InterleavedOperations is StressBase {
             }
         }
 
-        // 5. Process batch 2 (group B) — OVERLAPPING with batch 1!
+        // 5. Process batch 2 (group B) -- OVERLAPPING with batch 1!
         uint256[] memory batch2 = _getRequestIdsByStatus(IMantleYieldVault.RequestStatus.PENDING);
         if (batch2.length > 0) {
             batch2 = _sortIds(batch2);
@@ -374,7 +377,7 @@ contract S10_InterleavedOperations is StressBase {
         _ensureAdapterHasValue();
         _ensureFreeCash(80_000e6);
 
-        // 2. Request redeems — locks a significant portion of shares
+        // 2. Request redeems -- locks a significant portion of shares
         uint256 numRedeemers = _scaledRand(2, 5, 10);
         for (uint256 i = 0; i < numRedeemers; i++) {
             address user = _randUser();
@@ -389,7 +392,7 @@ contract S10_InterleavedOperations is StressBase {
             }
         }
 
-        // 3. Process batch → locked shares constrain freeCash
+        // 3. Process batch -> locked shares constrain freeCash
         uint256[] memory pendingIds = _getRequestIdsByStatus(IMantleYieldVault.RequestStatus.PENDING);
         if (pendingIds.length == 0) return;
         pendingIds = _sortIds(pendingIds);
@@ -417,7 +420,7 @@ contract S10_InterleavedOperations is StressBase {
             uint256 currentFreeCash = vault.getFreeCash();
 
             if (expectedAssets <= currentFreeCash && redeemShares >= vault.minRedeemAmount()) {
-                // FreeCash sufficient — syncRedeem should succeed
+                // FreeCash sufficient -- syncRedeem should succeed
                 _redeemAs(user, redeemShares);
                 syncRedeemCount++;
             } else {
@@ -477,7 +480,7 @@ contract S10_InterleavedOperations is StressBase {
 
         _checkAllInvariants(string.concat("S10:F:postRebalance:", _toStr(round)));
 
-        // 4. Now process the PENDING requests → may trigger divest
+        // 4. Now process the PENDING requests -> may trigger divest
         //    This could create redeem IF while invest IF is pending (G1 chain)
         uint256[] memory pendingIds = _getRequestIdsByStatus(IMantleYieldVault.RequestStatus.PENDING);
         if (pendingIds.length > 0) {
@@ -505,7 +508,7 @@ contract S10_InterleavedOperations is StressBase {
     }
 
     // =========================================================================
-    //  Case G: Kitchen Sink — Full Interleave Simulation (G1-G8 combined)
+    //  Case G: Kitchen Sink -- Full Interleave Simulation (G1-G8 combined)
     // =========================================================================
 
     function _caseG_kitchenSink(uint256 round) internal {
@@ -522,11 +525,11 @@ contract S10_InterleavedOperations is StressBase {
             }
         }
 
-        // Rebalance → invest IF
+        // Rebalance -> invest IF
         vm.warp(block.timestamp + 3601);
         _rebalance();
 
-        // While invest IF pending → requestRedeem
+        // While invest IF pending -> requestRedeem
         uint256 numRedeemers = _scaledRand(2, 5, 10);
         for (uint256 i = 0; i < numRedeemers; i++) {
             address user = _randUser();
@@ -537,7 +540,7 @@ contract S10_InterleavedOperations is StressBase {
             }
         }
 
-        // Process batch1 → dual IF possible (G1)
+        // Process batch1 -> dual IF possible (G1)
         uint256[] memory batch1 = _getRequestIdsByStatus(IMantleYieldVault.RequestStatus.PENDING);
         if (batch1.length > 0) {
             batch1 = _sortIds(batch1);
@@ -578,7 +581,7 @@ contract S10_InterleavedOperations is StressBase {
             }
         }
 
-        // Settle invest only (partial settle — redeem IF may remain) (G9 partial)
+        // Settle invest only (partial settle -- redeem IF may remain) (G9 partial)
         _settleAllInvest();
 
         _checkAllInvariants(string.concat("S10:G:day2:", _toStr(round)));
@@ -586,7 +589,7 @@ contract S10_InterleavedOperations is StressBase {
         // ========== Day 3: New requests + 2nd batch while 1st PROCESSING ==========
         vm.warp(block.timestamp + 1 days);
 
-        // More requestRedeems → new PENDING while batch1 is PROCESSING (G3)
+        // More requestRedeems -> new PENDING while batch1 is PROCESSING (G3)
         numRedeemers = _scaledRand(1, 5, 8);
         for (uint256 i = 0; i < numRedeemers; i++) {
             address user = _randUser();
@@ -597,7 +600,7 @@ contract S10_InterleavedOperations is StressBase {
             }
         }
 
-        // Process batch2 → overlapping PROCESSING batches (G3)
+        // Process batch2 -> overlapping PROCESSING batches (G3)
         uint256[] memory batch2 = _getRequestIdsByStatus(IMantleYieldVault.RequestStatus.PENDING);
         if (batch2.length > 0) {
             batch2 = _sortIds(batch2);
@@ -639,17 +642,17 @@ contract S10_InterleavedOperations is StressBase {
     }
 
     // =========================================================================
-    //  Settlement Helpers (reuse S3/S6 two-pass pattern)
+    //  Settlement Helpers
     // =========================================================================
 
     function _settleAllInvest() internal {
-        _settleInvestForAdapter(address(syncAdapter));
-        _settleInvestForAdapter(address(asyncAdapter));
+        _settleInvestForAdapter(address(realSyncAdapter));
+        _settleInvestForAdapter(address(realAsyncAdapter));
     }
 
     function _settleAllRedeem() internal {
-        _settleRedeemForAdapter(address(syncAdapter));
-        _settleRedeemForAdapter(address(asyncAdapter));
+        _settleRedeemForAdapter(address(realSyncAdapter));
+        _settleRedeemForAdapter(address(realAsyncAdapter));
     }
 
     function _settleInvestForAdapter(address adapter) internal {
@@ -657,8 +660,8 @@ contract S10_InterleavedOperations is StressBase {
 
         uint256 count;
         for (uint256 id = _baseInFlightId; id < nextIfId; id++) {
-            (, address ifAdapter,,,,, bool isInvest,, IMantleYieldVault.InFlightStatus s) =
-                vault.inFlightRecords(id);
+            (address ifAdapter, bool isInvest, IMantleYieldVault.InFlightStatus s) =
+                vault.ifAdapterAndStatus(id);
             if (s == IMantleYieldVault.InFlightStatus.PENDING && isInvest && ifAdapter == adapter) count++;
         }
         if (count == 0) return;
@@ -669,17 +672,30 @@ contract S10_InterleavedOperations is StressBase {
         uint256 idx;
 
         for (uint256 id = _baseInFlightId; id < nextIfId; id++) {
-            (, address ifAdapter,, uint256 tokenAmt, uint256 usdcAmt,, bool isInvest,, IMantleYieldVault.InFlightStatus s) =
-                vault.inFlightRecords(id);
+            (address ifAdapter, bool isInvest, IMantleYieldVault.InFlightStatus s) =
+                vault.ifAdapterAndStatus(id);
             if (s != IMantleYieldVault.InFlightStatus.PENDING || !isInvest || ifAdapter != adapter) continue;
 
             ids[idx] = id;
+            (uint256 tokenAmt, uint256 usdcAmt) = vault.ifTokenAndUsdc(id);
             uint256 expected = tokenAmt > 0 ? tokenAmt : usdcAmt;
             // Small random variance (0-3% less) to simulate real settlement
             uint256 variance = expected * _randBetween(0, 3) / 100;
             settledPos[idx] = _randBool(70) ? expected : (expected > variance ? expected - variance : expected);
             refunds[idx] = 0;
             idx++;
+        }
+
+        // For async adapter: settle subscribe via mockSubRed -- mint ST tokens to adapter
+        if (adapter == address(realAsyncAdapter)) {
+            uint256 totalPos;
+            for (uint256 i = 0; i < count; i++) totalPos += settledPos[i];
+            if (totalPos > 0) {
+                vm.prank(admin);
+                mockSubRed.settleSubscribe(
+                    address(realAsyncAdapter), address(stToken), address(realAsyncAdapter), totalPos
+                );
+            }
         }
 
         _settleAdapter(
@@ -698,8 +714,8 @@ contract S10_InterleavedOperations is StressBase {
 
         uint256 count;
         for (uint256 id = _baseInFlightId; id < nextIfId; id++) {
-            (, address ifAdapter,,,,, bool isInvest,, IMantleYieldVault.InFlightStatus s) =
-                vault.inFlightRecords(id);
+            (address ifAdapter, bool isInvest, IMantleYieldVault.InFlightStatus s) =
+                vault.ifAdapterAndStatus(id);
             if (s == IMantleYieldVault.InFlightStatus.PENDING && !isInvest && ifAdapter == adapter) count++;
         }
         if (count == 0) return;
@@ -709,21 +725,37 @@ contract S10_InterleavedOperations is StressBase {
         uint256 idx;
 
         for (uint256 id = _baseInFlightId; id < nextIfId; id++) {
-            (, address ifAdapter,,, uint256 usdcAmt,, bool isInvest,, IMantleYieldVault.InFlightStatus s) =
-                vault.inFlightRecords(id);
+            (address ifAdapter, bool isInvest, IMantleYieldVault.InFlightStatus s) =
+                vault.ifAdapterAndStatus(id);
             if (s != IMantleYieldVault.InFlightStatus.PENDING || isInvest || ifAdapter != adapter) continue;
 
             ids[idx] = id;
-            settled[idx] = usdcAmt;
+            settled[idx] = vault.ifUsdcAmount(id);
             idx++;
         }
 
-        // For async adapter: release USDC from "external protocol" hold
-        if (adapter == address(asyncAdapter)) {
+        // For async adapter: settle redeem via mockSubRed -- transfer USDC to adapter
+        if (adapter == address(realAsyncAdapter)) {
             uint256 totalNeeded;
             for (uint256 j = 0; j < count; j++) totalNeeded += settled[j];
-            _totalUsdcInjected += MockAsyncAdapter_ST(payable(address(asyncAdapter))).simulateRedeemSettlement(totalNeeded);
+            if (totalNeeded > 0) {
+                uint256 subRedBal = usdc.balanceOf(address(mockSubRed));
+                if (totalNeeded > subRedBal) {
+                    totalNeeded = subRedBal;
+                    if (count > 0) {
+                        uint256 perRedeem = totalNeeded / count;
+                        for (uint256 j = 0; j < count; j++) settled[j] = perRedeem;
+                    }
+                }
+                if (totalNeeded > 0) {
+                    vm.prank(admin);
+                    mockSubRed.settleRedeem(
+                        address(realAsyncAdapter), address(stToken), address(usdc), address(realAsyncAdapter), totalNeeded
+                    );
+                }
+            }
         }
+        // Sync adapters: USDC already on adapter from withdrawSync during divest
 
         _settleAdapter(
             adapter,
@@ -781,12 +813,11 @@ contract S10_InterleavedOperations is StressBase {
             totalNeeded += amount;
         }
 
-        // Inject shortfall if vault doesn't have enough cash
+        // Ensure vault has enough cash via real user deposits
         uint256 available = usdc.balanceOf(address(vault));
         if (available < totalNeeded) {
-            uint256 shortfall = totalNeeded - available;
-            MockUSDC_ST(address(usdc)).mint(address(vault), shortfall);
-            _totalUsdcInjected += shortfall;
+            _topUpVaultCashViaDeposits(totalNeeded);
+            settledAssets = _computeSettledAssets(filteredIds);
         }
 
         _finalizeRedeemBatch(filteredIds, settledAssets);
@@ -804,8 +835,7 @@ contract S10_InterleavedOperations is StressBase {
             uint256 needed = target - current + 10_000e6;
             uint256 bal = usdc.balanceOf(user);
             if (bal < needed) {
-                MockUSDC_ST(address(usdc)).mint(user, needed);
-                _totalUsdcInjected += needed;
+                _mintUsdc(user, needed);
             }
             _depositAs(user, needed);
         }
@@ -828,8 +858,7 @@ contract S10_InterleavedOperations is StressBase {
     function _topUpUsers() internal {
         for (uint256 i = 0; i < _min(users.length / 4, 50); i++) {
             if (usdc.balanceOf(users[i]) < LARGE_DEPOSIT) {
-                MockUSDC_ST(address(usdc)).mint(users[i], LARGE_DEPOSIT);
-                _totalUsdcInjected += LARGE_DEPOSIT;
+                _mintUsdc(users[i], LARGE_DEPOSIT);
             }
         }
     }

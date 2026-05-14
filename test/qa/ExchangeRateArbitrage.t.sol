@@ -281,7 +281,7 @@ contract ExchangeRateArbitrageQATest is Test {
 
         // Initialize accountant with management fee = 100 bps (1%)
         bytes memory acctInitData =
-            abi.encodeCall(Accountant.initialize, (address(vault), INITIAL_RATE, 100, admin));
+            abi.encodeCall(Accountant.initialize, (address(vault), INITIAL_RATE, 100, admin, admin, admin));
         accountant = Accountant(address(new ERC1967Proxy(address(acctImpl), acctInitData)));
 
         // Initialize controller
@@ -316,6 +316,7 @@ contract ExchangeRateArbitrageQATest is Test {
             abi.encodeCall(AccountantExecutor.initialize, (admin))
         )));
         acctExecutor.grantRole(acctExecutor.BOT_ROLE(), bot);
+        acctExecutor.grantRole(acctExecutor.FEE_SETTLER_ROLE(), bot);
         accountant.grantRole(accountant.ACCOUNTANT_EXECUTOR_ROLE(), address(acctExecutor));
         // Widen max deviation to 10% (ceiling is 1000 = 10%) to allow rate changes in tests
         accountant.setRiskParams(1000, 0);
@@ -1168,6 +1169,7 @@ contract ExchangeRateArbitrageQATest is Test {
 
         vm.startPrank(admin);
         acctExec.grantRole(acctExec.BOT_ROLE(), bot);
+        acctExec.grantRole(acctExec.FEE_SETTLER_ROLE(), bot);
         accountant.grantRole(accountant.ACCOUNTANT_EXECUTOR_ROLE(), address(acctExec));
         accountant.setRiskParams(100, 0); // tight 1% deviation
         vm.stopPrank();

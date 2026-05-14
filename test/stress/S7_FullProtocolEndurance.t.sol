@@ -4,7 +4,7 @@ pragma solidity ^0.8.24;
 import {IMantleYieldVault} from "../../src/interfaces/vault/IMantleYieldVault.sol";
 import {IStrategyControllerExecutor} from "../../src/interfaces/strategy/IStrategyControllerExecutor.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {StressBase, MockUSDC_ST} from "./StressBase.t.sol";
+import {StressBase} from "./StressBase.t.sol";
 import {console2} from "forge-std/Test.sol";
 
 /// @title S7: Full Protocol Endurance Test
@@ -268,8 +268,7 @@ contract S7_FullProtocolEndurance is StressBase {
             uint256 topUpLimit = _min(users.length, 200);
             for (uint256 i = 0; i < topUpLimit; i++) {
                 if (usdc.balanceOf(users[i]) < 10_000e6) {
-                    MockUSDC_ST(address(usdc)).mint(users[i], 100_000e6);
-                    _totalUsdcInjected += 100_000e6;
+                    _mintUsdc(users[i], 100_000e6);
                 }
             }
         }
@@ -280,15 +279,13 @@ contract S7_FullProtocolEndurance is StressBase {
     // =========================================================================
 
     function _settleAllInvest() internal {
-        // Settle per adapter: sync and async separately
-        _settleInvestForAdapter(address(syncAdapter));
-        _settleInvestForAdapter(address(asyncAdapter));
+        _settleInvestForAdapter(address(realSyncAdapter));
+        _settleInvestForAdapter(address(realAsyncAdapter));
     }
 
     function _settleInvestForAdapter(address adapter) internal {
         uint256 nextIfId = vault.nextInFlightId();
 
-        // First pass: count matching records
         uint256 count;
         for (uint256 id = _baseInFlightId; id < nextIfId; id++) {
             (, address ifAdapter,,,,, bool isInvest,, IMantleYieldVault.InFlightStatus s) =
@@ -297,7 +294,6 @@ contract S7_FullProtocolEndurance is StressBase {
         }
         if (count == 0) return;
 
-        // Second pass: populate arrays
         uint256[] memory ids = new uint256[](count);
         uint256[] memory pos = new uint256[](count);
         uint256[] memory refunds = new uint256[](count);
@@ -315,6 +311,14 @@ contract S7_FullProtocolEndurance is StressBase {
             idx++;
         }
 
+        // For async adapter: settle subscribe via mockSubRed — mint ST tokens to adapter
+        if (adapter == address(realAsyncAdapter)) {
+            uint256 totalPos;
+            for (uint256 i = 0; i < count; i++) totalPos += pos[i];
+            vm.prank(admin);
+            mockSubRed.settleSubscribe(address(realAsyncAdapter), address(stToken), address(realAsyncAdapter), totalPos);
+        }
+
         _settleAdapter(
             adapter,
             IStrategyControllerExecutor.InvestSettlementInput({
@@ -327,14 +331,13 @@ contract S7_FullProtocolEndurance is StressBase {
     }
 
     function _settleAllRedeem() internal {
-        _settleRedeemForAdapter(address(syncAdapter));
-        _settleRedeemForAdapter(address(asyncAdapter));
+        _settleRedeemForAdapter(address(realSyncAdapter));
+        _settleRedeemForAdapter(address(realAsyncAdapter));
     }
 
     function _settleRedeemForAdapter(address adapter) internal {
         uint256 nextIfId = vault.nextInFlightId();
 
-        // First pass: count matching records
         uint256 count;
         for (uint256 id = _baseInFlightId; id < nextIfId; id++) {
             (, address ifAdapter,,,,, bool isInvest,, IMantleYieldVault.InFlightStatus s) =
@@ -343,7 +346,6 @@ contract S7_FullProtocolEndurance is StressBase {
         }
         if (count == 0) return;
 
-        // Second pass: populate arrays
         uint256[] memory ids = new uint256[](count);
         uint256[] memory settled = new uint256[](count);
         uint256 idx;
@@ -359,11 +361,26 @@ contract S7_FullProtocolEndurance is StressBase {
             idx++;
         }
 
-        // For async adapter: release USDC from "external protocol" hold before settlement sweep
-        if (adapter == address(asyncAdapter)) {
+        // For async adapter: settle redeem via mockSubRed
+        if (adapter == address(realAsyncAdapter)) {
             uint256 totalNeeded;
             for (uint256 j = 0; j < count; j++) totalNeeded += settled[j];
-            _totalUsdcInjected += asyncAdapter.simulateRedeemSettlement(totalNeeded);
+            if (totalNeeded > 0) {
+                uint256 subRedBal = usdc.balanceOf(address(mockSubRed));
+                if (totalNeeded > subRedBal) {
+                    totalNeeded = subRedBal;
+                    if (count > 0) {
+                        uint256 perRedeem = totalNeeded / count;
+                        for (uint256 j = 0; j < count; j++) settled[j] = perRedeem;
+                    }
+                }
+                if (totalNeeded > 0) {
+                    vm.prank(admin);
+                    mockSubRed.settleRedeem(
+                        address(realAsyncAdapter), address(stToken), address(usdc), address(realAsyncAdapter), totalNeeded
+                    );
+                }
+            }
         }
 
         _settleAdapter(

@@ -102,7 +102,7 @@ contract AsyncRedeemStateMachineQATest is Test {
         // Accountant — ERC1967Proxy (UUPS), init now (vault address is known)
         accountant = Accountant(address(new ERC1967Proxy(
             address(acctImpl),
-            abi.encodeCall(Accountant.initialize, (vaultAddr, uint64(RATE), 0, admin))
+            abi.encodeCall(Accountant.initialize, (vaultAddr, uint64(RATE), 0, admin, admin, admin))
         )));
 
         // OperatorExecutor — ERC1967Proxy (UUPS), init now

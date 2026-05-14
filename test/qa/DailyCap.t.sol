@@ -134,7 +134,7 @@ contract DailyCapQATest is Test {
 
         accountant = Accountant(address(new ERC1967Proxy(
             address(acctImpl),
-            abi.encodeCall(Accountant.initialize, (address(vault), uint64(1e18), 0, admin))
+            abi.encodeCall(Accountant.initialize, (address(vault), uint64(1e18), 0, admin, admin, admin))
         )));
         vm.prank(admin);
         vault.setAccountant(address(accountant));

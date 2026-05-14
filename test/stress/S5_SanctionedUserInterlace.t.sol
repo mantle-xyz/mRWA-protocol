@@ -155,6 +155,7 @@ contract S5_SanctionedUserInterlace is StressBase {
             }
 
             _checkAllInvariants(string.concat("S5:round:", _toStr(round)));
+            _checkUsdcClosedSystem(string.concat("S5:round:", _toStr(round)));
 
             // Periodic rate & price update
             _periodicRateAndPriceUpdate(round, 8, 10);

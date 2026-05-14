@@ -3,10 +3,11 @@ pragma solidity ^0.8.24;
 
 import {IMantleYieldVault} from "../../src/interfaces/vault/IMantleYieldVault.sol";
 import {IStrategyControllerExecutor} from "../../src/interfaces/strategy/IStrategyControllerExecutor.sol";
+import {IStrategyAdapter} from "../../src/interfaces/adapters/IStrategyAdapter.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {MantleYieldVault} from "../../src/vault/MantleYieldVault.sol";
 import {VaultViewHelper} from "../lib/VaultViewHelper.sol";
-import {StressBase, MockUSDC_ST, MockPosToken_ST} from "./StressBase.t.sol";
+import {StressBase} from "./StressBase.t.sol";
 import {console2} from "forge-std/Test.sol";
 
 /// @title S6: In-Flight Edge Cases Stress
@@ -198,7 +199,7 @@ contract S6_InFlightEdgeCases is StressBase {
                 vault.inFlightRecords(id);
             if (
                 ifStatus == IMantleYieldVault.InFlightStatus.PENDING && !isInvest
-                    && ifAdapter == address(asyncAdapter)
+                    && ifAdapter == address(realAsyncAdapter)
             ) {
                 targetId = id;
                 targetTokenAmt = tokenAmt;
@@ -208,14 +209,18 @@ contract S6_InFlightEdgeCases is StressBase {
         }
 
         if (found && targetTokenAmt > 0) {
-            // Retry with partial amount (50-100% of original)
-            uint256 retryAmt = targetTokenAmt * _randBetween(50, 100) / 100;
-            if (retryAmt == 0) retryAmt = 1;
-            if (retryAmt > targetTokenAmt) retryAmt = targetTokenAmt;
+            // Real bot checks adapter has stToken balance before retrying
+            uint256 adapterStBal = stToken.balanceOf(address(realAsyncAdapter));
+            if (adapterStBal > 0) {
+                uint256 retryAmt = targetTokenAmt * _randBetween(50, 100) / 100;
+                if (retryAmt == 0) retryAmt = 1;
+                if (retryAmt > adapterStBal) retryAmt = adapterStBal;
+                if (retryAmt > targetTokenAmt) retryAmt = targetTokenAmt;
 
-            vm.prank(admin);
-            controller.retryRedeemInFlight(address(asyncAdapter), targetId, retryAmt);
-            logDebug("retryRedeemInFlight", string.concat("id=", _toStr(targetId), " amt=", _toStr(retryAmt)));
+                vm.prank(admin);
+                controller.retryRedeemInFlight(address(realAsyncAdapter), targetId, retryAmt);
+                logDebug("retryRedeemInFlight", string.concat("id=", _toStr(targetId), " amt=", _toStr(retryAmt)));
+            }
         }
 
         // Settle redeem normally
@@ -238,8 +243,7 @@ contract S6_InFlightEdgeCases is StressBase {
             uint256 needed = target - current + 10_000e6;
             uint256 bal = usdc.balanceOf(user);
             if (bal < needed) {
-                MockUSDC_ST(address(usdc)).mint(user, needed);
-                _totalUsdcInjected += needed;
+                _mintUsdc(user, needed);
             }
             _depositAs(user, needed);
         }
@@ -255,22 +259,54 @@ contract S6_InFlightEdgeCases is StressBase {
         _settleInvestNormal();
         vm.warp(block.timestamp + 3601);
 
-        // Now requestRedeem from multiple users (scaled) to trigger divest
+        // Request redeem from multiple users — use partial shares (20-50%)
+        // to keep demand within adapter capacity (real bot would do the same)
         uint256 numRedeemers = _scaledRand(1, 10, 20);
         for (uint256 j = 0; j < numRedeemers; j++) {
             address user = _randUser();
             uint256 shares = vault.balanceOf(user);
             uint256 minRedeem = _effectiveMinRedeemShares();
             if (shares >= minRedeem) {
-                _requestRedeemAs(user, shares);
+                uint256 redeemShares = shares * _randBetween(20, 50) / 100;
+                if (redeemShares < minRedeem) redeemShares = minRedeem;
+                _requestRedeemAs(user, redeemShares);
             }
         }
 
         uint256[] memory pendingIds = _getRequestIdsByStatus(IMantleYieldVault.RequestStatus.PENDING);
-        if (pendingIds.length > 0) {
-            pendingIds = _sortIds(pendingIds);
-            _processRedeemBatch(pendingIds);
+        if (pendingIds.length == 0) return;
+        pendingIds = _sortIds(pendingIds);
+
+        // Estimate batch demand and check against available capacity
+        uint256 rate = accountant.getRate();
+        uint256 batchDemand;
+        for (uint256 i = 0; i < pendingIds.length; i++) {
+            uint256 sh = vault.reqShares(pendingIds[i]);
+            batchDemand += sh * rate / 1e18;
         }
+        uint256 available = vault.getFreeCash()
+            + IStrategyAdapter(address(realSyncAdapter)).totalValue()
+            + IStrategyAdapter(address(realAsyncAdapter)).totalValue();
+
+        if (batchDemand > available) {
+            // Trim batch to fit within capacity
+            uint256[] memory trimmed = new uint256[](pendingIds.length);
+            uint256 runningDemand;
+            uint256 kept;
+            for (uint256 i = 0; i < pendingIds.length; i++) {
+                uint256 sh = vault.reqShares(pendingIds[i]);
+                uint256 assetNeeded = sh * rate / 1e18;
+                if (runningDemand + assetNeeded <= available) {
+                    trimmed[kept] = pendingIds[i];
+                    runningDemand += assetNeeded;
+                    kept++;
+                }
+            }
+            if (kept == 0) return;
+            pendingIds = _trim(trimmed, kept);
+        }
+
+        _processRedeemBatch(pendingIds);
     }
 
     function _settleInvestNormal() internal {
@@ -282,8 +318,9 @@ contract S6_InFlightEdgeCases is StressBase {
     }
 
     function _settleInvestWithParams(bool withRefund, uint256 refundPct) internal {
-        _settleInvestForAdapterWithParams(address(syncAdapter), withRefund, refundPct);
-        _settleInvestForAdapterWithParams(address(asyncAdapter), withRefund, refundPct);
+        // Sync 4626 deposits are atomic — no partial refund concept
+        _settleInvestForAdapterWithParams(address(realSyncAdapter), false, 0);
+        _settleInvestForAdapterWithParams(address(realAsyncAdapter), withRefund, refundPct);
     }
 
     function _settleInvestForAdapterWithParams(address adapter, bool withRefund, uint256 refundPct) internal {
@@ -319,6 +356,38 @@ contract S6_InFlightEdgeCases is StressBase {
             idx++;
         }
 
+        // For async adapter: settle subscribe (mint ST) + provide refund USDC on adapter
+        if (adapter == address(realAsyncAdapter)) {
+            uint256 totalPos;
+            uint256 totalRefund;
+            for (uint256 i = 0; i < count; i++) {
+                totalPos += settledPos[i];
+                totalRefund += refunds[i];
+            }
+            if (totalPos > 0) {
+                vm.prank(admin);
+                mockSubRed.settleSubscribe(
+                    address(realAsyncAdapter), address(stToken), address(realAsyncAdapter), totalPos
+                );
+            }
+            if (totalRefund > 0) {
+                // Invest refund: USDC comes back from SubRed to adapter via direct transfer
+                // (not settleRedeem — that requires a pending redeem, but this is invest refund)
+                uint256 subRedBal = usdc.balanceOf(address(mockSubRed));
+                if (totalRefund > subRedBal) {
+                    totalRefund = subRedBal;
+                    if (count > 0) {
+                        uint256 perRefund = totalRefund / count;
+                        for (uint256 i = 0; i < count; i++) refunds[i] = perRefund;
+                    }
+                }
+                if (totalRefund > 0) {
+                    vm.prank(address(mockSubRed));
+                    usdc.transfer(address(realAsyncAdapter), totalRefund);
+                }
+            }
+        }
+
         _settleAdapter(
             adapter,
             IStrategyControllerExecutor.InvestSettlementInput({
@@ -336,18 +405,13 @@ contract S6_InFlightEdgeCases is StressBase {
         bool withRefund, uint256 refundPct
     ) internal {
         (uint256 tokenAmt, uint256 usdcAmt) = vault.ifTokenAndUsdc(id);
-        uint256 expected = tokenAmt > 0 ? tokenAmt : usdcAmt;
+        uint256 posExpected = tokenAmt > 0 ? tokenAmt : usdcAmt;
         if (withRefund) {
-            uint256 refundAmt = expected * refundPct / 100;
-            settledPos[idx] = expected - refundAmt;
-            refunds[idx] = refundAmt;
-            if (adapter == address(asyncAdapter)) {
-                _totalUsdcInjected += asyncAdapter.simulateRedeemSettlement(refundAmt);
-            } else {
-                MockPosToken_ST(syncAdapter.POS_TOKEN()).burn(adapter, refundAmt);
-            }
+            // settledPos in position-token units, refunds in USDC
+            settledPos[idx] = posExpected * (100 - refundPct) / 100;
+            refunds[idx] = usdcAmt * refundPct / 100;
         } else {
-            settledPos[idx] = expected;
+            settledPos[idx] = posExpected;
             refunds[idx] = 0;
         }
     }
@@ -365,8 +429,8 @@ contract S6_InFlightEdgeCases is StressBase {
     }
 
     function _settleRedeemWithMultiplier(uint256 pct) internal {
-        _settleRedeemForAdapterWithMul(address(syncAdapter), pct);
-        _settleRedeemForAdapterWithMul(address(asyncAdapter), pct);
+        _settleRedeemForAdapterWithMul(address(realSyncAdapter), pct);
+        _settleRedeemForAdapterWithMul(address(realAsyncAdapter), pct);
     }
 
     function _settleRedeemForAdapterWithMul(address adapter, uint256 pct) internal {
@@ -397,11 +461,32 @@ contract S6_InFlightEdgeCases is StressBase {
             idx++;
         }
 
-        // For async adapter: release USDC from "external protocol" hold before settlement sweep
-        if (adapter == address(asyncAdapter)) {
+        // For async adapter: settle redeem via mockSubRed — transfer USDC back to adapter
+        if (adapter == address(realAsyncAdapter)) {
             uint256 totalNeeded;
             for (uint256 j = 0; j < count; j++) totalNeeded += settled[j];
-            _totalUsdcInjected += asyncAdapter.simulateRedeemSettlement(totalNeeded);
+            if (totalNeeded > 0) {
+                uint256 subRedBal = usdc.balanceOf(address(mockSubRed));
+                if (totalNeeded > subRedBal) {
+                    totalNeeded = subRedBal;
+                    if (count > 0) {
+                        uint256 perRedeem = totalNeeded / count;
+                        for (uint256 j = 0; j < count; j++) settled[j] = perRedeem;
+                    }
+                }
+                if (totalNeeded > 0) {
+                    (, uint256 redeemPos) = mockSubRed.pending(address(realAsyncAdapter), address(stToken));
+                    if (redeemPos > 0) {
+                        vm.prank(admin);
+                        mockSubRed.settleRedeem(
+                            address(realAsyncAdapter), address(stToken), address(usdc), address(realAsyncAdapter), totalNeeded
+                        );
+                    } else {
+                        vm.prank(address(mockSubRed));
+                        usdc.transfer(address(realAsyncAdapter), totalNeeded);
+                    }
+                }
+            }
         }
 
         _settleAdapter(
@@ -431,12 +516,12 @@ contract S6_InFlightEdgeCases is StressBase {
             totalNeeded += amount;
         }
 
-        // Ensure vault has enough cash (inject shortfall like S2 does)
+        // Ensure vault has enough cash via real user deposits
         uint256 available = usdc.balanceOf(address(vault));
         if (available < totalNeeded) {
-            uint256 shortfall = totalNeeded - available;
-            MockUSDC_ST(address(usdc)).mint(address(vault), shortfall);
-            _totalUsdcInjected += shortfall;
+            _topUpVaultCashViaDeposits(totalNeeded);
+            // Recompute settled amounts with new vault state
+            settledAssets = _computeSettledAssets(processingIds);
         }
 
         _finalizeRedeemBatch(processingIds, settledAssets);

@@ -569,7 +569,7 @@ contract RiskRegressionTest is Test {
         Accountant accountantImpl = new Accountant();
         flowAccountant = Accountant(address(new ERC1967Proxy(
             address(accountantImpl),
-            abi.encodeCall(Accountant.initialize, (address(flowVault), uint64(1e18), 0, admin))
+            abi.encodeCall(Accountant.initialize, (address(flowVault), uint64(1e18), 0, admin, admin, admin))
         )));
         vm.prank(admin);
         flowVault.setAccountant(address(flowAccountant));
@@ -2015,7 +2015,7 @@ contract RiskRegressionGetTokenInfosTest is Test {
         Accountant acctImpl = new Accountant();
         accountant = Accountant(address(new ERC1967Proxy(
             address(acctImpl),
-            abi.encodeCall(Accountant.initialize, (address(vault), uint64(1e18), 0, adminAddr))
+            abi.encodeCall(Accountant.initialize, (address(vault), uint64(1e18), 0, adminAddr, adminAddr, adminAddr))
         )));
         vm.prank(adminAddr);
         vault.setAccountant(address(accountant));
@@ -2681,7 +2681,7 @@ contract RiskRegressionSanctionSafeInTest is Test {
         Accountant acctImpl = new Accountant();
         accountant = Accountant(address(new ERC1967Proxy(
             address(acctImpl),
-            abi.encodeCall(Accountant.initialize, (address(vault), uint64(1e18), 0, adminAddr))
+            abi.encodeCall(Accountant.initialize, (address(vault), uint64(1e18), 0, adminAddr, adminAddr, adminAddr))
         )));
         vm.prank(adminAddr);
         vault.setAccountant(address(accountant));

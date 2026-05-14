@@ -329,7 +329,7 @@ contract AsyncRedeemLifecycleQATest is Test {
         accountantExecutor =
             AccountantExecutor(address(new ERC1967Proxy(address(accountantExecutorImpl), accountantExecInitData)));
         bytes memory accountantInitData =
-            abi.encodeCall(Accountant.initialize, (address(vault), uint64(1e18), uint32(0), admin));
+            abi.encodeCall(Accountant.initialize, (address(vault), uint64(1e18), uint32(0), admin, admin, admin));
         accountant = Accountant(address(new ERC1967Proxy(address(accountantImpl), accountantInitData)));
 
         // Controller

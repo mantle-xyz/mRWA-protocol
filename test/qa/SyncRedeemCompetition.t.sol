@@ -227,7 +227,7 @@ contract SyncRedeemCompetitionQATest is Test {
 
         // Accountant (0 management fee for simpler math)
         bytes memory acctInitData =
-            abi.encodeCall(Accountant.initialize, (address(vault), 1e18, 0, admin));
+            abi.encodeCall(Accountant.initialize, (address(vault), 1e18, 0, admin, admin, admin));
         accountant = Accountant(address(new ERC1967Proxy(address(acctImpl), acctInitData)));
 
         // OperatorExecutor (real contract with bot role)

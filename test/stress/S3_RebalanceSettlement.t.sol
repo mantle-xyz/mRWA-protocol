@@ -4,7 +4,7 @@ pragma solidity ^0.8.24;
 import {IMantleYieldVault} from "../../src/interfaces/vault/IMantleYieldVault.sol";
 import {IStrategyControllerExecutor} from "../../src/interfaces/strategy/IStrategyControllerExecutor.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {StressBase, MockUSDC_ST} from "./StressBase.t.sol";
+import {StressBase} from "./StressBase.t.sol";
 
 /// @title S3: Rebalance + Settlement Cycle Stress
 /// @notice Validates repeated invest/divest and settlement, checking asset conservation and strategy weights
@@ -122,8 +122,7 @@ contract S3_RebalanceSettlement is StressBase {
                 for (uint256 i = 0; i < _min(users.length / 4, 50); i++) {
                     address user = users[i];
                     if (usdc.balanceOf(user) < LARGE_DEPOSIT) {
-                        MockUSDC_ST(address(usdc)).mint(user, LARGE_DEPOSIT);
-                        _totalUsdcInjected += LARGE_DEPOSIT;
+                        _mintUsdc(user, LARGE_DEPOSIT);
                     }
                 }
             }
@@ -141,8 +140,8 @@ contract S3_RebalanceSettlement is StressBase {
     // --- Settlement helpers ---
 
     function _settleAllInvestInFlight() internal {
-        _settleInvestForAdapter(address(syncAdapter));
-        _settleInvestForAdapter(address(asyncAdapter));
+        _settleInvestForAdapter(address(realSyncAdapter));
+        _settleInvestForAdapter(address(realAsyncAdapter));
     }
 
     function _settleInvestForAdapter(address adapter) internal {
@@ -181,6 +180,14 @@ contract S3_RebalanceSettlement is StressBase {
             idx++;
         }
 
+        // For async adapter: settle subscribe via mockSubRed — mint ST tokens to adapter
+        if (adapter == address(realAsyncAdapter)) {
+            uint256 totalPos;
+            for (uint256 i = 0; i < count; i++) totalPos += settledPos[i];
+            vm.prank(admin);
+            mockSubRed.settleSubscribe(address(realAsyncAdapter), address(stToken), address(realAsyncAdapter), totalPos);
+        }
+
         _settleAdapter(
             adapter,
             IStrategyControllerExecutor.InvestSettlementInput({
@@ -193,8 +200,8 @@ contract S3_RebalanceSettlement is StressBase {
     }
 
     function _settleAllRedeemInFlight() internal {
-        _settleRedeemForAdapter(address(syncAdapter));
-        _settleRedeemForAdapter(address(asyncAdapter));
+        _settleRedeemForAdapter(address(realSyncAdapter));
+        _settleRedeemForAdapter(address(realAsyncAdapter));
     }
 
     function _settleRedeemForAdapter(address adapter) internal {
@@ -225,11 +232,24 @@ contract S3_RebalanceSettlement is StressBase {
             idx++;
         }
 
-        // For async adapter: release USDC from "external protocol" hold before settlement sweep
-        if (adapter == address(asyncAdapter)) {
+        // For async adapter: settle redeem via mockSubRed — transfer USDC back to adapter
+        if (adapter == address(realAsyncAdapter)) {
             uint256 totalNeeded;
             for (uint256 j = 0; j < count; j++) totalNeeded += settled[j];
-            _totalUsdcInjected += asyncAdapter.simulateRedeemSettlement(totalNeeded);
+            uint256 subRedBal = usdc.balanceOf(address(mockSubRed));
+            if (totalNeeded > subRedBal) {
+                totalNeeded = subRedBal;
+                if (count > 0) {
+                    uint256 perRedeem = totalNeeded / count;
+                    for (uint256 j = 0; j < count; j++) settled[j] = perRedeem;
+                }
+            }
+            if (totalNeeded > 0) {
+                vm.prank(admin);
+                mockSubRed.settleRedeem(
+                    address(realAsyncAdapter), address(stToken), address(usdc), address(realAsyncAdapter), totalNeeded
+                );
+            }
         }
 
         _settleAdapter(

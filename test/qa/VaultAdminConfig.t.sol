@@ -130,7 +130,7 @@ contract VaultAdminConfigQATest is Test {
 
         accountant = Accountant(address(new ERC1967Proxy(
             address(acctImpl),
-            abi.encodeCall(Accountant.initialize, (address(vault), 1e18, 0, admin))
+            abi.encodeCall(Accountant.initialize, (address(vault), 1e18, 0, admin, admin, admin))
         )));
 
         executor = OperatorExecutor(address(new ERC1967Proxy(
@@ -178,7 +178,7 @@ contract VaultAdminConfigQATest is Test {
 
         Accountant newAcct = Accountant(address(new ERC1967Proxy(
             address(new Accountant()),
-            abi.encodeCall(Accountant.initialize, (address(vault), 1.05e18, 0, admin))
+            abi.encodeCall(Accountant.initialize, (address(vault), 1.05e18, 0, admin, admin, admin))
         )));
 
         vm.prank(admin);

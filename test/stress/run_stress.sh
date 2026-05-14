@@ -42,7 +42,7 @@ set -- "${POSITIONAL[@]}"
 # --- Parse duration (first arg, required) ---
 if [[ $# -lt 1 ]]; then
     cat <<'USAGE'
-Usage: run_stress.sh <duration_minutes> [S1] [S2] ... [S7] [--reset-cache]
+Usage: run_stress.sh <duration_minutes> [S1] [S2] ... [S14] [--reset-cache]
 
   duration_minutes: total wall-clock time to keep testing (0 = run STRESS_SEEDS rounds then stop)
   --reset-cache:    clear the TSV aggregate cache before starting
@@ -84,10 +84,10 @@ export STRESS_DAYS="$DAYS_PER_SEED"
 export STRESS_DURATION="0"              # per-seed: no time limit (use ROUNDS)
 
 # --- Scenario definitions ---
-KEYS=(       S1                        S2                          S3                        S4                            S5                              S6                        S7                          S8                              S9                       S10                             )
-CONTRACTS=(  S1_DepositRedeemMix       S2_AsyncRedeemFullCycle     S3_RebalanceSettlement    S4_ExchangeRateFeeAccrual     S5_SanctionedUserInterlace      S6_InFlightEdgeCases      S7_FullProtocolEndurance     S8_InvestSettlementEdge          S9_MultiAdapterMix       S10_InterleavedOperations        )
-FUNCS=(      test_depositRedeemMix     test_asyncRedeemFullCycle   test_rebalanceSettlementCycle test_exchangeRateFeeAccrual test_sanctionedUserInterlace  test_inFlightEdgeCases    test_fullProtocolEndurance   test_investSettlementEdge        test_multiAdapterMix     test_interleavedOperations       )
-NAMES=(      "Deposit/Redeem Mix"      "Async Redeem Cycle"        "Rebalance Settlement"    "Exchange Rate & Fee"         "Sanctioned User"               "InFlight Edge Cases"     "Full Protocol Endurance"    "Invest Settlement Edge"         "Multi-Adapter Mix"      "Interleaved Operations"         )
+KEYS=(       S1                        S2                          S3                        S4                            S5                              S6                        S7                          S8                              S9                       S10                              S11                          S12                            S13                        S14                              )
+CONTRACTS=(  S1_DepositRedeemMix       S2_AsyncRedeemFullCycle     S3_RebalanceSettlement    S4_ExchangeRateFeeAccrual     S5_SanctionedUserInterlace      S6_InFlightEdgeCases      S7_FullProtocolEndurance     S8_InvestSettlementEdge          S9_MultiAdapterMix       S10_InterleavedOperations         S11_AdapterPauseRecovery     S12_CircuitBreakerRecovery     S13_DailyCapExhaustion     S14_ConcurrentBatchProcessing    )
+FUNCS=(      test_depositRedeemMix     test_asyncRedeemFullCycle   test_rebalanceSettlementCycle test_exchangeRateFeeAccrual test_sanctionedUserInterlace  test_inFlightEdgeCases    test_fullProtocolEndurance   test_investSettlementEdge        test_multiAdapterMix     test_interleavedOperations        test_adapterPauseRecovery    test_circuitBreakerRecovery    test_dailyCapExhaustion    test_concurrentBatchProcessing   )
+NAMES=(      "Deposit/Redeem Mix"      "Async Redeem Cycle"        "Rebalance Settlement"    "Exchange Rate & Fee"         "Sanctioned User"               "InFlight Edge Cases"     "Full Protocol Endurance"    "Invest Settlement Edge"         "Multi-Adapter Mix"      "Interleaved Operations"          "Adapter Pause Recovery"     "Circuit Breaker Recovery"     "Daily Cap Exhaustion"     "Concurrent Batch Processing"    )
 
 # Scenario descriptions (from STRESS_TEST_PLAN.md §八)
 DESCS=(
@@ -101,6 +101,10 @@ DESCS=(
     "验证Invest部分结算(5-95%退款)和全额退款(底层资产无法申购)场景下vault资产守恒和in-flight记录正确性"
     "验证3个adapter非对称权重(40/35/25)下rebalance分配、混合结算、权重动态调整的正确性"
     "验证操作交错场景：双IF共存、rate变化在process↔finalize间、重叠PROCESSING批次+乱序finalize、PROCESSING期间deposit/syncRedeem、PENDING时rebalance"
+    "验证adapter暂停/恢复期间rebalance跳过暂停adapter、用户操作不受影响、unpause后恢复正常"
+    "验证汇率偏离触发熔断→accountant暂停→deposit/redeem阻断→admin通过emergencyRateUpdate恢复→操作恢复"
+    "验证每日存取限额耗尽后交易被拒绝、限额重置后恢复正常"
+    "验证多个PROCESSING批次同时存在时的交错结算和最终化，in-flight记账正确性"
 )
 
 # Test method per round (from STRESS_TEST_PLAN.md §八)
@@ -115,6 +119,10 @@ METHODS=(
     "5种case轮转: A=正常全额结算, B=小比例退款(5-15%), C=大比例退款(40-70%), D=全额退款(0+100%), E=混合多笔不同比例"
     "每轮: 比例化存款→rebalance验证3-adapter分配→settle(sync1正常/sync2部分退款/async1随机)→divest+finalize; 每10轮jitter价格, 每20轮调权重"
     "7种case轮转: A=双IF共存, B=rate变化+finalize, C=重叠批次+乱序finalize, D=PROCESSING期间deposit, E=PROCESSING期间syncRedeem, F=PENDING时rebalance, G=全组合kitchen-sink; 每step间检查不变量"
+    "每3轮: pause sync adapter -> rebalance(跳过) -> 用户deposit/redeem -> unpause -> 验证不变量"
+    "每4轮: 正常deposit -> 触发极端rate跳变→熔断暂停 -> emergencyRateUpdate恢复 -> 恢复正常操作"
+    "每轮: N个用户尝试deposit(耗尽cap) -> N个用户尝试redeem(耗尽cap) -> 每5轮重置限额"
+    "每轮: 两波requestRedeem -> 分别processBatch(两批同时PROCESSING) -> settle -> finalize -> 验证无残留PROCESSING"
 )
 
 should_run() {

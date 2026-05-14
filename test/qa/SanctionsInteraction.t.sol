@@ -161,7 +161,7 @@ contract SanctionsInteractionQATest is Test {
         // 3. Deploy Accountant
         Accountant acctImpl = new Accountant();
         accountant = Accountant(address(new ERC1967Proxy(
-            address(acctImpl), abi.encodeCall(Accountant.initialize, (vaultAddr, uint64(RATE), 0, admin))
+            address(acctImpl), abi.encodeCall(Accountant.initialize, (vaultAddr, uint64(RATE), 0, admin, admin, admin))
         )));
 
         // 4. Initialize vault with placeholder controller

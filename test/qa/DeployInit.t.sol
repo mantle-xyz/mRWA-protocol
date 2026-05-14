@@ -108,6 +108,8 @@ contract DeployInitQATest is Test {
             vaultAddr,
             1e18, // initialRate
             100, // managementFeeRate 1%
+            admin,
+            admin,
             admin
         );
         acct = Accountant(acctAddr);
@@ -257,6 +259,8 @@ contract DeployInitQATest is Test {
             address(vault), // use existing vault as the accountant's vault reference
             1e18,
             100,
+            admin,
+            admin,
             admin
         );
         address freshGw = gatewayFactory.deployGateway();
@@ -554,7 +558,7 @@ contract DeployInitQATest is Test {
 
         _step("[Step 3] Try to re-initialize the already-initialized Accountant");
         vm.expectRevert(Initializable.InvalidInitialization.selector);
-        acct.initialize(address(vault), 1e18, 100, admin);
+        acct.initialize(address(vault), 1e18, 100, admin, admin, admin);
         _step("  PASS: Accountant re-initialize reverted with InvalidInitialization");
 
         _step("[Step 4] Deploy and initialize a StrategyController via factory, then try re-init");
@@ -581,26 +585,26 @@ contract DeployInitQATest is Test {
         _step("[Step 1] Test vault = address(0)");
         address uninitAcct = accountantFactory.deployAccountant();
         vm.expectRevert(Accountant.Accountant__ZeroAddress.selector);
-        Accountant(uninitAcct).initialize(address(0), 1e18, 100, admin);
+        Accountant(uninitAcct).initialize(address(0), 1e18, 100, admin, admin, admin);
         _step("  PASS: reverted with ZeroAddress()");
 
         _step("[Step 2] Test admin = address(0)");
         uninitAcct = accountantFactory.deployAccountant();
         vm.expectRevert(Accountant.Accountant__ZeroAddress.selector);
-        Accountant(uninitAcct).initialize(address(vault), 1e18, 100, address(0));
+        Accountant(uninitAcct).initialize(address(vault), 1e18, 100, address(0), admin, admin);
         _step("  PASS: reverted with ZeroAddress()");
 
         _step("[Step 3] Test initialRate = 0");
         uninitAcct = accountantFactory.deployAccountant();
         vm.expectRevert(Accountant.Accountant__InvalidRate.selector);
-        Accountant(uninitAcct).initialize(address(vault), 0, 100, admin);
+        Accountant(uninitAcct).initialize(address(vault), 0, 100, admin, admin, admin);
         _step("  PASS: reverted with InvalidRate()");
 
         _step("[Step 4] Test managementFeeRate exceeds MAX_MANAGEMENT_FEE_BPS");
         uninitAcct = accountantFactory.deployAccountant();
         uint32 tooHighFee = uint32(Accountant(uninitAcct).MAX_MANAGEMENT_FEE_BPS()) + 1;
         vm.expectRevert(abi.encodeWithSelector(Accountant.Accountant__InvalidFeeRate.selector, uint256(tooHighFee)));
-        Accountant(uninitAcct).initialize(address(vault), 1e18, tooHighFee, admin);
+        Accountant(uninitAcct).initialize(address(vault), 1e18, tooHighFee, admin, admin, admin);
         _step("  PASS: reverted with InvalidFeeRate()");
         _logPass();
     }
@@ -619,7 +623,7 @@ contract DeployInitQATest is Test {
         _step(string.concat("  managementFeeRate: ", vm.toString(uint256(mgmtFee))));
 
         _step("[Step 2] Call deployAndInitAccountant");
-        address acctAddr = accountantFactory.deployAndInitAccountant(address(vault), initialRate, mgmtFee, admin);
+        address acctAddr = accountantFactory.deployAndInitAccountant(address(vault), initialRate, mgmtFee, admin, admin, admin);
         Accountant a = Accountant(acctAddr);
         _step(string.concat("  accountant address: ", vm.toString(acctAddr)));
         _step("  PASS: Accountant deployed and initialized");
@@ -701,7 +705,7 @@ contract DeployInitQATest is Test {
         _logCase("test_DeployAndInitVault_DefaultState", unicode"`deployAndInitVault` 后关键默认状态正确");
 
         _step("[Step 1] Call deployAndInitVault with valid params");
-        address freshAcctAddr = accountantFactory.deployAndInitAccountant(address(vault), 1e18, 100, admin);
+        address freshAcctAddr = accountantFactory.deployAndInitAccountant(address(vault), 1e18, 100, admin, admin, admin);
         address freshGw = gatewayFactory.deployGateway();
 
         IMantleYieldVault.InitParams memory params = IMantleYieldVault.InitParams({
@@ -794,7 +798,7 @@ contract DeployInitQATest is Test {
         _step(string.concat("  uninit vault: ", vm.toString(uninitVault)));
 
         _step("[Step 2] Attacker front-runs initialization");
-        address freshAcct = accountantFactory.deployAndInitAccountant(address(vault), 1e18, 100, attacker);
+        address freshAcct = accountantFactory.deployAndInitAccountant(address(vault), 1e18, 100, attacker, attacker, attacker);
         address freshGw = gatewayFactory.deployGateway();
 
         IMantleYieldVault.InitParams memory params = IMantleYieldVault.InitParams({

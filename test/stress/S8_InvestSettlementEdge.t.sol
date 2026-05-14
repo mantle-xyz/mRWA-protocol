@@ -4,9 +4,10 @@ pragma solidity ^0.8.24;
 import {IMantleYieldVault} from "../../src/interfaces/vault/IMantleYieldVault.sol";
 import {IStrategyControllerExecutor} from "../../src/interfaces/strategy/IStrategyControllerExecutor.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {MantleYieldVault} from "../../src/vault/MantleYieldVault.sol";
 import {VaultViewHelper} from "../lib/VaultViewHelper.sol";
-import {StressBase, MockUSDC_ST, MockPosToken_ST, MockAsyncAdapter_ST} from "./StressBase.t.sol";
+import {StressBase} from "./StressBase.t.sol";
 import {console2} from "forge-std/Test.sol";
 
 /// @title S8: Invest Settlement Edge Cases
@@ -76,35 +77,34 @@ contract S8_InvestSettlementEdge is StressBase {
 
     /// Case A: Normal full settlement (0% refund) — baseline
     function _caseA_normalSettle(uint256 round) internal {
-        _settleInvestWithRefundPctForAdapter(address(syncAdapter), 0);
-        _settleInvestWithRefundPctForAdapter(address(asyncAdapter), 0);
+        _settleInvestWithRefundPctForAdapter(address(realSyncAdapter), 0);
+        _settleInvestWithRefundPctForAdapter(address(realAsyncAdapter), 0);
     }
 
-    /// Case B: Small refund (5-15%) — slippage / fees
+    /// Case B: Small refund (5-15%) — slippage / fees (async only; sync 4626 deposits are atomic)
     function _caseB_smallRefund(uint256 round) internal {
+        _settleInvestWithRefundPctForAdapter(address(realSyncAdapter), 0);
         uint256 pct = _randBetween(5, 15);
-        _settleInvestWithRefundPctForAdapter(address(syncAdapter), pct);
-        _settleInvestWithRefundPctForAdapter(address(asyncAdapter), pct);
+        _settleInvestWithRefundPctForAdapter(address(realAsyncAdapter), pct);
     }
 
-    /// Case C: Large refund (40-70%) — liquidity shortage
+    /// Case C: Large refund (40-70%) — liquidity shortage (async only)
     function _caseC_largeRefund(uint256 round) internal {
+        _settleInvestWithRefundPctForAdapter(address(realSyncAdapter), 0);
         uint256 pct = _randBetween(40, 70);
-        _settleInvestWithRefundPctForAdapter(address(syncAdapter), pct);
-        _settleInvestWithRefundPctForAdapter(address(asyncAdapter), pct);
+        _settleInvestWithRefundPctForAdapter(address(realAsyncAdapter), pct);
     }
 
-    /// Case D: Full refund (100%) — underlying asset rejects subscription entirely
-    ///         Tests confirmInFlight(id, 0, isAbnormal=true) path
+    /// Case D: Full refund (100%) — underlying asset rejects subscription entirely (async only)
     function _caseD_fullRefund(uint256 round) internal {
-        _settleInvestWithRefundPctForAdapter(address(syncAdapter), 100);
-        _settleInvestWithRefundPctForAdapter(address(asyncAdapter), 100);
+        _settleInvestWithRefundPctForAdapter(address(realSyncAdapter), 0);
+        _settleInvestWithRefundPctForAdapter(address(realAsyncAdapter), 100);
     }
 
-    /// Case E: Mixed — each in-flight record gets a random refund percentage
+    /// Case E: Mixed — each async in-flight record gets a random refund percentage
     function _caseE_mixedRefund(uint256 round) internal {
-        _settleInvestMixedForAdapter(address(syncAdapter));
-        _settleInvestMixedForAdapter(address(asyncAdapter));
+        _settleInvestWithRefundPctForAdapter(address(realSyncAdapter), 0);
+        _settleInvestMixedForAdapter(address(realAsyncAdapter));
     }
 
     // =========================================================================
@@ -143,6 +143,8 @@ contract S8_InvestSettlementEdge is StressBase {
             idx++;
         }
 
+        _preSettleInvest(adapter, settledPos, refunds, count);
+
         _settleAdapter(
             adapter,
             IStrategyControllerExecutor.InvestSettlementInput({
@@ -154,24 +156,16 @@ contract S8_InvestSettlementEdge is StressBase {
         );
     }
 
-    /// @dev Compute settled/refund for a single invest entry and adjust adapter assets
+    /// @dev Compute settled/refund for a single invest entry (pure math, no side effects)
     function _computeRefundEntry(
-        address adapter, uint256 id, uint256 idx, uint256 refundPct,
+        address, uint256 id, uint256 idx, uint256 refundPct,
         uint256[] memory settledPos, uint256[] memory refunds
-    ) internal {
+    ) internal view {
         (uint256 tokenAmt, uint256 usdcAmt) = vault.ifTokenAndUsdc(id);
         uint256 refundUsdc = usdcAmt * refundPct / 100;
         uint256 settled = tokenAmt * (100 - refundPct) / 100;
         settledPos[idx] = settled;
         refunds[idx] = refundUsdc;
-
-        uint256 excessPos = tokenAmt - settled;
-        if (excessPos > 0) {
-            MockPosToken_ST(_posTokenOf(adapter)).burn(adapter, excessPos);
-        }
-        if (adapter == address(asyncAdapter) && refundUsdc > 0) {
-            _totalUsdcInjected += MockAsyncAdapter_ST(payable(adapter)).simulateRedeemSettlement(refundUsdc);
-        }
     }
 
     /// @dev Settle each PENDING invest in-flight for `adapter` with a random refund percentage.
@@ -207,6 +201,8 @@ contract S8_InvestSettlementEdge is StressBase {
             idx++;
         }
 
+        _preSettleInvest(adapter, settledPos, refundsArr, count);
+
         _settleAdapter(
             adapter,
             IStrategyControllerExecutor.InvestSettlementInput({
@@ -240,15 +236,46 @@ contract S8_InvestSettlementEdge is StressBase {
         uint256 deposit = target + 50_000e6; // overshoot so rebalance has room to invest
         uint256 bal = usdc.balanceOf(user);
         if (bal < deposit) {
-            MockUSDC_ST(address(usdc)).mint(user, deposit);
-            _totalUsdcInjected += deposit;
+            _mintUsdc(user, deposit);
         }
         _depositAs(user, deposit);
     }
 
-    function _posTokenOf(address adapter) internal view returns (address) {
-        if (adapter == address(syncAdapter)) return address(syncPosToken);
-        if (adapter == address(asyncAdapter)) return address(asyncPosToken);
-        revert("unknown adapter");
+    /// @dev Pre-settle invest for real adapters: mint ST (async) or handle 4626 (sync),
+    ///      and provide refund USDC on adapter when needed.
+    function _preSettleInvest(
+        address adapter, uint256[] memory settledPos, uint256[] memory refunds, uint256 count
+    ) internal {
+        if (adapter == address(realAsyncAdapter)) {
+            uint256 totalPos;
+            uint256 totalRefund;
+            for (uint256 i = 0; i < count; i++) {
+                totalPos += settledPos[i];
+                totalRefund += refunds[i];
+            }
+            // Settle subscribe: mint ST to adapter
+            if (totalPos > 0) {
+                vm.prank(admin);
+                mockSubRed.settleSubscribe(
+                    address(realAsyncAdapter), address(stToken), address(realAsyncAdapter), totalPos
+                );
+            }
+            // Provide refund USDC on adapter (transfer from mockSubRed, not settleRedeem which requires pending redeem)
+            if (totalRefund > 0) {
+                uint256 subRedBal = usdc.balanceOf(address(mockSubRed));
+                if (totalRefund > subRedBal) {
+                    totalRefund = subRedBal;
+                    if (count > 0) {
+                        uint256 perRefund = totalRefund / count;
+                        for (uint256 i = 0; i < count; i++) refunds[i] = perRefund;
+                    }
+                }
+                if (totalRefund > 0) {
+                    vm.prank(address(mockSubRed));
+                    usdc.transfer(address(realAsyncAdapter), totalRefund);
+                }
+            }
+        }
+        // Sync adapter: ERC4626 shares and USDC are already on adapter from deposit/redeem flows
     }
 }

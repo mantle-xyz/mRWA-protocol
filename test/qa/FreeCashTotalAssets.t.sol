@@ -284,7 +284,7 @@ contract FreeCashTotalAssetsQATest is Test {
         // Initialize accountant
         bytes memory acctInitData = abi.encodeCall(
             Accountant.initialize,
-            (address(vault), uint64(RATE), 0, admin)
+            (address(vault), uint64(RATE), 0, admin, admin, admin)
         );
         accountant = Accountant(address(new ERC1967Proxy(address(acctImpl), acctInitData)));
 

@@ -11,6 +11,7 @@ import {MantleYieldVault} from "../../src/vault/MantleYieldVault.sol";
 import {StrategyController} from "../../src/protocol/StrategyController.sol";
 import {OperatorExecutor} from "../../src/protocol/OperatorExecutor.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -118,7 +119,7 @@ contract AccountantExecutorQATest is Test {
 
         accountant = Accountant(address(new ERC1967Proxy(
             address(acctImpl),
-            abi.encodeCall(Accountant.initialize, (address(vault), 1e18, 0, admin))
+            abi.encodeCall(Accountant.initialize, (address(vault), 1e18, 0, admin, admin, admin))
         )));
 
         // Deploy AccountantExecutor
@@ -131,6 +132,7 @@ contract AccountantExecutorQATest is Test {
         // Grant roles
         vm.startPrank(admin);
         acctExecutor.grantRole(acctExecutor.BOT_ROLE(), acctBot);
+        acctExecutor.grantRole(acctExecutor.FEE_SETTLER_ROLE(), acctBot);
         accountant.grantRole(accountant.ACCOUNTANT_EXECUTOR_ROLE(), address(acctExecutor));
         vm.stopPrank();
 
@@ -504,6 +506,44 @@ contract AccountantExecutorQATest is Test {
         vm.prank(acctBot);
         acctExecutor.executePause(address(accountant));
         _step(string.concat("  event AccountantPaused(", vm.toString(address(accountant)), ") emitted"));
+
+        _logPass();
+    }
+
+    // =======================================================================
+    // N-96. executeSettleManagementFee 仅 FEE_SETTLER_ROLE 可调用
+    // =======================================================================
+
+    function test_ExecuteSettleManagementFee_OnlyFeeSettlerRole() public {
+        _logCase(
+            "test_ExecuteSettleManagementFee_OnlyFeeSettlerRole",
+            unicode"executeSettleManagementFee 仅 FEE_SETTLER_ROLE 可调用，仅持 BOT_ROLE 不够"
+        );
+
+        _step("[Step 1] Create a bot-only address with BOT_ROLE but no FEE_SETTLER_ROLE");
+        address botOnly = makeAddr("botOnly");
+        vm.startPrank(admin);
+        acctExecutor.grantRole(acctExecutor.BOT_ROLE(), botOnly);
+        vm.stopPrank();
+        assertTrue(acctExecutor.hasRole(acctExecutor.BOT_ROLE(), botOnly), "botOnly has BOT_ROLE");
+        assertFalse(acctExecutor.hasRole(acctExecutor.FEE_SETTLER_ROLE(), botOnly), "botOnly lacks FEE_SETTLER_ROLE");
+        _step("  botOnly has BOT_ROLE but NOT FEE_SETTLER_ROLE");
+
+        _step("[Step 2] botOnly calls executeSettleManagementFee -> revert");
+        bytes32 feeSettlerRole = acctExecutor.FEE_SETTLER_ROLE();
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, botOnly, feeSettlerRole
+            )
+        );
+        vm.prank(botOnly);
+        acctExecutor.executeSettleManagementFee(address(accountant));
+        _step("  PASS: reverted with AccessControlUnauthorizedAccount(botOnly, FEE_SETTLER_ROLE)");
+
+        _step("[Step 3] Verify acctBot (with FEE_SETTLER_ROLE) can still call successfully");
+        vm.prank(acctBot);
+        acctExecutor.executeSettleManagementFee(address(accountant));
+        _step("  PASS: acctBot with FEE_SETTLER_ROLE succeeded");
 
         _logPass();
     }
