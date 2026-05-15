@@ -187,5 +187,8 @@ contract ExistingFactoriesActivationFlowTest is Test {
         vm.setEnv("F_BUFFER_TARGET_BPS", "1");
         vm.setEnv("F_REBALANCE_THRESHOLD_BPS", "10");
         vm.setEnv("F_REBALANCE_COOLDOWN", "3600");
+        // Pin F_SENDER to admin so the script's preflight check passes regardless
+        // of any F_SENDER leaked from the shell / .env / deploy-config.
+        vm.setEnv("F_SENDER", vm.toString(admin));
     }
 }

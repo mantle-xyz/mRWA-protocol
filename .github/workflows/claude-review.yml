@@ -3,12 +3,7 @@ name: Claude Code Review
 on:
   pull_request:
     types: [opened, synchronize, reopened]
-    paths:
-      - "src/**"
-      - "test/**"
-      - "script/**"
-      - "foundry.toml"
-      - "remappings.txt"
+    # No paths filter: review every PR including CI / docs / config changes.
 
 jobs:
   review:
