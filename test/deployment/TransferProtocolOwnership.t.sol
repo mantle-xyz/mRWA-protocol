@@ -81,11 +81,14 @@ contract TransferProtocolOwnershipTest is Test {
 
         vm.setEnv("TRANSFER_RENOUNCE_OLD_ADMIN", "false");
         vm.setEnv("F_SENDER", vm.toString(oldAdmin));
+        bytes32 complianceRole = keccak256("COMPLIANCE_ROLE");
+        assertFalse(oracle.hasRole(complianceRole, newAdmin), "new admin should not have COMPLIANCE_ROLE pre-run");
         new TransferProtocolOwnership().run();
         _assertDefaultAdminTransfersScheduled();
         _assertDefaultAdminRulesAdmins(true, false);
         _assertPlainProxyAdmins(true, true);
         _assertBeaconOwners(newBeaconOwner);
+        assertTrue(oracle.hasRole(complianceRole, newAdmin), "new admin should have COMPLIANCE_ROLE post-grant");
 
         _warpPastDefaultAdminTransferSchedule();
         vm.setEnv("TRANSFER_ACCEPT_DEFAULT_ADMIN", "true");

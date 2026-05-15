@@ -31,6 +31,7 @@ interface IBeaconFactoryLike {
 /// Grant/transfer phase (default):
 /// - Grants DEFAULT_ADMIN_ROLE to TRANSFER_NEW_ADMIN on plain AccessControl proxies.
 /// - Begins default-admin transfer on AccessControlDefaultAdminRules proxies.
+/// - Additionally grants COMPLIANCE_ROLE on SanctionsOracle to TRANSFER_NEW_ADMIN.
 /// - Transfers each factory BEACON owner to TRANSFER_NEW_BEACON_OWNER.
 ///
 /// Accept phase:
@@ -67,6 +68,8 @@ interface IBeaconFactoryLike {
 /// - TRANSFER_SUBRED_ADAPTER_FACTORY      fallback UPGRADE_INIT_SUBRED_ADAPTER_FACTORY
 contract TransferProtocolOwnership is Script {
     bytes32 internal constant DEFAULT_ADMIN_ROLE = bytes32(0);
+    bytes32 internal constant COMPLIANCE_ROLE = keccak256("COMPLIANCE_ROLE");
+    string internal constant SANCTIONS_ORACLE_NAME = "SanctionsOracle";
 
     function run() external {
         address oldAdmin = vm.envOr("TRANSFER_OLD_ADMIN", address(0));
@@ -193,10 +196,21 @@ contract TransferProtocolOwnership is Script {
             IAccessControlLike proxy = IAccessControlLike(proxies[i]);
             if (proxy.hasRole(DEFAULT_ADMIN_ROLE, newAdmin)) {
                 console2.log("Admin already granted:", names[i], newAdmin);
-                continue;
+            } else {
+                proxy.grantRole(DEFAULT_ADMIN_ROLE, newAdmin);
+                console2.log("Admin granted        :", names[i], newAdmin);
             }
-            proxy.grantRole(DEFAULT_ADMIN_ROLE, newAdmin);
-            console2.log("Admin granted        :", names[i], newAdmin);
+
+            // SanctionsOracle: also grant COMPLIANCE_ROLE to the new admin so it can run
+            // compliance operations once the old admin renounces.
+            if (keccak256(bytes(names[i])) == keccak256(bytes(SANCTIONS_ORACLE_NAME))) {
+                if (proxy.hasRole(COMPLIANCE_ROLE, newAdmin)) {
+                    console2.log("COMPLIANCE already   :", names[i], newAdmin);
+                } else {
+                    proxy.grantRole(COMPLIANCE_ROLE, newAdmin);
+                    console2.log("COMPLIANCE granted   :", names[i], newAdmin);
+                }
+            }
         }
     }
 
