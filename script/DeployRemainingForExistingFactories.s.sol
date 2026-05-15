@@ -46,6 +46,7 @@ import {Script, console2} from "forge-std/Script.sol";
 ///   F_SIGNER_ADDRESS             – OperatorExecutor BOT_ROLE (initial bot, legacy env name)
 ///   F_TREASURY_ADDRESS           – Gateway sanctionSafe init param (also Vault treasury in Phase B)
 ///   F_SYNC_REDEEM_DISABLED       – Gateway syncRedeemDisabled init param (true/false)
+///   F_WHITELIST_ENABLED          – Gateway whitelist enforcement flag (true/false; default false)
 ///   EXISTING_VAULT_PROXY         – the uninit Vault BeaconProxy already on-chain
 ///                                  (used as Gateway.init's vault pointer; Gateway.init does
 ///                                  not call vault, so uninit pointer is fine)
@@ -79,6 +80,7 @@ contract DeployRemainingForExistingFactories is Script {
         address treasury = vm.envAddress("F_TREASURY_ADDRESS");
         address vaultProxy = vm.envAddress("EXISTING_VAULT_PROXY");
         bool syncRedeemDisabled = vm.envBool("F_SYNC_REDEEM_DISABLED");
+        bool whitelistEnabled = vm.envOr("F_WHITELIST_ENABLED", false);
         address configuredSender = vm.envOr("F_SENDER", address(0));
         if (configuredSender != address(0)) {
             require(configuredSender == admin, "F_SENDER_MUST_BE_ADMIN");
@@ -93,6 +95,7 @@ contract DeployRemainingForExistingFactories is Script {
         console2.log("Op signer          :", signer);
         console2.log("Treasury           :", treasury);
         console2.log("Sync redeem disabled:", syncRedeemDisabled);
+        console2.log("Whitelist enabled  :", whitelistEnabled);
 
         vm.startBroadcast();
 
@@ -149,6 +152,9 @@ contract DeployRemainingForExistingFactories is Script {
                 })
             );
         d.gateway = MantleVaultGateway(gatewayAddr);
+        if (whitelistEnabled) {
+            d.gateway.setWhitelistEnabled(true);
+        }
         console2.log("[6/6] Gateway          :", gatewayAddr);
 
         vm.stopBroadcast();
@@ -190,5 +196,6 @@ contract DeployRemainingForExistingFactories is Script {
         console2.log("OpExec has BOT       :", d.operatorExecutor.hasRole(d.operatorExecutor.BOT_ROLE(), signer));
         console2.log("Gateway vault        :", address(d.gateway.vault()));
         console2.log("Gateway oracle       :", address(d.gateway.sanctionsOracle()));
+        console2.log("Gateway whitelistEnabled :", d.gateway.whitelistEnabled());
     }
 }

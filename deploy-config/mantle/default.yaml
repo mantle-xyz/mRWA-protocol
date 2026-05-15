@@ -91,6 +91,7 @@ envs:
   F_DEPOSIT_DAILY_REMAINING: "0" # uint256 max = unlimited (USDC units)
   F_REDEEM_DAILY_REMAINING: "0" # uint256 max = unlimited (share units)
   F_SYNC_REDEEM_DISABLED: "false"
+  F_WHITELIST_ENABLED: "false" # Gateway whitelist enforcement; admin can flip via setWhitelistEnabled
 
   # ── Task: DeployEmptyVaultAndAdapterFactories ────────────────
   DEPLOY_EMPTY_FACTORIES_BEACON_OWNER: ""
