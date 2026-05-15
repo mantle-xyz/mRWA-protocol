@@ -33,6 +33,7 @@ import {Script, console2} from "forge-std/Script.sol";
 ///   F_MIN_REDEEM_AMOUNT       – minimum redeem amount
 ///   F_MIN_DEPOSIT_AMOUNT      – minimum deposit amount
 ///   F_SYNC_REDEEM_DISABLED    – gateway sync redeem disabled flag (true/false)
+///   F_WHITELIST_ENABLED       – gateway whitelist enforcement flag (true/false; default false)
 contract DeployVault is Script {
     function run()
         external
@@ -110,7 +111,11 @@ contract DeployVault is Script {
                 syncRedeemDisabled: vm.envBool("F_SYNC_REDEEM_DISABLED")
             })
         );
+        if (vm.envOr("F_WHITELIST_ENABLED", false)) {
+            gateway.setWhitelistEnabled(true);
+        }
         console2.log("[4/5] Vault Gateway      :", params.gateway);
+        console2.log("       Whitelist enabled :", gateway.whitelistEnabled());
 
         // ---- 5. Grant Vault roles ----
         vault.grantRole(vault.PAUSER_ROLE(), pauser);

@@ -81,6 +81,7 @@ import {Script, console2} from "forge-std/Script.sol";
 ///   F_MIN_REDEEM_AMOUNT          – Vault minimum redeem amount
 ///   F_MIN_DEPOSIT_AMOUNT         – Vault minimum deposit amount
 ///   F_SYNC_REDEEM_DISABLED       – Gateway sync redeem disabled flag (true/false)
+///   F_WHITELIST_ENABLED          – Gateway whitelist enforcement flag (true/false; default false)
 ///
 /// Optional adapter env (omit to skip adapter deployment):
 ///   F_ADAPTER_SUBRED_MANAGEMENT  – Digift SubRedManagement contract address
@@ -277,6 +278,14 @@ contract DeployAll is Script {
                     syncRedeemDisabled: vm.envBool("F_SYNC_REDEEM_DISABLED")
                 })
             );
+
+        // 3b.1. Optional: enable whitelist enforcement (default off, admin can toggle later)
+        if (vm.envOr("F_WHITELIST_ENABLED", false)) {
+            d.gateway.setWhitelistEnabled(true);
+            console2.log("  Gateway whitelist     : ENABLED");
+        } else {
+            console2.log("  Gateway whitelist     : disabled");
+        }
 
         // 3c. StrategyController.initialize (reads vault.asset(), so vault must be init'd)
         d.controller = StrategyController(controllerAddr);

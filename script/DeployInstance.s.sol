@@ -61,6 +61,7 @@ import {Script, console2} from "forge-std/Script.sol";
 ///   F_MIN_REDEEM_AMOUNT
 ///   F_MIN_DEPOSIT_AMOUNT
 ///   F_SYNC_REDEEM_DISABLED
+///   F_WHITELIST_ENABLED          – Gateway whitelist enforcement flag (true/false; default false)
 ///
 /// Optional adapter env (omit F_SUBRED_ADAPTER_FACTORY to skip adapter deployment):
 ///   F_SUBRED_ADAPTER_FACTORY     – SubRedManagementAdapterFactory address
@@ -180,6 +181,14 @@ contract DeployInstance is Script {
                     syncRedeemDisabled: vm.envBool("F_SYNC_REDEEM_DISABLED")
                 })
             );
+
+        // Optional: enable whitelist enforcement (default off, admin can toggle later)
+        if (vm.envOr("F_WHITELIST_ENABLED", false)) {
+            d.gateway.setWhitelistEnabled(true);
+            console2.log("Gateway whitelist  : ENABLED");
+        } else {
+            console2.log("Gateway whitelist  : disabled");
+        }
 
         d.controller = StrategyController(controllerAddr);
         d.controller
