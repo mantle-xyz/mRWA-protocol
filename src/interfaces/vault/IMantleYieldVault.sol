@@ -63,7 +63,7 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
         uint256 minRedeemAmount;
         uint256 minDepositAmount;
         uint256 maxSettlementDeviationBps;
-        uint256 depositDailyRemaining; // USDC units. 0 = blocked, type(uint256).max = no limit
+        uint256 depositDailyRemaining; // STABLE units. 0 = blocked, type(uint256).max = no limit
         uint256 redeemDailyRemaining; // Share units. 0 = blocked, type(uint256).max = no limit
     }
 
@@ -83,7 +83,7 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
         address adapter;
         address token;
         uint256 tokenAmount;
-        uint256 usdcAmount;
+        uint256 stableAmount;
         uint256 settledAmount;
         bool isInvest;
         uint256 timestamp;
@@ -93,7 +93,7 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     struct tokenInfo {
         address token;
         uint256 tokenAmount;
-        uint256 usdcAmount;
+        uint256 stableAmount;
     }
 
     // =============================================================
@@ -148,14 +148,14 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
         address indexed adapter,
         address token,
         uint256 tokenAmount,
-        uint256 usdcAmount,
+        uint256 stableAmount,
         bool isInvest
     );
     event InFlightConfirmed(
         uint256 indexed inFlightId,
         address indexed adapter,
         uint256 tokenAmount,
-        uint256 usdcAmount,
+        uint256 stableAmount,
         uint256 settledAmount
     );
     enum FeeType {
@@ -205,7 +205,7 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     function totalInvestInFlight() external view returns (uint256);
     function totalRedeemInFlight() external view returns (uint256);
     function adapterInvestInFlightTokens(address adapter) external view returns (uint256);
-    function adapterRedeemInFlightUsdc(address adapter) external view returns (uint256);
+    function adapterRedeemInFlightStable(address adapter) external view returns (uint256);
     function pendingRequestCount() external view returns (uint256);
 
     function getTokenInfos() external view returns (tokenInfo[] memory);
@@ -235,7 +235,7 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
             address adapter,
             address token,
             uint256 tokenAmount,
-            uint256 usdcAmount,
+            uint256 stableAmount,
             uint256 settledAmount,
             bool isInvest,
             uint256 timestamp,
@@ -272,7 +272,7 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     function approveToAdapter(address adapter, address token, uint256 amount) external;
     function updateRequestBatch(uint256[] calldata ids, RequestStatus newStatus) external;
     function markRequestsDone(uint256[] calldata ids, uint256[] calldata settledAssets) external;
-    function createInFlight(address adapter, address token, uint256 tokenAmount, uint256 usdcAmount, bool isInvest)
+    function createInFlight(address adapter, address token, uint256 tokenAmount, uint256 stableAmount, bool isInvest)
         external
         returns (uint256 inFlightId);
     function confirmInFlight(uint256 inFlightId, uint256 actualAmount, bool isAbnormal) external;

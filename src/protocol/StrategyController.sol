@@ -72,14 +72,14 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     event RebalanceInvest(uint256 requestedAsset, uint256 investedAsset, uint256 remainingAsset);
     event DivestSkipped(address indexed adapter, uint256 requestedAsset, bytes revertData);
     /// @notice Unified redeem in-flight record event for both async and sync paths.
-    /// @dev inFlightUsdcAmount semantic differs by path:
+    /// @dev inFlightStableAmount semantic differs by path:
     ///      - async: equals requestedAsset
     ///      - sync: equals actually received asset amount from withdrawSync
     event RedeemInFlightRecorded(
         address indexed adapter,
         uint256 indexed inFlightId,
         uint256 requestedAsset,
-        uint256 inFlightUsdcAmount,
+        uint256 inFlightStableAmount,
         bool isAsync
     );
     event DivestIncomplete(uint256 remainingAsset);
@@ -125,7 +125,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     error Controller__StrategyAlreadyActive(address adapter);
     error Controller__StrategyAlreadyInactive(address adapter);
     error Controller__StrategyInOrder(address adapter);
-    error Controller__StrategyHasInFlight(address adapter, uint256 pendingInvestTokens, uint256 pendingRedeemUsdc);
+    error Controller__StrategyHasInFlight(address adapter, uint256 pendingInvestTokens, uint256 pendingRedeemStable);
     error Controller__RetryOnlyAsyncStrategy(address adapter);
     error Controller__InvalidRetryAmount();
 
@@ -321,7 +321,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         }
 
         uint256 pendingInvest = vault.adapterInvestInFlightTokens(adapter);
-        uint256 pendingRedeem = vault.adapterRedeemInFlightUsdc(adapter);
+        uint256 pendingRedeem = vault.adapterRedeemInFlightStable(adapter);
         if (pendingInvest > 0 || pendingRedeem > 0) {
             revert Controller__StrategyHasInFlight(adapter, pendingInvest, pendingRedeem);
         }
@@ -610,7 +610,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
             // Request enters PROCESSING; finalize waits until physical cash arrives via
             //   - later pRB calls that aggregate enough shortfall to clear adapter min, or
             //   - rebalance divest triggered by growing cashDeficit across PROCESSING requests, or
-            //   - new user deposits injecting USDC directly.
+            //   - new user deposits injecting STABLE directly.
         }
 
         vault.updateRequestBatch(ids, IMantleYieldVault.RequestStatus.PROCESSING);
@@ -733,7 +733,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
             bool hasPendingRequest
         )
     {
-        // USDC balance of the vault
+        // STABLE balance of the vault
         totalCash = asset.balanceOf(address(vault));
         // freeCash = max(totalCash - floatingLockedAssets, 0)
         freeCash = _freeCash();
@@ -1140,7 +1140,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         vault.createInFlight(adapter, token, expectedPos, assetAmount, true);
     }
 
-    /// @dev Async redeem path records pending USDC and emits unified in-flight events.
+    /// @dev Async redeem path records pending STABLE and emits unified in-flight events.
     ///      `posAmount` is expected/estimated position-token amount used for request and bookkeeping.
     ///      It may differ from actual protocol consumption under price movement or rounding.
     function _recordAsyncRedeemInFlight(address adapter, address token, uint256 requestedAsset, uint256 posAmount)
@@ -1155,9 +1155,9 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         emit RedeemInFlightRecorded(adapter, inFlightId, requestedAsset, requestedAsset, true);
     }
 
-    /// @dev Sync redeem path records pending USDC on adapter and waits for off-chain settlement.
+    /// @dev Sync redeem path records pending STABLE on adapter and waits for off-chain settlement.
     ///      `posAmount` is expected/estimated position-token amount captured at request time.
-    ///      For redeem flow, settlement accounting is driven by `receivedAsset` (USDC), while
+    ///      For redeem flow, settlement accounting is driven by `receivedAsset` (STABLE), while
     ///      `posAmount` remains informational/bookkeeping and can deviate from actual token burn.
     function _recordSyncRedeemInFlight(
         address adapter,

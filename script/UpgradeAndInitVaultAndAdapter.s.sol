@@ -22,7 +22,7 @@ import {Script, console2} from "forge-std/Script.sol";
 /// - UPGRADE_INIT_VAULT_PROXY
 /// - UPGRADE_INIT_ADAPTER_PROXY
 /// - UPGRADE_INIT_ADMIN
-/// - UPGRADE_INIT_USDC
+/// - UPGRADE_INIT_STABLE
 /// - UPGRADE_INIT_GATEWAY
 /// - UPGRADE_INIT_CONTROLLER                  StrategyController BeaconProxy (uninit, from Phase A)
 /// - UPGRADE_INIT_ACCOUNTANT                  Accountant BeaconProxy (uninit, from Phase A)
@@ -66,7 +66,7 @@ contract UpgradeAndInitVaultAndAdapter is Script {
         address admin = vm.envOr("UPGRADE_INIT_ADMIN", address(0));
         address pauser = vm.envOr("UPGRADE_INIT_PAUSER", address(0));
         address capManager = vm.envOr("UPGRADE_INIT_CAP_MANAGER", address(0));
-        address usdc = vm.envOr("UPGRADE_INIT_USDC", address(0));
+        address stable = vm.envOr("UPGRADE_INIT_STABLE", address(0));
         address gateway = vm.envOr("UPGRADE_INIT_GATEWAY", address(0));
         address treasury = vm.envOr("UPGRADE_INIT_TREASURY", address(0));
         address controllerProxy = vm.envOr("UPGRADE_INIT_CONTROLLER", address(0));
@@ -86,7 +86,7 @@ contract UpgradeAndInitVaultAndAdapter is Script {
         _requireNonZero(admin, "UPGRADE_INIT_ADMIN");
         _requireNonZero(pauser, "UPGRADE_INIT_PAUSER");
         _requireNonZero(capManager, "UPGRADE_INIT_CAP_MANAGER");
-        _requireNonZero(usdc, "UPGRADE_INIT_USDC");
+        _requireNonZero(stable, "UPGRADE_INIT_STABLE");
         _requireNonZero(gateway, "UPGRADE_INIT_GATEWAY");
         _requireNonZero(treasury, "UPGRADE_INIT_TREASURY");
         _requireNonZero(controllerProxy, "UPGRADE_INIT_CONTROLLER");
@@ -99,7 +99,7 @@ contract UpgradeAndInitVaultAndAdapter is Script {
         SubRedManagementAdapterFactory adapterFactory = SubRedManagementAdapterFactory(adapterFactoryAddr);
 
         IMantleYieldVault.InitParams memory vaultParams = IMantleYieldVault.InitParams({
-            asset: IERC20(usdc),
+            asset: IERC20(stable),
             name: vm.envOr("UPGRADE_INIT_VAULT_NAME", string("Mantle RWA Vault")),
             symbol: vm.envOr("UPGRADE_INIT_VAULT_SYMBOL", string("mRWA")),
             admin: admin,

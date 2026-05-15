@@ -39,7 +39,7 @@ contract ExistingFactoriesActivationFlowTest is Test {
         address pauser = makeAddr("pauser");
         address capManager = makeAddr("capManager");
         address treasury = makeAddr("treasury");
-        MockERC20Mintable usdc = new MockERC20Mintable("USD Coin", "USDC", 6);
+        MockERC20Mintable stable = new MockERC20Mintable("Stable Coin", "STABLE", 6);
         MockERC20Mintable stToken = new MockERC20Mintable("DigiFt ST", "dST", 18);
         MockSubRedManagement subRed = new MockSubRedManagement(address(this));
 
@@ -87,7 +87,7 @@ contract ExistingFactoriesActivationFlowTest is Test {
             vaultProxy,
             adapterProxy,
             admin,
-            address(usdc),
+            address(stable),
             gateway,
             controllerProxy,
             accountantProxy,
@@ -136,7 +136,7 @@ contract ExistingFactoriesActivationFlowTest is Test {
         address vaultProxy,
         address adapterProxy,
         address admin,
-        address usdc,
+        address stable,
         address gateway,
         address controller,
         address accountant,
@@ -153,7 +153,7 @@ contract ExistingFactoriesActivationFlowTest is Test {
         vm.setEnv("UPGRADE_INIT_VAULT_PROXY", vm.toString(vaultProxy));
         vm.setEnv("UPGRADE_INIT_ADAPTER_PROXY", vm.toString(adapterProxy));
         vm.setEnv("UPGRADE_INIT_ADMIN", vm.toString(admin));
-        vm.setEnv("UPGRADE_INIT_USDC", vm.toString(usdc));
+        vm.setEnv("UPGRADE_INIT_STABLE", vm.toString(stable));
         vm.setEnv("UPGRADE_INIT_GATEWAY", vm.toString(gateway));
         vm.setEnv("UPGRADE_INIT_CONTROLLER", vm.toString(controller));
         vm.setEnv("UPGRADE_INIT_ACCOUNTANT", vm.toString(accountant));

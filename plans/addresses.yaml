@@ -2,7 +2,7 @@
 # Deployed via DeployAll.s.sol + DeployMockSubRedManagement.s.sol + DeploySubRedManagementAdapter.s.sol
 
 # Tokens
-MockUSDC:	0xc40fa5d8cf408baa63019137033d2698377fb243
+MockStable:	0xc40fa5d8cf408baa63019137033d2698377fb243
 MockSTToken:	0xC2ADD5C914d4953a5382162b08E70fBe6cf47b30
 MockSubRedManagement:	0x99c967ada4b3ab4e011ef2379d58e11816bd219b
 SubRedManagementAdapter:	0xf82c030bd9a3ad97dfd2838e2c1721f50f75da1e

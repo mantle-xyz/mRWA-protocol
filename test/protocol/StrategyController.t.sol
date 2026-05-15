@@ -144,7 +144,7 @@ contract MockStrategyAdapter is IStrategyAdapter {
         return depositReturnZero ? 0 : amount;
     }
 
-    function withdrawSync(uint256 amount, address) external returns (uint256 actualUSDC) {
+    function withdrawSync(uint256 amount, address) external returns (uint256 actualStable) {
         if (failWithdraw) revert("WITHDRAW_FAIL");
         withdrawCount++;
         return amount;
@@ -204,7 +204,7 @@ contract MockControllerVault {
         address adapter;
         address assetAddr;
         uint256 tokenAmount;
-        uint256 usdcAmount;
+        uint256 stableAmount;
         uint256 settledAmount;
         bool isInvest;
         uint256 timestamp;
@@ -271,7 +271,7 @@ contract MockControllerVault {
         return investInFlightByAdapter[adapter];
     }
 
-    function adapterRedeemInFlightUsdc(address adapter) external view returns (uint256) {
+    function adapterRedeemInFlightStable(address adapter) external view returns (uint256) {
         return redeemInFlightByAdapter[adapter];
     }
 
@@ -345,28 +345,31 @@ contract MockControllerVault {
         }
     }
 
-    function createInFlight(address adapter, address assetAddr, uint256 tokenAmount, uint256 usdcAmount, bool isInvest)
-        external
-        returns (uint256 inFlightId)
-    {
+    function createInFlight(
+        address adapter,
+        address assetAddr,
+        uint256 tokenAmount,
+        uint256 stableAmount,
+        bool isInvest
+    ) external returns (uint256 inFlightId) {
         inFlightId = ++inFlightIdCursor;
         flights[inFlightId] = InFlight({
             id: inFlightId,
             adapter: adapter,
             assetAddr: assetAddr,
             tokenAmount: tokenAmount,
-            usdcAmount: usdcAmount,
+            stableAmount: stableAmount,
             settledAmount: 0,
             isInvest: isInvest,
             timestamp: block.timestamp,
             status: IMantleYieldVault.InFlightStatus.PENDING
         });
         if (isInvest) {
-            investInFlightTotal += usdcAmount;
+            investInFlightTotal += stableAmount;
             investInFlightByAdapter[adapter] += tokenAmount;
         } else {
-            redeemInFlightTotal += usdcAmount;
-            redeemInFlightByAdapter[adapter] += usdcAmount;
+            redeemInFlightTotal += stableAmount;
+            redeemInFlightByAdapter[adapter] += stableAmount;
         }
     }
 
@@ -374,16 +377,16 @@ contract MockControllerVault {
         InFlight storage f = flights[inFlightId];
         f.settledAmount = actualAmount;
         f.status = IMantleYieldVault.InFlightStatus.CONFIRMED;
-        if (f.isInvest && investInFlightTotal >= f.usdcAmount) {
-            investInFlightTotal -= f.usdcAmount;
+        if (f.isInvest && investInFlightTotal >= f.stableAmount) {
+            investInFlightTotal -= f.stableAmount;
             if (investInFlightByAdapter[f.adapter] >= f.tokenAmount) {
                 investInFlightByAdapter[f.adapter] -= f.tokenAmount;
             }
         }
-        if (!f.isInvest && redeemInFlightTotal >= f.usdcAmount) {
-            redeemInFlightTotal -= f.usdcAmount;
-            if (redeemInFlightByAdapter[f.adapter] >= f.usdcAmount) {
-                redeemInFlightByAdapter[f.adapter] -= f.usdcAmount;
+        if (!f.isInvest && redeemInFlightTotal >= f.stableAmount) {
+            redeemInFlightTotal -= f.stableAmount;
+            if (redeemInFlightByAdapter[f.adapter] >= f.stableAmount) {
+                redeemInFlightByAdapter[f.adapter] -= f.stableAmount;
             }
         }
     }
@@ -409,7 +412,7 @@ contract MockControllerVault {
             address adapter,
             address assetAddr,
             uint256 tokenAmount,
-            uint256 usdcAmount,
+            uint256 stableAmount,
             uint256 settledAmount,
             bool isInvest,
             uint256 timestamp,
@@ -417,18 +420,17 @@ contract MockControllerVault {
         )
     {
         InFlight memory f = flights[inFlightId];
-        return
-            (
-                f.id,
-                f.adapter,
-                f.assetAddr,
-                f.tokenAmount,
-                f.usdcAmount,
-                f.settledAmount,
-                f.isInvest,
-                f.timestamp,
-                f.status
-            );
+        return (
+            f.id,
+            f.adapter,
+            f.assetAddr,
+            f.tokenAmount,
+            f.stableAmount,
+            f.settledAmount,
+            f.isInvest,
+            f.timestamp,
+            f.status
+        );
     }
 }
 

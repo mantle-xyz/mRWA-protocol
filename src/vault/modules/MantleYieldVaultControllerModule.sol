@@ -23,7 +23,7 @@ abstract contract MantleYieldVaultControllerModule is MantleYieldVaultStorage {
 
     function removeAdapter(address adapter) external onlyController {
         if (!isAdapter[adapter]) revert Vault__AdapterNotRegistered(adapter);
-        if (adapterInvestInFlightTokens[adapter] > 0 || adapterRedeemInFlightUsdc[adapter] > 0) {
+        if (adapterInvestInFlightTokens[adapter] > 0 || adapterRedeemInFlightStable[adapter] > 0) {
             revert Vault__AdapterHasInFlight(adapter);
         }
         IERC20(asset()).forceApprove(adapter, 0);
@@ -74,7 +74,7 @@ abstract contract MantleYieldVaultControllerModule is MantleYieldVaultStorage {
      * @dev settledAssets[i] is determined by the controller based on actual adapter returns
      *      or current exchange rate. totalLockedShares is released here.
      * @param ids Request IDs to mark done
-     * @param settledAssets Actual USDC amount each request will receive
+     * @param settledAssets Actual STABLE amount each request will receive
      */
     function markRequestsDone(uint256[] calldata ids, uint256[] calldata settledAssets) external onlyController {
         if (ids.length != settledAssets.length) revert Vault__LengthMismatch(ids.length, settledAssets.length);
@@ -136,17 +136,17 @@ abstract contract MantleYieldVaultControllerModule is MantleYieldVaultStorage {
 
     /**
      * @notice Create an in-flight record for rebalancing operations
-     * @param isInvest true = invest (USDC out, waiting for tokens); false = redeem (tokens out, waiting for USDC)
+     * @param isInvest true = invest (STABLE out, waiting for tokens); false = redeem (tokens out, waiting for STABLE)
      * @param tokenAmount Invest: expected incoming token amount; Redeem: outgoing token amount
-     * @param usdcAmount  Invest: outgoing USDC amount;           Redeem: expected incoming USDC amount
+     * @param stableAmount  Invest: outgoing STABLE amount;           Redeem: expected incoming STABLE amount
      */
-    function createInFlight(address adapter, address token, uint256 tokenAmount, uint256 usdcAmount, bool isInvest)
+    function createInFlight(address adapter, address token, uint256 tokenAmount, uint256 stableAmount, bool isInvest)
         external
         onlyController
         returns (uint256 inFlightId)
     {
         if (!isAdapter[adapter]) revert Vault__AdapterNotRegistered(adapter);
-        if (usdcAmount == 0 || tokenAmount == 0) revert Vault__ZeroAmount();
+        if (stableAmount == 0 || tokenAmount == 0) revert Vault__ZeroAmount();
 
         inFlightId = nextInFlightId++;
         inFlightRecords[inFlightId] = InFlightRecord({
@@ -154,7 +154,7 @@ abstract contract MantleYieldVaultControllerModule is MantleYieldVaultStorage {
             adapter: adapter,
             token: token,
             tokenAmount: tokenAmount,
-            usdcAmount: usdcAmount,
+            stableAmount: stableAmount,
             settledAmount: 0,
             isInvest: isInvest,
             timestamp: block.timestamp,
@@ -162,19 +162,19 @@ abstract contract MantleYieldVaultControllerModule is MantleYieldVaultStorage {
         });
 
         if (isInvest) {
-            totalInvestInFlight += usdcAmount;
+            totalInvestInFlight += stableAmount;
             adapterInvestInFlightTokens[adapter] += tokenAmount;
         } else {
-            totalRedeemInFlight += usdcAmount;
-            adapterRedeemInFlightUsdc[adapter] += usdcAmount;
+            totalRedeemInFlight += stableAmount;
+            adapterRedeemInFlightStable[adapter] += stableAmount;
         }
 
-        emit InFlightCreated(inFlightId, adapter, token, tokenAmount, usdcAmount, isInvest);
+        emit InFlightCreated(inFlightId, adapter, token, tokenAmount, stableAmount, isInvest);
     }
 
     /**
      * @notice Confirm an in-flight record (assets have arrived)
-     * @param actualAmount Actual settled amount (invest: actual tokens received; redeem: actual USDC received)
+     * @param actualAmount Actual settled amount (invest: actual tokens received; redeem: actual STABLE received)
      */
     function confirmInFlight(uint256 inFlightId, uint256 actualAmount, bool isAbnormal) external onlyController {
         if (actualAmount == 0 && !isAbnormal) revert Vault__ZeroAmount();
@@ -185,15 +185,15 @@ abstract contract MantleYieldVaultControllerModule is MantleYieldVaultStorage {
         r.settledAmount = actualAmount;
 
         if (r.isInvest) {
-            // Invest confirmed: tokens arrived, clear USDC in-flight
-            totalInvestInFlight -= r.usdcAmount;
+            // Invest confirmed: tokens arrived, clear STABLE in-flight
+            totalInvestInFlight -= r.stableAmount;
             adapterInvestInFlightTokens[r.adapter] -= r.tokenAmount;
         } else {
-            // Redeem confirmed: USDC arrived, clear USDC in-flight
-            totalRedeemInFlight -= r.usdcAmount;
-            adapterRedeemInFlightUsdc[r.adapter] -= r.usdcAmount;
+            // Redeem confirmed: STABLE arrived, clear STABLE in-flight
+            totalRedeemInFlight -= r.stableAmount;
+            adapterRedeemInFlightStable[r.adapter] -= r.stableAmount;
         }
 
-        emit InFlightConfirmed(inFlightId, r.adapter, r.tokenAmount, r.usdcAmount, actualAmount);
+        emit InFlightConfirmed(inFlightId, r.adapter, r.tokenAmount, r.stableAmount, actualAmount);
     }
 }

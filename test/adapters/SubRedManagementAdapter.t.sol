@@ -8,8 +8,8 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {Test} from "forge-std/Test.sol";
 import {Vm} from "forge-std/Vm.sol";
 
-contract MockUSDC is ERC20 {
-    constructor() ERC20("MockUSDC", "mUSDC") {}
+contract MockStable is ERC20 {
+    constructor() ERC20("MockStable", "mStable") {}
 
     function mint(address to, uint256 amount) external {
         _mint(to, amount);
@@ -37,18 +37,18 @@ contract MockSTToken6 is ERC20 {
 }
 
 contract MockVaultForAdapter {
-    ERC20 public immutable usdc;
+    ERC20 public immutable stable;
 
     constructor(address asset_) {
-        usdc = ERC20(asset_);
+        stable = ERC20(asset_);
     }
 
     function asset() external view returns (address) {
-        return address(usdc);
+        return address(stable);
     }
 
     function approveToAdapter(address adapter, uint256 amount) external {
-        usdc.approve(adapter, amount);
+        stable.approve(adapter, amount);
     }
 
     function approveTokenToAdapter(address token, address adapter, uint256 amount) external {
@@ -96,8 +96,8 @@ contract SubRedManagementAdapterTest is Test {
         address indexed adapter, address indexed caller, uint256 amount, address indexed receiver
     );
 
-    MockUSDC internal usdc;
-    MockUSDC internal dustToken;
+    MockStable internal stable;
+    MockStable internal dustToken;
     MockVaultForAdapter internal vault;
     MockSubRedManagement internal subRed;
     MockSTToken internal stToken;
@@ -115,9 +115,9 @@ contract SubRedManagementAdapterTest is Test {
     uint256 internal constant REDEEM_STEP_POS_6 = 1e6; // 1 whole token
 
     function setUp() public {
-        usdc = new MockUSDC();
-        dustToken = new MockUSDC();
-        vault = new MockVaultForAdapter(address(usdc));
+        stable = new MockStable();
+        dustToken = new MockStable();
+        vault = new MockVaultForAdapter(address(stable));
         subRed = new MockSubRedManagement();
         stToken = new MockSTToken();
         stToken6 = new MockSTToken6();
@@ -139,16 +139,16 @@ contract SubRedManagementAdapterTest is Test {
     }
 
     function test_DepositPullsFromVaultAndSubscribes() public {
-        usdc.mint(address(vault), 1_000e18);
+        stable.mint(address(vault), 1_000e18);
         vault.approveToAdapter(address(adapter), 500e18);
 
         uint256 subscribed = adapter.deposit(100e18, address(0));
         assertEq(subscribed, 100e18);
         assertEq(subRed.subscribeCount(), 1);
         assertEq(subRed.lastStToken(), address(stToken));
-        assertEq(subRed.lastCurrencyToken(), address(usdc));
+        assertEq(subRed.lastCurrencyToken(), address(stable));
         assertEq(subRed.lastAmount(), 100e18);
-        assertEq(usdc.balanceOf(address(subRed)), 100e18);
+        assertEq(stable.balanceOf(address(subRed)), 100e18);
     }
 
     function test_RequestRedeemAsyncPullsPosTokenFromVault() public {
@@ -158,7 +158,7 @@ contract SubRedManagementAdapterTest is Test {
         adapter.requestRedeemAsync(200e18, receiver);
         assertEq(subRed.redeemCount(), 1);
         assertEq(subRed.lastRedeemStToken(), address(stToken));
-        assertEq(subRed.lastRedeemCurrencyToken(), address(usdc));
+        assertEq(subRed.lastRedeemCurrencyToken(), address(stable));
         assertEq(subRed.lastRedeemQuantity(), 200e18);
         assertEq(stToken.balanceOf(address(adapter)), 200e18);
     }
@@ -179,7 +179,7 @@ contract SubRedManagementAdapterTest is Test {
         adapter.retryRedeemAsync(120e18, receiver);
         assertEq(subRed.redeemCount(), 1);
         assertEq(subRed.lastRedeemStToken(), address(stToken));
-        assertEq(subRed.lastRedeemCurrencyToken(), address(usdc));
+        assertEq(subRed.lastRedeemCurrencyToken(), address(stable));
         assertEq(subRed.lastRedeemQuantity(), 120e18);
     }
 
@@ -232,17 +232,17 @@ contract SubRedManagementAdapterTest is Test {
     }
 
     function test_SweepToVault_ReturnsTokenBalance() public {
-        usdc.mint(address(adapter), 150e18);
-        uint256 claimed = adapter.sweepToVault(address(usdc), 100e18);
+        stable.mint(address(adapter), 150e18);
+        uint256 claimed = adapter.sweepToVault(address(stable), 100e18);
         assertEq(claimed, 100e18);
-        assertEq(usdc.balanceOf(address(vault)), 100e18);
-        assertEq(usdc.balanceOf(address(adapter)), 50e18);
+        assertEq(stable.balanceOf(address(vault)), 100e18);
+        assertEq(stable.balanceOf(address(adapter)), 50e18);
     }
 
     function test_RevertWhen_SweepToVaultCalledByNonController() public {
         vm.prank(other);
         vm.expectRevert();
-        adapter.sweepToVault(address(usdc), 1e18);
+        adapter.sweepToVault(address(stable), 1e18);
     }
 
     function test_RevertWhen_RequestRedeemWithoutVaultPosAllowance() public {
@@ -276,7 +276,7 @@ contract SubRedManagementAdapterTest is Test {
     }
 
     function test_RevertWhen_DepositPaused_UsesOZPausableError() public {
-        usdc.mint(address(vault), 1_000e18);
+        stable.mint(address(vault), 1_000e18);
         vault.approveToAdapter(address(adapter), 500e18);
         adapter.setPaused(true);
 
@@ -320,7 +320,7 @@ contract SubRedManagementAdapterTest is Test {
 
     function test_TotalValue_IgnoresAdapterLocalAssetPendingSettlement() public {
         stToken6.mint(address(vault), 500e6);
-        usdc.mint(address(adapterWithOracle), 100e18);
+        stable.mint(address(adapterWithOracle), 100e18);
 
         uint256 value = adapterWithOracle.totalValue();
         assertEq(value, 1000e18);

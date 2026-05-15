@@ -18,8 +18,8 @@ import {Test} from "forge-std/Test.sol";
 // Mock 合约
 // =============================================================
 
-contract MockUSDC is ERC20 {
-    constructor() ERC20("USD Coin", "USDC") {}
+contract MockStable is ERC20 {
+    constructor() ERC20("Stable Coin", "STABLE") {}
 
     function decimals() public pure override returns (uint8) {
         return 6;
@@ -221,7 +221,7 @@ contract MockAccountant {
 abstract contract VaultTestBase is Test {
     using Math for uint256;
 
-    MockUSDC usdc;
+    MockStable stable;
     MockSanctionsOracle oracle;
     MockStrategyAdapter adapter;
     MockAccountant mockAccountant;
@@ -246,7 +246,7 @@ abstract contract VaultTestBase is Test {
     GatewayFactory gatewayFactory;
 
     function setUp() public virtual {
-        usdc = new MockUSDC();
+        stable = new MockStable();
         oracle = new MockSanctionsOracle();
         adapter = new MockStrategyAdapter();
         mockAccountant = new MockAccountant();
@@ -282,16 +282,16 @@ abstract contract VaultTestBase is Test {
 
         oracle.setSanctioned(sanctionedUser, true);
 
-        usdc.mint(alice, INITIAL_DEPOSIT);
+        stable.mint(alice, INITIAL_DEPOSIT);
         vm.startPrank(alice);
-        usdc.approve(address(vault), type(uint256).max);
+        stable.approve(address(vault), type(uint256).max);
         gateway.deposit(INITIAL_DEPOSIT);
         vm.stopPrank();
     }
 
     function _defaultParams() internal view returns (IMantleYieldVault.InitParams memory) {
         return IMantleYieldVault.InitParams({
-            asset: IERC20(address(usdc)),
+            asset: IERC20(address(stable)),
             name: "Mantle RWA Vault",
             symbol: "mRWA",
             admin: admin,
@@ -361,7 +361,7 @@ contract InitializeTest is VaultTestBase {
     function test_cannotInitializeWithZeroController() public {
         (MantleYieldVault target, MantleVaultGateway targetGateway) = _deployUninitializedVaultAndGateway();
         IMantleYieldVault.InitParams memory p =
-            _paramsWithOverride(address(usdc), address(0), accountantAddr, treasuryAddr, 500, 0);
+            _paramsWithOverride(address(stable), address(0), accountantAddr, treasuryAddr, 500, 0);
         p.gateway = address(targetGateway);
 
         vm.expectRevert(IMantleYieldVault.Vault__ZeroAddress.selector);
@@ -381,7 +381,7 @@ contract InitializeTest is VaultTestBase {
     function test_cannotInitializeWithZeroTreasury() public {
         (MantleYieldVault target, MantleVaultGateway targetGateway) = _deployUninitializedVaultAndGateway();
         IMantleYieldVault.InitParams memory p =
-            _paramsWithOverride(address(usdc), controllerAddr, accountantAddr, address(0), 500, 0);
+            _paramsWithOverride(address(stable), controllerAddr, accountantAddr, address(0), 500, 0);
         p.gateway = address(targetGateway);
 
         vm.expectRevert(IMantleYieldVault.Vault__ZeroAddress.selector);
@@ -391,7 +391,7 @@ contract InitializeTest is VaultTestBase {
     function test_cannotInitializeWithFeeTooHigh() public {
         (MantleYieldVault target, MantleVaultGateway targetGateway) = _deployUninitializedVaultAndGateway();
         IMantleYieldVault.InitParams memory p =
-            _paramsWithOverride(address(usdc), controllerAddr, accountantAddr, treasuryAddr, 500, 600);
+            _paramsWithOverride(address(stable), controllerAddr, accountantAddr, treasuryAddr, 500, 600);
         p.gateway = address(targetGateway);
 
         vm.expectRevert(abi.encodeWithSelector(IMantleYieldVault.Vault__FeeTooHigh.selector, 600, 500));
@@ -415,22 +415,22 @@ contract InitializeTest is VaultTestBase {
 
 contract DepositTest is VaultTestBase {
     function test_depositMintsCorrectShares() public {
-        usdc.mint(bob, 500e6);
+        stable.mint(bob, 500e6);
         vm.startPrank(bob);
-        usdc.approve(address(vault), 500e6);
+        stable.approve(address(vault), 500e6);
         uint256 shares = gateway.deposit(500e6);
         vm.stopPrank();
 
         assertEq(shares, 500e6);
         assertEq(vault.balanceOf(bob), 500e6);
-        assertEq(usdc.balanceOf(address(vault)), INITIAL_DEPOSIT + 500e6);
+        assertEq(stable.balanceOf(address(vault)), INITIAL_DEPOSIT + 500e6);
     }
 
     function test_depositMatchesPreviewDeposit() public {
-        usdc.mint(bob, 500e6);
+        stable.mint(bob, 500e6);
         uint256 expectedShares = vault.previewDeposit(500e6);
         vm.startPrank(bob);
-        usdc.approve(address(vault), 500e6);
+        stable.approve(address(vault), 500e6);
         uint256 shares = gateway.deposit(500e6);
         vm.stopPrank();
 
@@ -442,18 +442,18 @@ contract DepositTest is VaultTestBase {
         vm.prank(pauser);
         vault.pause();
 
-        usdc.mint(bob, 100e6);
+        stable.mint(bob, 100e6);
         vm.startPrank(bob);
-        usdc.approve(address(vault), 100e6);
+        stable.approve(address(vault), 100e6);
         vm.expectRevert();
         gateway.deposit(100e6);
         vm.stopPrank();
     }
 
     function test_depositRevertsSanctionedSender() public {
-        usdc.mint(sanctionedUser, 100e6);
+        stable.mint(sanctionedUser, 100e6);
         vm.startPrank(sanctionedUser);
-        usdc.approve(address(vault), 100e6);
+        stable.approve(address(vault), 100e6);
         vm.expectRevert(abi.encodeWithSelector(IMantleYieldVault.Vault__Sanctioned.selector, sanctionedUser));
         gateway.deposit(100e6);
         vm.stopPrank();
@@ -504,7 +504,7 @@ contract SyncRedeemTest is VaultTestBase {
 
     function test_redeemRevertsInsufficientFreeCash() public {
         vm.prank(address(vault));
-        usdc.transfer(address(1), INITIAL_DEPOSIT - 10e6);
+        stable.transfer(address(1), INITIAL_DEPOSIT - 10e6);
 
         uint256 aliceShares = vault.balanceOf(alice);
 
@@ -555,9 +555,9 @@ contract AsyncRedeemTest is VaultTestBase {
     }
 
     function test_requestRedeemRevertsSanctioned() public {
-        usdc.mint(sanctionedUser, 100e6);
+        stable.mint(sanctionedUser, 100e6);
         vm.startPrank(sanctionedUser);
-        usdc.approve(address(vault), 100e6);
+        stable.approve(address(vault), 100e6);
         vm.expectRevert(abi.encodeWithSelector(IMantleYieldVault.Vault__Sanctioned.selector, sanctionedUser));
         gateway.deposit(100e6);
         vm.stopPrank();
@@ -594,11 +594,11 @@ contract AsyncRedeemTest is VaultTestBase {
         uint256[] memory settled = new uint256[](1);
         settled[0] = reqAssets;
 
-        uint256 balBefore = usdc.balanceOf(alice);
+        uint256 balBefore = stable.balanceOf(alice);
         vm.prank(controllerAddr);
         vault.markRequestsDone(ids, settled);
 
-        assertEq(usdc.balanceOf(alice), balBefore + reqAssets, "USDC transferred directly by markRequestsDone");
+        assertEq(stable.balanceOf(alice), balBefore + reqAssets, "STABLE transferred directly by markRequestsDone");
     }
 
     function test_multipleRequestsThenSettle() public {
@@ -616,13 +616,13 @@ contract AsyncRedeemTest is VaultTestBase {
         (,,,, settled[0],,,) = vault.requests(id1);
         (,,,, settled[1],,,) = vault.requests(id2);
 
-        uint256 balBefore = usdc.balanceOf(alice);
+        uint256 balBefore = stable.balanceOf(alice);
         vm.prank(controllerAddr);
         vault.updateRequestBatch(ids, IMantleYieldVault.RequestStatus.PROCESSING);
         vm.prank(controllerAddr);
         vault.markRequestsDone(ids, settled);
 
-        assertEq(usdc.balanceOf(alice), balBefore + settled[0] + settled[1], "USDC transferred directly");
+        assertEq(stable.balanceOf(alice), balBefore + settled[0] + settled[1], "STABLE transferred directly");
     }
 }
 
@@ -802,7 +802,7 @@ contract AdapterManagementTest is VaultTestBase {
     function test_removeAdapterRevertsIfHasInFlight() public {
         vm.startPrank(controllerAddr);
         vault.registerAdapter(address(adapter));
-        vault.createInFlight(address(adapter), address(usdc), 100, 100e6, true);
+        vault.createInFlight(address(adapter), address(stable), 100, 100e6, true);
         vm.expectRevert(abi.encodeWithSelector(IMantleYieldVault.Vault__AdapterHasInFlight.selector, address(adapter)));
         vault.removeAdapter(address(adapter));
         vm.stopPrank();
@@ -813,16 +813,16 @@ contract AdapterManagementTest is VaultTestBase {
         vm.expectRevert(
             abi.encodeWithSelector(IMantleYieldVault.Vault__AdapterNotRegistered.selector, address(adapter))
         );
-        vault.approveToAdapter(address(adapter), address(usdc), 100e6);
+        vault.approveToAdapter(address(adapter), address(stable), 100e6);
     }
 
     function test_approveToAdapter() public {
         vm.startPrank(controllerAddr);
         vault.registerAdapter(address(adapter));
-        vault.approveToAdapter(address(adapter), address(usdc), 100e6);
+        vault.approveToAdapter(address(adapter), address(stable), 100e6);
         vm.stopPrank();
 
-        assertEq(usdc.allowance(address(vault), address(adapter)), 100e6);
+        assertEq(stable.allowance(address(vault), address(adapter)), 100e6);
     }
 
     function test_adapterManagementRevertsIfNotController() public {
@@ -849,7 +849,7 @@ contract InFlightTest is VaultTestBase {
 
     function test_createInFlightInvest() public {
         vm.prank(controllerAddr);
-        uint256 id = vault.createInFlight(address(adapter), address(usdc), 100, 100e6, true);
+        uint256 id = vault.createInFlight(address(adapter), address(stable), 100, 100e6, true);
 
         assertEq(id, 1);
         assertEq(vault.totalInvestInFlight(), 100e6);
@@ -858,16 +858,16 @@ contract InFlightTest is VaultTestBase {
 
     function test_createInFlightRedeem() public {
         vm.prank(controllerAddr);
-        uint256 id = vault.createInFlight(address(adapter), address(usdc), 50, 50e6, false);
+        uint256 id = vault.createInFlight(address(adapter), address(stable), 50, 50e6, false);
 
         assertEq(id, 1);
         assertEq(vault.totalRedeemInFlight(), 50e6);
-        assertEq(vault.adapterRedeemInFlightUsdc(address(adapter)), 50e6);
+        assertEq(vault.adapterRedeemInFlightStable(address(adapter)), 50e6);
     }
 
     function test_confirmInFlightInvest() public {
         vm.startPrank(controllerAddr);
-        uint256 id = vault.createInFlight(address(adapter), address(usdc), 100, 100e6, true);
+        uint256 id = vault.createInFlight(address(adapter), address(stable), 100, 100e6, true);
         vault.confirmInFlight(id, 98, false);
         vm.stopPrank();
 
@@ -877,17 +877,17 @@ contract InFlightTest is VaultTestBase {
 
     function test_confirmInFlightRedeem() public {
         vm.startPrank(controllerAddr);
-        uint256 id = vault.createInFlight(address(adapter), address(usdc), 50, 50e6, false);
+        uint256 id = vault.createInFlight(address(adapter), address(stable), 50, 50e6, false);
         vault.confirmInFlight(id, 49e6, false);
         vm.stopPrank();
 
         assertEq(vault.totalRedeemInFlight(), 0);
-        assertEq(vault.adapterRedeemInFlightUsdc(address(adapter)), 0);
+        assertEq(vault.adapterRedeemInFlightStable(address(adapter)), 0);
     }
 
     function test_confirmInFlightRevertsIfAlreadyConfirmed() public {
         vm.startPrank(controllerAddr);
-        uint256 id = vault.createInFlight(address(adapter), address(usdc), 100, 100e6, true);
+        uint256 id = vault.createInFlight(address(adapter), address(stable), 100, 100e6, true);
         vault.confirmInFlight(id, 100, false);
 
         vm.expectRevert(
@@ -902,14 +902,14 @@ contract InFlightTest is VaultTestBase {
     function test_createInFlightRevertsZeroAmount() public {
         vm.prank(controllerAddr);
         vm.expectRevert(IMantleYieldVault.Vault__ZeroAmount.selector);
-        vault.createInFlight(address(adapter), address(usdc), 0, 100e6, true);
+        vault.createInFlight(address(adapter), address(stable), 0, 100e6, true);
     }
 
     function test_createInFlightRevertsUnregisteredAdapter() public {
         address fakeAdapter = makeAddr("fakeAdapter");
         vm.prank(controllerAddr);
         vm.expectRevert(abi.encodeWithSelector(IMantleYieldVault.Vault__AdapterNotRegistered.selector, fakeAdapter));
-        vault.createInFlight(fakeAdapter, address(usdc), 100, 100e6, true);
+        vault.createInFlight(fakeAdapter, address(stable), 100, 100e6, true);
     }
 }
 
@@ -934,9 +934,9 @@ contract ExchangeRateTest is VaultTestBase {
     function test_accountantPauseBlocksSubscribeRedeem() public {
         mockAccountant.setPauseStatus(true);
 
-        usdc.mint(bob, 100e6);
+        stable.mint(bob, 100e6);
         vm.startPrank(bob);
-        usdc.approve(address(vault), 100e6);
+        stable.approve(address(vault), 100e6);
         vm.expectRevert();
         gateway.deposit(100e6);
         vm.stopPrank();
@@ -981,12 +981,12 @@ contract RedemptionFeeTest is VaultTestBase {
 
     function test_feeStaysInVaultOnRequestRedeem() public {
         uint256 shares = 500e6;
-        uint256 vaultBalBefore = usdc.balanceOf(address(vault));
+        uint256 vaultBalBefore = stable.balanceOf(address(vault));
 
         vm.prank(alice);
         gateway.requestRedeem(shares);
 
-        assertEq(usdc.balanceOf(address(vault)), vaultBalBefore);
+        assertEq(stable.balanceOf(address(vault)), vaultBalBefore);
     }
 
     function test_syncRedeemEmitsRedemptionFee() public {
@@ -1093,7 +1093,7 @@ contract TotalAssetsTest is VaultTestBase {
         vault.registerAdapter(address(adapter));
 
         vm.prank(controllerAddr);
-        vault.createInFlight(address(adapter), address(usdc), 100, 200e6, true);
+        vault.createInFlight(address(adapter), address(stable), 100, 200e6, true);
 
         assertEq(vault.totalAssets(), INITIAL_DEPOSIT + 200e6);
     }
@@ -1184,7 +1184,7 @@ contract AdminTest is VaultTestBase {
     }
 
     function test_rescueTokens() public {
-        MockUSDC otherToken = new MockUSDC();
+        MockStable otherToken = new MockStable();
         otherToken.mint(address(vault), 100e6);
 
         vm.prank(admin);
@@ -1196,7 +1196,7 @@ contract AdminTest is VaultTestBase {
     function test_rescueTokensRevertsForUnderlying() public {
         vm.prank(admin);
         vm.expectRevert(IMantleYieldVault.Vault__RescueAssetCannotBeUnderlying.selector);
-        vault.rescueTokens(address(usdc), admin, 100e6);
+        vault.rescueTokens(address(stable), admin, 100e6);
     }
 }
 
@@ -1386,7 +1386,7 @@ contract GatewayViewPassthroughTest is VaultTestBase {
         for (uint256 i = 0; i < vaultInfos.length; i++) {
             assertEq(gatewayInfos[i].token, vaultInfos[i].token);
             assertEq(gatewayInfos[i].tokenAmount, vaultInfos[i].tokenAmount);
-            assertEq(gatewayInfos[i].usdcAmount, vaultInfos[i].usdcAmount);
+            assertEq(gatewayInfos[i].stableAmount, vaultInfos[i].stableAmount);
         }
     }
 
@@ -1412,21 +1412,21 @@ contract ZeroCashBufferTest is VaultTestBase {
     /// @dev Full lifecycle: deposit → invest all (T+N) → sync redeem fails → async redeem → claim
     function test_zeroCashBuffer_fullLifecycle() public {
         // ====================================================
-        // Phase 1: Invest all USDC via adapter (async T+N)
+        // Phase 1: Invest all STABLE via adapter (async T+N)
         // ====================================================
 
         vm.startPrank(controllerAddr);
-        vault.approveToAdapter(address(adapter), address(usdc), INITIAL_DEPOSIT);
-        vault.createInFlight(address(adapter), address(usdc), INITIAL_DEPOSIT, INITIAL_DEPOSIT, true);
+        vault.approveToAdapter(address(adapter), address(stable), INITIAL_DEPOSIT);
+        vault.createInFlight(address(adapter), address(stable), INITIAL_DEPOSIT, INITIAL_DEPOSIT, true);
         vm.stopPrank();
 
-        // Adapter pulls USDC from vault (simulates adapter.deposit pulling via transferFrom)
+        // Adapter pulls STABLE from vault (simulates adapter.deposit pulling via transferFrom)
         vm.prank(address(adapter));
-        usdc.transferFrom(address(vault), address(adapter), INITIAL_DEPOSIT);
+        stable.transferFrom(address(vault), address(adapter), INITIAL_DEPOSIT);
 
-        // Mid-flight: USDC left vault, tokens not yet settled
-        assertEq(usdc.balanceOf(address(vault)), 0, "vault USDC should be 0");
-        assertEq(vault.totalInvestInFlight(), INITIAL_DEPOSIT, "invest in-flight should track USDC");
+        // Mid-flight: STABLE left vault, tokens not yet settled
+        assertEq(stable.balanceOf(address(vault)), 0, "vault STABLE should be 0");
+        assertEq(vault.totalInvestInFlight(), INITIAL_DEPOSIT, "invest in-flight should track STABLE");
         assertEq(vault.totalAssets(), INITIAL_DEPOSIT, "totalAssets preserved by in-flight");
         assertEq(vault.getFreeCash(), 0, "freeCash should be 0");
 
@@ -1481,33 +1481,33 @@ contract ZeroCashBufferTest is VaultTestBase {
         //   adapter.totalValue drops (tokens leaving adapter), in-flight bridges the gap
         adapter.setTotalValue(10e6, address(vault)); // 1000 - 990 withdrawn
         vm.prank(controllerAddr);
-        vault.createInFlight(address(adapter), address(usdc), netAssets, netAssets, false);
+        vault.createInFlight(address(adapter), address(stable), netAssets, netAssets, false);
 
         assertEq(vault.totalRedeemInFlight(), netAssets, "redeem in-flight tracking");
 
-        // Step 3d: USDC arrives at vault (settlement)
+        // Step 3d: STABLE arrives at vault (settlement)
         vm.prank(address(adapter));
-        usdc.transfer(address(vault), netAssets);
+        stable.transfer(address(vault), netAssets);
 
         vm.prank(controllerAddr);
         vault.confirmInFlight(2, netAssets, false);
 
         assertEq(vault.totalRedeemInFlight(), 0, "redeem in-flight cleared");
-        assertEq(usdc.balanceOf(address(vault)), netAssets, "vault received USDC");
+        assertEq(stable.balanceOf(address(vault)), netAssets, "vault received STABLE");
 
-        // Step 3e: Mark requests done (USDC transferred directly to user)
+        // Step 3e: Mark requests done (STABLE transferred directly to user)
         uint256[] memory settled = new uint256[](1);
         settled[0] = netAssets;
         vm.prank(controllerAddr);
         vault.markRequestsDone(ids, settled);
 
         // ====================================================
-        // Final state verification (markRequestsDone transfers USDC directly)
+        // Final state verification (markRequestsDone transfers STABLE directly)
         // ====================================================
 
         uint256 treasuryShares = (aliceShares * FEE_BPS + BPS_DENOMINATOR - 1) / BPS_DENOMINATOR;
-        assertEq(usdc.balanceOf(alice), netAssets, "alice received 990 USDC");
-        assertEq(usdc.balanceOf(address(vault)), 0, "vault back to 0 cash");
+        assertEq(stable.balanceOf(alice), netAssets, "alice received 990 STABLE");
+        assertEq(stable.balanceOf(address(vault)), 0, "vault back to 0 cash");
         assertEq(vault.totalLockedShares(), 0, "locked shares cleared");
         assertEq(vault.totalSupply(), treasuryShares, "only treasury fee shares outstanding");
         assertEq(vault.balanceOf(treasuryAddr), treasuryShares, "treasury holds fee shares");
@@ -1516,45 +1516,45 @@ contract ZeroCashBufferTest is VaultTestBase {
 
     /// @dev New deposit immediately invested, vault stays at zero cash
     function test_zeroCashBuffer_continuousOperation() public {
-        // --- Initial invest: move all USDC to adapter ---
+        // --- Initial invest: move all STABLE to adapter ---
         vm.startPrank(controllerAddr);
-        vault.approveToAdapter(address(adapter), address(usdc), INITIAL_DEPOSIT);
-        vault.createInFlight(address(adapter), address(usdc), INITIAL_DEPOSIT, INITIAL_DEPOSIT, true);
+        vault.approveToAdapter(address(adapter), address(stable), INITIAL_DEPOSIT);
+        vault.createInFlight(address(adapter), address(stable), INITIAL_DEPOSIT, INITIAL_DEPOSIT, true);
         vm.stopPrank();
 
         vm.prank(address(adapter));
-        usdc.transferFrom(address(vault), address(adapter), INITIAL_DEPOSIT);
+        stable.transferFrom(address(vault), address(adapter), INITIAL_DEPOSIT);
         adapter.setTotalValue(INITIAL_DEPOSIT, address(vault));
         vm.prank(controllerAddr);
         vault.confirmInFlight(1, INITIAL_DEPOSIT, false);
 
         assertEq(vault.getFreeCash(), 0, "initial: zero cash");
 
-        // --- Bob deposits 500 USDC ---
+        // --- Bob deposits 500 STABLE ---
         uint256 bobDeposit = 500e6;
-        usdc.mint(bob, bobDeposit);
+        stable.mint(bob, bobDeposit);
         vm.startPrank(bob);
-        usdc.approve(address(vault), bobDeposit);
+        stable.approve(address(vault), bobDeposit);
         gateway.deposit(bobDeposit);
         vm.stopPrank();
 
-        assertEq(usdc.balanceOf(address(vault)), bobDeposit, "vault holds Bob's deposit");
+        assertEq(stable.balanceOf(address(vault)), bobDeposit, "vault holds Bob's deposit");
         assertEq(vault.getFreeCash(), bobDeposit, "freeCash = Bob's deposit");
 
-        // --- Controller immediately invests Bob's USDC ---
+        // --- Controller immediately invests Bob's STABLE ---
         vm.startPrank(controllerAddr);
-        vault.approveToAdapter(address(adapter), address(usdc), bobDeposit);
-        vault.createInFlight(address(adapter), address(usdc), bobDeposit, bobDeposit, true);
+        vault.approveToAdapter(address(adapter), address(stable), bobDeposit);
+        vault.createInFlight(address(adapter), address(stable), bobDeposit, bobDeposit, true);
         vm.stopPrank();
 
         vm.prank(address(adapter));
-        usdc.transferFrom(address(vault), address(adapter), bobDeposit);
+        stable.transferFrom(address(vault), address(adapter), bobDeposit);
         adapter.setTotalValue(INITIAL_DEPOSIT + bobDeposit, address(vault));
         vm.prank(controllerAddr);
         vault.confirmInFlight(2, bobDeposit, false);
 
         // Vault back to zero cash
-        assertEq(usdc.balanceOf(address(vault)), 0, "vault back to 0 cash");
+        assertEq(stable.balanceOf(address(vault)), 0, "vault back to 0 cash");
         assertEq(vault.getFreeCash(), 0, "freeCash back to 0");
         assertEq(vault.totalAssets(), INITIAL_DEPOSIT + bobDeposit, "totalAssets includes both deposits");
         assertTrue(vault.balanceOf(bob) > 0, "Bob has shares");
@@ -1562,22 +1562,22 @@ contract ZeroCashBufferTest is VaultTestBase {
 
     /// @dev totalAssets remains consistent at every step of the in-flight lifecycle
     function test_zeroCashBuffer_totalAssetsNeverDrops() public {
-        // Step 1: All USDC in vault
+        // Step 1: All STABLE in vault
         assertEq(vault.totalAssets(), INITIAL_DEPOSIT, "step1: totalAssets");
 
-        // Step 2: Create invest in-flight (intent recorded, USDC still in vault)
+        // Step 2: Create invest in-flight (intent recorded, STABLE still in vault)
         vm.startPrank(controllerAddr);
-        vault.approveToAdapter(address(adapter), address(usdc), INITIAL_DEPOSIT);
-        vault.createInFlight(address(adapter), address(usdc), INITIAL_DEPOSIT, INITIAL_DEPOSIT, true);
+        vault.approveToAdapter(address(adapter), address(stable), INITIAL_DEPOSIT);
+        vault.createInFlight(address(adapter), address(stable), INITIAL_DEPOSIT, INITIAL_DEPOSIT, true);
         vm.stopPrank();
         // totalAssets = 1000 (vault) + 1000 (investInFlight) + 0 (adapter) - 0 = 2000
-        // Note: intentionally over-counted before USDC leaves; controller should move atomically
+        // Note: intentionally over-counted before STABLE leaves; controller should move atomically
         uint256 step2 = vault.totalAssets();
         assertTrue(step2 >= INITIAL_DEPOSIT, "step2: totalAssets >= initial");
 
-        // Step 3: USDC leaves vault
+        // Step 3: STABLE leaves vault
         vm.prank(address(adapter));
-        usdc.transferFrom(address(vault), address(adapter), INITIAL_DEPOSIT);
+        stable.transferFrom(address(vault), address(adapter), INITIAL_DEPOSIT);
         // totalAssets = 0 (vault) + 1000 (investInFlight) + 0 (adapter) - 0 = 1000
         assertEq(vault.totalAssets(), INITIAL_DEPOSIT, "step3: in-flight bridges the gap");
 
@@ -1589,17 +1589,17 @@ contract ZeroCashBufferTest is VaultTestBase {
         assertEq(vault.totalAssets(), INITIAL_DEPOSIT, "step4: adapter value takes over");
     }
 
-    /// @dev Async redemption with settlement friction: adapter returns less USDC than expected
+    /// @dev Async redemption with settlement friction: adapter returns less STABLE than expected
     function test_zeroCashBuffer_asyncRedeemWithFriction() public {
-        uint256 friction = 5e6; // 5 USDC friction from async settlement
+        uint256 friction = 5e6; // 5 STABLE friction from async settlement
 
-        // --- Setup: invest all USDC to adapter ---
+        // --- Setup: invest all STABLE to adapter ---
         vm.startPrank(controllerAddr);
-        vault.approveToAdapter(address(adapter), address(usdc), INITIAL_DEPOSIT);
-        vault.createInFlight(address(adapter), address(usdc), INITIAL_DEPOSIT, INITIAL_DEPOSIT, true);
+        vault.approveToAdapter(address(adapter), address(stable), INITIAL_DEPOSIT);
+        vault.createInFlight(address(adapter), address(stable), INITIAL_DEPOSIT, INITIAL_DEPOSIT, true);
         vm.stopPrank();
         vm.prank(address(adapter));
-        usdc.transferFrom(address(vault), address(adapter), INITIAL_DEPOSIT);
+        stable.transferFrom(address(vault), address(adapter), INITIAL_DEPOSIT);
         adapter.setTotalValue(INITIAL_DEPOSIT, address(vault));
         vm.prank(controllerAddr);
         vault.confirmInFlight(1, INITIAL_DEPOSIT, false);
@@ -1619,13 +1619,13 @@ contract ZeroCashBufferTest is VaultTestBase {
         uint256 actualReceived = netAssets - friction; // 985e6
         adapter.setTotalValue(INITIAL_DEPOSIT - actualReceived, address(vault));
         vm.prank(controllerAddr);
-        vault.createInFlight(address(adapter), address(usdc), netAssets, netAssets, false);
+        vault.createInFlight(address(adapter), address(stable), netAssets, netAssets, false);
         vm.prank(address(adapter));
-        usdc.transfer(address(vault), actualReceived); // only 985 USDC arrives
+        stable.transfer(address(vault), actualReceived); // only 985 STABLE arrives
         vm.prank(controllerAddr);
         vault.confirmInFlight(2, actualReceived, false);
 
-        assertEq(usdc.balanceOf(address(vault)), actualReceived, "vault has 985 USDC");
+        assertEq(stable.balanceOf(address(vault)), actualReceived, "vault has 985 STABLE");
 
         // markRequestsDone with settledAssets = actualReceived (less than estimated)
         uint256 lockedSharesBefore = vault.totalLockedShares();
@@ -1634,11 +1634,11 @@ contract ZeroCashBufferTest is VaultTestBase {
         vm.prank(controllerAddr);
         vault.markRequestsDone(ids, settled);
 
-        // Shares released; USDC transferred directly to alice
+        // Shares released; STABLE transferred directly to alice
         uint256 aliceTreasuryShareFriction = (aliceShares * FEE_BPS + BPS_DENOMINATOR - 1) / BPS_DENOMINATOR;
         uint256 aliceNetSharesFriction = aliceShares - aliceTreasuryShareFriction;
         assertEq(vault.totalLockedShares(), lockedSharesBefore - aliceNetSharesFriction, "locked shares released");
-        assertEq(usdc.balanceOf(alice), actualReceived, "alice receives 985 USDC (990 - 5 friction) directly");
+        assertEq(stable.balanceOf(alice), actualReceived, "alice receives 985 STABLE (990 - 5 friction) directly");
 
         // estimatedAssets preserved, settledAssets = actual
         (,,,, uint256 estAssets, uint256 settled_,, IMantleYieldVault.RequestStatus status) = vault.requests(reqId);
@@ -1667,7 +1667,7 @@ contract ZeroCashBufferTest is VaultTestBase {
 
         uint256 lockedSharesBefore = vault.totalLockedShares();
 
-        usdc.mint(address(vault), surplus);
+        stable.mint(address(vault), surplus);
 
         vm.prank(controllerAddr);
         vault.markRequestsDone(ids, settled);
@@ -1675,7 +1675,7 @@ contract ZeroCashBufferTest is VaultTestBase {
         uint256 redeemTreasuryShare = (redeemShares * FEE_BPS + BPS_DENOMINATOR - 1) / BPS_DENOMINATOR;
         uint256 redeemNetShares = redeemShares - redeemTreasuryShare;
         assertEq(vault.totalLockedShares(), lockedSharesBefore - redeemNetShares, "locked shares released");
-        assertEq(usdc.balanceOf(alice), settledAmount, "alice receives surplus directly");
+        assertEq(stable.balanceOf(alice), settledAmount, "alice receives surplus directly");
     }
 
     /// @dev ids and settledAssets length mismatch reverts
@@ -1703,9 +1703,9 @@ contract ZeroCashBufferTest is VaultTestBase {
 contract SyncRedeemDisabledTest is VaultTestBase {
     function setUp() public override {
         super.setUp();
-        usdc.mint(alice, 10_000e6);
+        stable.mint(alice, 10_000e6);
         vm.prank(alice);
-        usdc.approve(address(vault), type(uint256).max);
+        stable.approve(address(vault), type(uint256).max);
         vm.prank(alice);
         gateway.deposit(10_000e6);
     }
@@ -1792,13 +1792,13 @@ contract DailyCapTest is VaultTestBase {
         vault.grantRole(capRole, capManager);
 
         // Fund bob & charlie
-        usdc.mint(bob, 10_000e6);
+        stable.mint(bob, 10_000e6);
         vm.prank(bob);
-        usdc.approve(address(vault), type(uint256).max);
+        stable.approve(address(vault), type(uint256).max);
 
-        usdc.mint(charlie, 10_000e6);
+        stable.mint(charlie, 10_000e6);
         vm.prank(charlie);
-        usdc.approve(address(vault), type(uint256).max);
+        stable.approve(address(vault), type(uint256).max);
     }
 
     // ---------------------------------------------------------
@@ -2204,7 +2204,7 @@ contract DailyCapTest is VaultTestBase {
         assertEq(vault.depositDailyRemaining(), 0);
 
         // Any further deposit reverts
-        usdc.mint(bob, 1e6);
+        stable.mint(bob, 1e6);
         vm.prank(bob);
         vm.expectRevert();
         gateway.deposit(1e6);
@@ -2216,9 +2216,9 @@ contract DailyCapTest is VaultTestBase {
 
     function test_requestRedeem_largeAmount_fillsCap() public {
         // Give alice more shares
-        usdc.mint(alice, 9_000e6);
+        stable.mint(alice, 9_000e6);
         vm.prank(alice);
-        usdc.approve(address(vault), 9_000e6);
+        stable.approve(address(vault), 9_000e6);
         vm.prank(alice);
         gateway.deposit(9_000e6);
         // Alice now has 10_000e6 shares
