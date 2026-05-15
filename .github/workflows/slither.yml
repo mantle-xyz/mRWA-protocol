@@ -1,0 +1,50 @@
+name: Slither
+
+on:
+  pull_request:
+    paths:
+      - "src/**"
+      - "test/**"
+      - "script/**"
+      - "foundry.toml"
+      - "remappings.txt"
+      - ".github/workflows/slither.yml"
+  workflow_dispatch:
+
+jobs:
+  slither:
+    name: Solidity static analysis
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.4.1
+
+      - name: Run Slither
+        uses: crytic/slither-action@v0.4.0
+        id: slither
+        continue-on-error: true   # 先不阻塞 merge，等团队清掉 baseline finding 后再切回严格门禁
+        with:
+          target: "src/"
+          fail-on: high             # 先只在 high 级 finding 时失败
+          slither-args: --exclude-informational --exclude-low
+          sarif: results.sarif
+
+      # Only upload SARIF when the file actually exists. The slither-action
+      # sometimes sets outputs.sarif even when the file was not written
+      # (e.g. when continue-on-error masks a slither crash), so we check the
+      # filesystem directly via hashFiles().
+      - name: Upload SARIF
+        if: always() && hashFiles('results.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: results.sarif

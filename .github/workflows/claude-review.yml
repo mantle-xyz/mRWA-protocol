@@ -1,0 +1,50 @@
+name: Claude Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    # No paths filter: review every PR including CI / docs / config changes.
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+    env:
+      # Custom Anthropic endpoint. Leave the secret empty to use the official API
+      # (https://api.anthropic.com). Set ANTHROPIC_BASE_URL secret to point at a
+      # private gateway, regional endpoint, or relay.
+      ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Claude code review
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            Review this pull request to the mRWA-protocol Solidity codebase.
+            Stack: Foundry, solc 0.8.24, via_ir enabled.
+
+            Focus your review on:
+            - Security: reentrancy, access control, integer overflow/underflow,
+              unchecked external calls, signature replay, front-running.
+            - Standards compliance: ERC-20 / ERC-721 / ERC-1155 / EIP-712 / EIP-2612
+              correctness when relevant.
+            - Storage layout: slot collisions in proxy/upgrade patterns, packing efficiency.
+            - Gas: avoidable SSTOREs, redundant SLOADs, calldata vs memory, unchecked blocks.
+            - Test coverage: critical paths and edge cases that lack assertions.
+            - Naming & invariants: consistency with project conventions in CLAUDE.md / README.
+
+            Do NOT comment on:
+            - Stylistic preferences already handled by `forge fmt`.
+            - Trivial doc nits unless they hide a correctness issue.
+
+            Be precise: cite file paths and line numbers. Prefer concrete suggestions
+            over hedging. If a concern is hypothetical, label it as such.
