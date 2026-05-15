@@ -53,9 +53,9 @@ contract MockSync4626Adapter is BaseSync4626Adapter {
         override
         onlyController
         whenNotPaused
-        returns (uint256 actualUSDC)
+        returns (uint256 actualStable)
     {
         if (shares == 0) revert Adapter__InvalidAmount();
-        actualUSDC = _erc4626Redeem(shares, receiver, VAULT);
+        actualStable = _erc4626Redeem(shares, receiver, VAULT);
     }
 }

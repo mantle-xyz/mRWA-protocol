@@ -63,9 +63,9 @@ envs:
   ADAPTER_MANUAL_POS_TOKEN_PRICE: "0" # optional, default: 0; only set non-zero when ADAPTER_PRICE_ORACLE is address(0)
   # Venue step sizes & minimums (raw units). 0 = "no constraint".
   # DigiFt stToken has 2-decimal granularity on their side: step = 0.01 stToken = 1e16 raw units
-  ADAPTER_SUBSCRIBE_STEP_ASSET: "10000" # USDC 6 decimals; 0 = no step alignment
+  ADAPTER_SUBSCRIBE_STEP_ASSET: "10000" # STABLE 6 decimals; 0 = no step alignment
   ADAPTER_REDEEM_STEP_POS: "1000000000000000000" # 1e16 = 0.01 stToken (DigiFt's 2-decimal granularity)
-  ADAPTER_MIN_SUBSCRIBE_ASSET: "20000000000" # USDC 6 decimals; update once DigiFt min known
+  ADAPTER_MIN_SUBSCRIBE_ASSET: "20000000000" # STABLE 6 decimals; update once DigiFt min known
   ADAPTER_MIN_REDEEM_POS: "1500000000000000000000" # stToken 18 decimals; update once DigiFt min known
 
   # ── ReplaceStrategyAdapter params ───────────────────────────
@@ -78,17 +78,17 @@ envs:
   # REPLACE_WEIGHT_BPS: ""
   # REPLACE_PRIORITY: ""
   # REPLACE_IS_ASYNC: ""
-  F_USDC_ADDRESS: "0xcb89f5acc8f21a115192a0649fdf6b5d75880289"
+  F_STABLE_ADDRESS: "0xcb89f5acc8f21a115192a0649fdf6b5d75880289"
 
   # ── Vault params ─────────────────────────────────────────────
   F_MAX_REDEMPTION_FEE_BPS: "500" # 5% cap
   F_MAX_RATE_CHANGE_BPS: "500" # 5% cap
   F_REDEMPTION_FEE_BPS: "10" # 0.1%
-  F_MIN_REDEEM_AMOUNT: "1000000" # 1 USDC (6 decimals)
-  F_MIN_DEPOSIT_AMOUNT: "1000000" # 1 USDC (6 decimals)
+  F_MIN_REDEEM_AMOUNT: "1000000" # 1 STABLE (6 decimals)
+  F_MIN_DEPOSIT_AMOUNT: "1000000" # 1 STABLE (6 decimals)
   F_MAX_SETTLEMENT_DEVIATION_BPS: "1000" # 10% absolute cap
   # Daily caps (initial values). 0 = blocked. CAP_MANAGER_ROLE 后续可调。
-  F_DEPOSIT_DAILY_REMAINING: "0" # uint256 max = unlimited (USDC units)
+  F_DEPOSIT_DAILY_REMAINING: "0" # uint256 max = unlimited (STABLE units)
   F_REDEEM_DAILY_REMAINING: "0" # uint256 max = unlimited (share units)
   F_SYNC_REDEEM_DISABLED: "false"
 
@@ -105,7 +105,7 @@ envs:
   UPGRADE_INIT_VAULT_PROXY: "0xdc26d4c8643db1eb68d31cce8aa9f221d8fb2b8c"
   UPGRADE_INIT_ADAPTER_PROXY: "0x15269bd17a9dcc6e053292d9f78b748e3efd1d6b"
   UPGRADE_INIT_ADMIN: "0x207E804758e28F2b3fD6E4219671B327100b82f8"
-  UPGRADE_INIT_USDC: "0xcb89f5acc8f21a115192a0649fdf6b5d75880289"
+  UPGRADE_INIT_STABLE: "0xcb89f5acc8f21a115192a0649fdf6b5d75880289"
   UPGRADE_INIT_GATEWAY: ""                    # filled from Phase A address dump
   UPGRADE_INIT_CONTROLLER: ""                 # filled from Phase A (uninit, init in this Phase)
   UPGRADE_INIT_ACCOUNTANT: ""                 # filled from Phase A (uninit, init in this Phase)

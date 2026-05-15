@@ -17,7 +17,7 @@ import {Script, console} from "forge-std/Script.sol";
  *
  * Common env vars:
  *   VAULT_ADDRESS  - deployed vault proxy address
- *   USDC_ADDRESS   - underlying USDC address
+ *   STABLE_ADDRESS   - underlying STABLE address
  *
  * === User Actions ===
  *
@@ -29,11 +29,11 @@ import {Script, console} from "forge-std/Script.sol";
  *
  *   # Sync Redeem / Request Async Redeem — same pattern, swap contract name
  *
- *   Note: Async redeem no longer requires ClaimRedeem — controller's MarkRequestsDone transfers USDC directly to users.
+ *   Note: Async redeem no longer requires ClaimRedeem — controller's MarkRequestsDone transfers STABLE directly to users.
  *
  * === Controller Actions ===
  *
- *   # ProcessRequests (PENDING->PROCESSING) / MarkRequestsDone (transfers USDC to users) — same pattern with CONTROLLER_PRIVATE_KEY or CONTROLLER_ADDRESS
+ *   # ProcessRequests (PENDING->PROCESSING) / MarkRequestsDone (transfers STABLE to users) — same pattern with CONTROLLER_PRIVATE_KEY or CONTROLLER_ADDRESS
  *
  * === View Actions (no broadcast / no signing) ===
  *
@@ -114,22 +114,22 @@ contract Deposit is SignerHelper {
     function run() external {
         (address user, bool useLedger) = _resolveUser();
         address vaultAddr = vm.envAddress("VAULT_ADDRESS");
-        address usdcAddr = vm.envAddress("USDC_ADDRESS");
+        address stableAddr = vm.envAddress("STABLE_ADDRESS");
         uint256 amount = vm.envUint("DEPOSIT_AMOUNT");
 
         MantleYieldVault vault = MantleYieldVault(vaultAddr);
         MantleVaultGateway gateway = _resolveGateway(vault);
-        IERC20 usdc = IERC20(usdcAddr);
+        IERC20 stable = IERC20(stableAddr);
 
         console.log("=== Deposit ===");
         console.log("User:", user);
         console.log("Signing mode:", useLedger ? "Ledger" : "PrivateKey");
-        console.log("USDC balance:", usdc.balanceOf(user));
+        console.log("STABLE balance:", stable.balanceOf(user));
         console.log("Deposit amount:", amount);
         console.log("Expected shares:", vault.previewDeposit(amount));
 
         _startUserBroadcast(useLedger, user);
-        usdc.approve(vaultAddr, amount);
+        stable.approve(vaultAddr, amount);
         uint256 shares = gateway.deposit(amount);
         vm.stopBroadcast();
 
@@ -159,7 +159,7 @@ contract SyncRedeem is SignerHelper {
         console.log("Share balance:", vault.balanceOf(user));
         console.log("Shares to redeem:", shares);
         console.log("Max redeemable:", maxRedeemable);
-        console.log("Expected USDC (net of fee):", vault.previewRedeem(shares));
+        console.log("Expected STABLE (net of fee):", vault.previewRedeem(shares));
         console.log("FreeCash:", vault.getFreeCash());
 
         require(shares <= maxRedeemable, "Exceeds maxRedeem - use async redeem instead");
@@ -168,7 +168,7 @@ contract SyncRedeem is SignerHelper {
         uint256 assets = gateway.redeem(shares);
         vm.stopBroadcast();
 
-        console.log("\nUSDC received:", assets);
+        console.log("\nSTABLE received:", assets);
         console.log("Remaining shares:", vault.balanceOf(user));
     }
 }
@@ -204,9 +204,11 @@ contract RequestRedeem is SignerHelper {
 
         console.log("\nRequest ID:", requestId);
         console.log("Shares burned:", reqShares);
-        console.log("Expected payout (USDC):", reqAssets);
+        console.log("Expected payout (STABLE):", reqAssets);
         console.log("Status: PENDING");
-        console.log("\nNext: Controller calls ProcessRequests -> MarkRequestsDone (USDC transferred directly to user)");
+        console.log(
+            "\nNext: Controller calls ProcessRequests -> MarkRequestsDone (STABLE transferred directly to user)"
+        );
     }
 }
 
@@ -237,12 +239,12 @@ contract ProcessRequests is SignerHelper {
         vm.stopBroadcast();
 
         console.log("\nAll requests moved to PROCESSING");
-        console.log("Next: Ensure USDC is available, then call ReadyRequests");
+        console.log("Next: Ensure STABLE is available, then call ReadyRequests");
     }
 }
 
 // =============================================================
-// Controller: Mark Requests Done (PROCESSING -> DONE, transfers USDC directly to users)
+// Controller: Mark Requests Done (PROCESSING -> DONE, transfers STABLE directly to users)
 // =============================================================
 
 contract MarkRequestsDone is SignerHelper {
@@ -270,7 +272,7 @@ contract MarkRequestsDone is SignerHelper {
         vault.markRequestsDone(ids, settled);
         vm.stopBroadcast();
 
-        console.log("\nAll requests marked DONE - USDC transferred directly to request owners");
+        console.log("\nAll requests marked DONE - STABLE transferred directly to request owners");
     }
 }
 
@@ -281,19 +283,19 @@ contract MarkRequestsDone is SignerHelper {
 contract VaultStatus is SignerHelper {
     function run() external view {
         address vaultAddr = vm.envAddress("VAULT_ADDRESS");
-        address usdcAddr = vm.envAddress("USDC_ADDRESS");
+        address stableAddr = vm.envAddress("STABLE_ADDRESS");
 
         MantleYieldVault vault = MantleYieldVault(vaultAddr);
         MantleVaultGateway gateway = _resolveGateway(vault);
-        IERC20 usdc = IERC20(usdcAddr);
+        IERC20 stable = IERC20(stableAddr);
 
         console.log("=== Vault Status ===");
         console.log("Vault:", vaultAddr);
-        console.log("Asset (USDC):", usdcAddr);
+        console.log("Asset (STABLE):", stableAddr);
         console.log("");
 
         console.log("--- Balances ---");
-        console.log("USDC in vault:", usdc.balanceOf(vaultAddr));
+        console.log("STABLE in vault:", stable.balanceOf(vaultAddr));
         console.log("Total shares (totalSupply):", vault.totalSupply());
         console.log("totalAssets:", vault.totalAssets());
         console.log("FreeCash:", vault.getFreeCash());
@@ -301,7 +303,7 @@ contract VaultStatus is SignerHelper {
 
         console.log("--- Pricing ---");
         console.log("exchangeRate:", vault.exchangeRate());
-        console.log("1000 shares -> USDC (net):", vault.previewRedeem(1000e6));
+        console.log("1000 shares -> STABLE (net):", vault.previewRedeem(1000e6));
         console.log("");
 
         console.log("--- Liabilities ---");

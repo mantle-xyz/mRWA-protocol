@@ -17,8 +17,8 @@ import {Script, console} from "forge-std/Script.sol";
 // Mocks (same as test file, reusable)
 // =============================================================
 
-contract MockUSDC is ERC20 {
-    constructor() ERC20("USD Coin", "USDC") {}
+contract MockStable is ERC20 {
+    constructor() ERC20("Stable Coin", "STABLE") {}
 
     function decimals() public pure override returns (uint8) {
         return 6;
@@ -191,7 +191,7 @@ contract MockAccountant {
 // =============================================================
 
 contract VaultE2E is Script {
-    MockUSDC usdc;
+    MockStable stable;
     MockSanctionsOracle oracle;
     MockStrategyAdapter adapter;
     MockAccountant accountantMock;
@@ -256,7 +256,7 @@ contract VaultE2E is Script {
 
     function _deployInfrastructure() internal {
         vm.startBroadcast(adminKey);
-        usdc = new MockUSDC();
+        stable = new MockStable();
         oracle = new MockSanctionsOracle();
         adapter = new MockStrategyAdapter();
         accountantMock = new MockAccountant();
@@ -264,7 +264,7 @@ contract VaultE2E is Script {
 
         accountant = address(accountantMock);
 
-        console.log("[infra] USDC:", address(usdc));
+        console.log("[infra] STABLE:", address(stable));
         console.log("[infra] Oracle:", address(oracle));
         console.log("[infra] Adapter:", address(adapter));
         console.log("[infra] Accountant:", accountant);
@@ -289,7 +289,7 @@ contract VaultE2E is Script {
         gateway = MantleVaultGateway(gatewayAddr);
         vault.initialize(
             IMantleYieldVault.InitParams({
-                asset: IERC20(address(usdc)),
+                asset: IERC20(address(stable)),
                 name: "Mantle RWA Vault",
                 symbol: "mRWA",
                 admin: admin,
@@ -350,19 +350,19 @@ contract VaultE2E is Script {
         console.log("\n--- Scenario: Deposit ---");
 
         vm.broadcast(adminKey);
-        usdc.mint(alice, 10_000e6);
+        stable.mint(alice, 10_000e6);
 
         vm.startBroadcast(aliceKey);
-        usdc.approve(address(vault), type(uint256).max);
+        stable.approve(address(vault), type(uint256).max);
         uint256 shares = gateway.deposit(5_000e6);
         vm.stopBroadcast();
 
         require(shares == 5_000e6, "shares != 5000e6");
         require(vault.balanceOf(alice) == 5_000e6, "alice balance wrong");
-        require(usdc.balanceOf(address(vault)) == 5_000e6, "vault USDC wrong");
+        require(stable.balanceOf(address(vault)) == 5_000e6, "vault STABLE wrong");
 
-        console.log("[deposit] Alice deposited 5000 USDC, got", shares / 1e6, "shares");
-        console.log("[deposit] Vault USDC balance:", usdc.balanceOf(address(vault)) / 1e6);
+        console.log("[deposit] Alice deposited 5000 STABLE, got", shares / 1e6, "shares");
+        console.log("[deposit] Vault STABLE balance:", stable.balanceOf(address(vault)) / 1e6);
         console.log("[deposit] totalAssets:", vault.totalAssets() / 1e6);
     }
 
@@ -374,7 +374,7 @@ contract VaultE2E is Script {
         console.log("\n--- Scenario: Sync Redeem ---");
 
         uint256 sharesBefore = vault.balanceOf(alice);
-        uint256 usdcBefore = usdc.balanceOf(alice);
+        uint256 stableBefore = stable.balanceOf(alice);
 
         vm.broadcast(aliceKey);
         uint256 assetsOut = gateway.redeem(1_000e6);
@@ -382,10 +382,10 @@ contract VaultE2E is Script {
         uint256 expectedNet = 1_000e6 - (1_000e6 * 100 / 10_000);
         require(assetsOut == expectedNet, "sync redeem net wrong");
         require(vault.balanceOf(alice) == sharesBefore - 1_000e6, "shares not burned");
-        require(usdc.balanceOf(alice) == usdcBefore + expectedNet, "usdc not received");
+        require(stable.balanceOf(alice) == stableBefore + expectedNet, "stable not received");
 
-        console.log("[syncRedeem] Redeemed 1000 shares -> received", assetsOut / 1e6, "USDC (1% fee)");
-        console.log("[syncRedeem] Fee retained in vault:", (1_000e6 - assetsOut) / 1e6, "USDC");
+        console.log("[syncRedeem] Redeemed 1000 shares -> received", assetsOut / 1e6, "STABLE (1% fee)");
+        console.log("[syncRedeem] Fee retained in vault:", (1_000e6 - assetsOut) / 1e6, "STABLE");
     }
 
     // =============================================================
@@ -407,7 +407,7 @@ contract VaultE2E is Script {
         require(status == IMantleYieldVault.RequestStatus.PENDING, "not PENDING");
         require(reqShares == redeemShares, "req shares mismatch");
         require(settled == 0, "settled should be 0");
-        console.log("[async]   shares:", reqShares / 1e6, "| expected payout (USDC):", reqAssets / 1e6);
+        console.log("[async]   shares:", reqShares / 1e6, "| expected payout (STABLE):", reqAssets / 1e6);
 
         // Step 2: updateRequestBatch -> PROCESSING
         uint256[] memory ids = new uint256[](1);
@@ -417,17 +417,17 @@ contract VaultE2E is Script {
         vault.updateRequestBatch(ids, IMantleYieldVault.RequestStatus.PROCESSING);
         console.log("[async] Step 2 - PROCESSING");
 
-        // Step 3: markRequestsDone - directly transfers USDC to user (no separate claim)
+        // Step 3: markRequestsDone - directly transfers STABLE to user (no separate claim)
         uint256[] memory settledAmounts = new uint256[](1);
         settledAmounts[0] = reqAssets;
 
-        uint256 usdcBefore = usdc.balanceOf(alice);
+        uint256 stableBefore = stable.balanceOf(alice);
 
         vm.broadcast(controllerKey);
         vault.markRequestsDone(ids, settledAmounts);
-        console.log("[async] Step 3 - DONE (settled:", reqAssets / 1e6, "USDC, transferred directly)");
+        console.log("[async] Step 3 - DONE (settled:", reqAssets / 1e6, "STABLE, transferred directly)");
 
-        require(usdc.balanceOf(alice) == usdcBefore + reqAssets, "usdc not received");
+        require(stable.balanceOf(alice) == stableBefore + reqAssets, "stable not received");
         console.log("[async] totalLockedShares:", vault.totalLockedShares());
     }
 
@@ -457,21 +457,21 @@ contract VaultE2E is Script {
         uint256[] memory settledAmounts = new uint256[](1);
         settledAmounts[0] = actualSettled;
 
-        uint256 usdcBefore = usdc.balanceOf(alice);
+        uint256 stableBefore = stable.balanceOf(alice);
 
         vm.broadcast(controllerKey);
         vault.markRequestsDone(ids, settledAmounts);
 
-        require(usdc.balanceOf(alice) == usdcBefore + actualSettled, "usdc not received");
+        require(stable.balanceOf(alice) == stableBefore + actualSettled, "stable not received");
         require(vault.totalLockedShares() == lockedBefore, "lockedShares not back to original");
 
         (,,,, uint256 storedEstAssets, uint256 storedSettled,,) = vault.requests(reqId);
         require(storedEstAssets == estAssets, "estimatedAssets should be unchanged");
         require(storedSettled == actualSettled, "settledAssets wrong");
 
-        console.log("[friction] Estimated (USDC):", estAssets / 1e6, "| Settled:", actualSettled / 1e6);
-        console.log("[friction] Friction (USDC):", friction / 1e6);
-        console.log("[friction] USDC received directly:", actualSettled / 1e6);
+        console.log("[friction] Estimated (STABLE):", estAssets / 1e6, "| Settled:", actualSettled / 1e6);
+        console.log("[friction] Friction (STABLE):", friction / 1e6);
+        console.log("[friction] STABLE received directly:", actualSettled / 1e6);
         console.log("[friction] Audit: est=", storedEstAssets / 1e6, "settled=", storedSettled / 1e6);
     }
 
@@ -485,12 +485,12 @@ contract VaultE2E is Script {
         vm.broadcast(controllerKey);
         vault.registerAdapter(address(adapter));
 
-        // Invest in-flight: USDC -> adapter token
+        // Invest in-flight: STABLE -> adapter token
         vm.broadcast(controllerKey);
-        uint256 investId = vault.createInFlight(address(adapter), address(usdc), 500, 500e6, true);
+        uint256 investId = vault.createInFlight(address(adapter), address(stable), 500, 500e6, true);
 
         require(vault.totalInvestInFlight() == 500e6, "investInFlight wrong");
-        console.log("[inflight] Created invest id:", investId, "| 500 USDC -> 500 tokens");
+        console.log("[inflight] Created invest id:", investId, "| 500 STABLE -> 500 tokens");
         console.log("[inflight] totalInvestInFlight:", vault.totalInvestInFlight() / 1e6);
 
         // Confirm invest with slight slippage (got 495 tokens instead of 500)
@@ -500,18 +500,18 @@ contract VaultE2E is Script {
         require(vault.totalInvestInFlight() == 0, "investInFlight not cleared");
         console.log("[inflight] Confirmed invest: actual 495 tokens. InFlight cleared.");
 
-        // Redeem in-flight: adapter token -> USDC
+        // Redeem in-flight: adapter token -> STABLE
         vm.broadcast(controllerKey);
-        uint256 redeemId = vault.createInFlight(address(adapter), address(usdc), 200, 200e6, false);
+        uint256 redeemId = vault.createInFlight(address(adapter), address(stable), 200, 200e6, false);
 
         require(vault.totalRedeemInFlight() == 200e6, "redeemInFlight wrong");
-        console.log("[inflight] Created redeem id:", redeemId, "| 200 tokens -> 200 USDC");
+        console.log("[inflight] Created redeem id:", redeemId, "| 200 tokens -> 200 STABLE");
 
         vm.broadcast(controllerKey);
         vault.confirmInFlight(redeemId, 198e6, false);
 
         require(vault.totalRedeemInFlight() == 0, "redeemInFlight not cleared");
-        console.log("[inflight] Confirmed redeem: actual 198 USDC. InFlight cleared.");
+        console.log("[inflight] Confirmed redeem: actual 198 STABLE. InFlight cleared.");
 
         // Cleanup
         vm.broadcast(controllerKey);
@@ -528,7 +528,7 @@ contract VaultE2E is Script {
         uint256 rate = vault.exchangeRate();
         require(rate > 0, "rate must be positive");
         console.log("[rate] Current rate:", rate);
-        console.log("[rate] 1000 shares worth", vault.previewRedeem(1_000e6) / 1e6, "USDC (net of fee)");
+        console.log("[rate] 1000 shares worth", vault.previewRedeem(1_000e6) / 1e6, "STABLE (net of fee)");
     }
 
     // =============================================================
@@ -633,7 +633,7 @@ contract VaultE2E is Script {
 
         vault.setMinRedeemAmount(50e6);
         require(vault.minRedeemAmount() == 50e6, "minRedeem not set");
-        console.log("[admin] setMinRedeemAmount: 50 USDC");
+        console.log("[admin] setMinRedeemAmount: 50 STABLE");
 
         // Restore original values for any subsequent use
         vault.setController(controller);

@@ -51,13 +51,13 @@ abstract contract MantleYieldVaultStorage is
 
     uint256 public totalLockedShares;
 
-    // Invest in-flight: USDC sent out -> adapter underlying tokens not yet received
+    // Invest in-flight: STABLE sent out -> adapter underlying tokens not yet received
     uint256 public totalInvestInFlight;
     mapping(address adapter => uint256) public adapterInvestInFlightTokens;
 
-    // Redeem in-flight: adapter underlying tokens sent out -> USDC not yet received
+    // Redeem in-flight: adapter underlying tokens sent out -> STABLE not yet received
     uint256 public totalRedeemInFlight;
-    mapping(address adapter => uint256) public adapterRedeemInFlightUsdc;
+    mapping(address adapter => uint256) public adapterRedeemInFlightStable;
 
     uint256 public nextRequestId;
     uint256 public nextInFlightId;
@@ -89,7 +89,7 @@ abstract contract MantleYieldVaultStorage is
     // Daily Cap State
     // =============================================================
 
-    /// @notice Remaining deposit allowance (USDC). 0 = blocked, type(uint256).max = no limit.
+    /// @notice Remaining deposit allowance (STABLE). 0 = blocked, type(uint256).max = no limit.
     ///         Decremented on deposit. Reset by admin/off-chain service via setDepositDailyRemaining.
     uint256 public depositDailyRemaining;
     /// @notice Remaining redeem allowance (shares). 0 = blocked, type(uint256).max = no limit.

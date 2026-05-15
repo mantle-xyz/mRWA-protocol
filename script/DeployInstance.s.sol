@@ -44,7 +44,7 @@ import {Script, console2} from "forge-std/Script.sol";
 ///   F_ACCOUNTANT_FACTORY         – AccountantFactory address
 ///   F_STRATEGY_CONTROLLER_FACTORY – StrategyControllerFactory address
 ///   F_ADMIN_ADDRESS
-///   F_USDC_ADDRESS
+///   F_STABLE_ADDRESS
 ///   F_COMPLIANCE_BOT_ADDRESS
 ///   F_OPERATOR_EXECUTOR          – existing OperatorExecutor proxy (reused)
 ///   F_ACCOUNTANT_EXECUTOR        – existing AccountantExecutor proxy (reused)
@@ -95,7 +95,7 @@ contract DeployInstance is Script {
 
         // ─── Load params ──────────────────────────────────────────
         address admin = vm.envAddress("F_ADMIN_ADDRESS");
-        address usdc = vm.envAddress("F_USDC_ADDRESS");
+        address stable = vm.envAddress("F_STABLE_ADDRESS");
         address complianceBot = vm.envAddress("F_COMPLIANCE_BOT_ADDRESS");
         address treasury = vm.envAddress("F_TREASURY_ADDRESS");
         address pauser = vm.envAddress("F_PAUSER_ADDRESS");
@@ -151,7 +151,7 @@ contract DeployInstance is Script {
         d.vault
             .initialize(
                 IMantleYieldVault.InitParams({
-                    asset: IERC20(usdc),
+                    asset: IERC20(stable),
                     name: "Mantle RWA Vault",
                     symbol: "mRWA",
                     admin: admin,

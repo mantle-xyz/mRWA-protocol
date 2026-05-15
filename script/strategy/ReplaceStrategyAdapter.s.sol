@@ -11,7 +11,7 @@ import {Script, console2} from "forge-std/Script.sol";
 ///
 ///         Preconditions (reverts if violated):
 ///           - Old adapter has zero invest in-flight (vault.adapterInvestInFlightTokens(old) == 0)
-///           - Old adapter has zero redeem in-flight (vault.adapterRedeemInFlightUsdc(old) == 0)
+///           - Old adapter has zero redeem in-flight (vault.adapterRedeemInFlightStable(old) == 0)
 ///         Otherwise deactivateStrategy reverts StrategyHasInFlight; run settleAdapter first.
 ///
 ///         Execution steps (all in one tx):
@@ -59,7 +59,7 @@ contract ReplaceStrategyAdapter is Script {
         // ─── In-flight precondition check ───
         IMantleYieldVault vault = controller.vault();
         uint256 pendingInvest = vault.adapterInvestInFlightTokens(oldAdapter);
-        uint256 pendingRedeem = vault.adapterRedeemInFlightUsdc(oldAdapter);
+        uint256 pendingRedeem = vault.adapterRedeemInFlightStable(oldAdapter);
 
         console2.log("=== Replace Strategy Adapter ===");
         console2.log("Controller       :", address(controller));

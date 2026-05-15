@@ -20,9 +20,9 @@ contract MockVaultForScript {
 
 contract DeploySubRedManagementAdapterScriptTest is Test {
     function test_Run_DoesNotRequireFPrivateKey() public {
-        MockERC20Mintable usdc = new MockERC20Mintable("Mock USDC", "mUSDC", 6);
+        MockERC20Mintable stable = new MockERC20Mintable("Mock Stable", "mStable", 6);
         MockERC20Mintable stToken = new MockERC20Mintable("Mock ST", "mST", 18);
-        MockVaultForScript vault = new MockVaultForScript(address(usdc));
+        MockVaultForScript vault = new MockVaultForScript(address(stable));
         MockSubRedManagement subRed = new MockSubRedManagement(address(this));
 
         vm.setEnv("F_PRIVATE_KEY", "");

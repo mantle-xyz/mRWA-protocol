@@ -10,8 +10,8 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {Test} from "forge-std/Test.sol";
 
-contract MockUSDCFlow is ERC20 {
-    constructor() ERC20("MockUSDC", "mUSDC") {}
+contract MockStableFlow is ERC20 {
+    constructor() ERC20("MockStable", "mStable") {}
 
     function mint(address to, uint256 amount) external {
         _mint(to, amount);
@@ -42,7 +42,7 @@ contract MockSubRedManagementFlow is ISubRedManagement {
 }
 
 contract MockVaultFlow {
-    ERC20 public immutable usdc;
+    ERC20 public immutable stable;
     uint256 public mockedExchangeRate = 1e18;
 
     uint256 public lockedTotal;
@@ -63,7 +63,7 @@ contract MockVaultFlow {
         address adapter;
         address assetAddr;
         uint256 tokenAmount;
-        uint256 usdcAmount;
+        uint256 stableAmount;
         uint256 settledAmount;
         bool isInvest;
         uint256 timestamp;
@@ -73,15 +73,15 @@ contract MockVaultFlow {
     mapping(uint256 => InFlightData) internal inFlights;
 
     constructor(address asset_) {
-        usdc = ERC20(asset_);
+        stable = ERC20(asset_);
     }
 
     function asset() external view returns (address) {
-        return address(usdc);
+        return address(stable);
     }
 
     function deposit(uint256 amount) external {
-        usdc.transferFrom(msg.sender, address(this), amount);
+        stable.transferFrom(msg.sender, address(this), amount);
     }
 
     function setLiability(uint256 id, uint256 amount) external {
@@ -119,17 +119,17 @@ contract MockVaultFlow {
         return investInFlightByAdapter[adapter];
     }
 
-    function adapterRedeemInFlightUsdc(address adapter) external view returns (uint256) {
+    function adapterRedeemInFlightStable(address adapter) external view returns (uint256) {
         return redeemInFlightByAdapter[adapter];
     }
 
     function getFreeCash() external view returns (uint256) {
-        uint256 totalCash = usdc.balanceOf(address(this));
+        uint256 totalCash = stable.balanceOf(address(this));
         return totalCash > lockedTotal ? totalCash - lockedTotal : 0;
     }
 
     function getCashDeficit() external view returns (uint256) {
-        uint256 totalCash = usdc.balanceOf(address(this));
+        uint256 totalCash = stable.balanceOf(address(this));
         return lockedTotal > totalCash ? lockedTotal - totalCash : 0;
     }
 
@@ -141,7 +141,7 @@ contract MockVaultFlow {
 
     function totalAssets() external view returns (uint256) {
         if (mockedTotalAssets > 0) return mockedTotalAssets;
-        uint256 total = usdc.balanceOf(address(this)) + investInFlightTotal + redeemInFlightTotal;
+        uint256 total = stable.balanceOf(address(this)) + investInFlightTotal + redeemInFlightTotal;
         return total > lockedTotal ? total - lockedTotal : 0;
     }
 
@@ -187,28 +187,31 @@ contract MockVaultFlow {
         }
     }
 
-    function createInFlight(address adapter, address assetAddr, uint256 tokenAmount, uint256 usdcAmount, bool isInvest)
-        external
-        returns (uint256 inFlightId)
-    {
+    function createInFlight(
+        address adapter,
+        address assetAddr,
+        uint256 tokenAmount,
+        uint256 stableAmount,
+        bool isInvest
+    ) external returns (uint256 inFlightId) {
         inFlightId = ++inFlightIdCursor;
         inFlights[inFlightId] = InFlightData({
             id: inFlightId,
             adapter: adapter,
             assetAddr: assetAddr,
             tokenAmount: tokenAmount,
-            usdcAmount: usdcAmount,
+            stableAmount: stableAmount,
             settledAmount: 0,
             isInvest: isInvest,
             timestamp: block.timestamp,
             status: IMantleYieldVault.InFlightStatus.PENDING
         });
         if (isInvest) {
-            investInFlightTotal += usdcAmount;
+            investInFlightTotal += stableAmount;
             investInFlightByAdapter[adapter] += tokenAmount;
         } else {
-            redeemInFlightTotal += usdcAmount;
-            redeemInFlightByAdapter[adapter] += usdcAmount;
+            redeemInFlightTotal += stableAmount;
+            redeemInFlightByAdapter[adapter] += stableAmount;
         }
     }
 
@@ -216,16 +219,16 @@ contract MockVaultFlow {
         InFlightData storage rec = inFlights[inFlightId];
         rec.settledAmount = actualAmount;
         rec.status = IMantleYieldVault.InFlightStatus.CONFIRMED;
-        if (rec.isInvest && investInFlightTotal >= rec.usdcAmount) {
-            investInFlightTotal -= rec.usdcAmount;
+        if (rec.isInvest && investInFlightTotal >= rec.stableAmount) {
+            investInFlightTotal -= rec.stableAmount;
             if (investInFlightByAdapter[rec.adapter] >= rec.tokenAmount) {
                 investInFlightByAdapter[rec.adapter] -= rec.tokenAmount;
             }
         }
-        if (!rec.isInvest && redeemInFlightTotal >= rec.usdcAmount) {
-            redeemInFlightTotal -= rec.usdcAmount;
-            if (redeemInFlightByAdapter[rec.adapter] >= rec.usdcAmount) {
-                redeemInFlightByAdapter[rec.adapter] -= rec.usdcAmount;
+        if (!rec.isInvest && redeemInFlightTotal >= rec.stableAmount) {
+            redeemInFlightTotal -= rec.stableAmount;
+            if (redeemInFlightByAdapter[rec.adapter] >= rec.stableAmount) {
+                redeemInFlightByAdapter[rec.adapter] -= rec.stableAmount;
             }
         }
     }
@@ -261,7 +264,7 @@ contract MockVaultFlow {
             address adapter,
             address assetAddr,
             uint256 tokenAmount,
-            uint256 usdcAmount,
+            uint256 stableAmount,
             uint256 settledAmount,
             bool isInvest,
             uint256 timestamp,
@@ -274,7 +277,7 @@ contract MockVaultFlow {
             rec.adapter,
             rec.assetAddr,
             rec.tokenAmount,
-            rec.usdcAmount,
+            rec.stableAmount,
             rec.settledAmount,
             rec.isInvest,
             rec.timestamp,
@@ -284,7 +287,7 @@ contract MockVaultFlow {
 }
 
 contract StrategyFlowTest is Test {
-    MockUSDCFlow internal usdc;
+    MockStableFlow internal stable;
     MockVaultFlow internal vault;
     StrategyController internal controller;
     MockSubRedManagementFlow internal subRedISNR;
@@ -298,8 +301,8 @@ contract StrategyFlowTest is Test {
     address internal operator = makeAddr("operator");
 
     function setUp() public {
-        usdc = new MockUSDCFlow();
-        vault = new MockVaultFlow(address(usdc));
+        stable = new MockStableFlow();
+        vault = new MockVaultFlow(address(stable));
         StrategyController implementation = new StrategyController();
         bytes memory initData = abi.encodeCall(
             StrategyController.initialize, (address(vault), address(this), address(this), address(this), 0, 0, 0)
@@ -342,10 +345,10 @@ contract StrategyFlowTest is Test {
         ordered[1] = address(adapterUMINT);
         controller.setStrategyOrder(ordered);
 
-        // Simulate user already has USDC and has deposited/staked into vault.
-        usdc.mint(user, 1_000e18);
+        // Simulate user already has STABLE and has deposited/staked into vault.
+        stable.mint(user, 1_000e18);
         vm.startPrank(user);
-        usdc.approve(address(vault), type(uint256).max);
+        stable.approve(address(vault), type(uint256).max);
         vault.deposit(1_000e18);
         vm.stopPrank();
     }
@@ -359,7 +362,7 @@ contract StrategyFlowTest is Test {
         assertEq(subRedUMINT.lastStToken(), address(uMINTToken));
         assertEq(subRedISNR.lastAmount(), 500e18);
         assertEq(subRedUMINT.lastAmount(), 500e18);
-        assertEq(usdc.balanceOf(address(vault)), 0);
+        assertEq(stable.balanceOf(address(vault)), 0);
     }
 
     function test_AsyncProcessBatchAddsInFlightAndMovesReady() public {
@@ -419,19 +422,19 @@ contract StrategyFlowTest is Test {
         uint256[] memory writeIdx = new uint256[](2);
         for (uint256 i = 0; i < redeemInFlightCount; i++) {
             uint256 inFlightId = inFlightIds[i];
-            (, address adapter,,, uint256 usdcAmount,,,,) = vault.inFlightRecords(inFlightId);
+            (, address adapter,,, uint256 stableAmount,,,,) = vault.inFlightRecords(inFlightId);
             if (adapter == adapters[0]) {
                 uint256 idx = writeIdx[0];
                 redeemBatch[0].inFlightIds[idx] = inFlightId;
-                redeemBatch[0].settledAssetAmounts[idx] = usdcAmount;
+                redeemBatch[0].settledAssetAmounts[idx] = stableAmount;
                 writeIdx[0] = idx + 1;
-                usdc.mint(adapters[0], usdcAmount);
+                stable.mint(adapters[0], stableAmount);
             } else if (adapter == adapters[1]) {
                 uint256 idx = writeIdx[1];
                 redeemBatch[1].inFlightIds[idx] = inFlightId;
-                redeemBatch[1].settledAssetAmounts[idx] = usdcAmount;
+                redeemBatch[1].settledAssetAmounts[idx] = stableAmount;
                 writeIdx[1] = idx + 1;
-                usdc.mint(adapters[1], usdcAmount);
+                stable.mint(adapters[1], stableAmount);
             } else {
                 revert("UNEXPECTED_ADAPTER");
             }

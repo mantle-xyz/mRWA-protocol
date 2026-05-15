@@ -20,7 +20,7 @@ import {Script, console2} from "forge-std/Script.sol";
 ///
 /// Required env vars (set via deploy-config YAML):
 ///   F_ADMIN_ADDRESS           – admin address (also used as beacon owner)
-///   F_USDC_ADDRESS            – USDC token address
+///   F_STABLE_ADDRESS            – STABLE token address
 ///   F_SANCTIONS_ORACLE        – SanctionsOracle proxy address
 ///   F_CONTROLLER_ADDRESS      – StrategyController proxy address
 ///   F_ACCOUNTANT_ADDRESS      – Accountant proxy address
@@ -45,7 +45,7 @@ contract DeployVault is Script {
         address sanctionsOracle = vm.envAddress("F_SANCTIONS_ORACLE");
 
         IMantleYieldVault.InitParams memory params = IMantleYieldVault.InitParams({
-            asset: IERC20(vm.envAddress("F_USDC_ADDRESS")),
+            asset: IERC20(vm.envAddress("F_STABLE_ADDRESS")),
             name: "Mantle RWA Vault",
             symbol: "mRWA",
             admin: admin,
@@ -64,7 +64,7 @@ contract DeployVault is Script {
 
         console2.log("=== DeployVault ===");
         console2.log("Admin              :", admin);
-        console2.log("USDC               :", address(params.asset));
+        console2.log("STABLE               :", address(params.asset));
         console2.log("SanctionsOracle    :", sanctionsOracle);
         console2.log("Controller         :", params.controller);
         console2.log("Accountant         :", params.accountant);

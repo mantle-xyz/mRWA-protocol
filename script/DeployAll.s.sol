@@ -62,7 +62,7 @@ import {Script, console2} from "forge-std/Script.sol";
 ///
 /// Required env vars (set via deploy-config YAML):
 ///   F_ADMIN_ADDRESS              – protocol-wide admin (beacon owner + DEFAULT_ADMIN_ROLE)
-///   F_USDC_ADDRESS               – USDC token address
+///   F_STABLE_ADDRESS               – STABLE token address
 ///   F_COMPLIANCE_BOT_ADDRESS     – SanctionsOracle COMPLIANCE_ROLE
 ///   F_BOT_ADDRESS                – AccountantExecutor BOT_ROLE
 ///   F_FEE_SETTLER_ADDRESS        – AccountantExecutor FEE_SETTLER_ROLE
@@ -114,7 +114,7 @@ contract DeployAll is Script {
     function run() external returns (Deployed memory d) {
         // ─── Load env ────────────────────────────────────────────────
         address admin = vm.envAddress("F_ADMIN_ADDRESS");
-        address usdc = vm.envAddress("F_USDC_ADDRESS");
+        address stable = vm.envAddress("F_STABLE_ADDRESS");
         address complianceBot = vm.envAddress("F_COMPLIANCE_BOT_ADDRESS");
         address bot = vm.envAddress("F_BOT_ADDRESS");
         address feeSettler = vm.envAddress("F_FEE_SETTLER_ADDRESS");
@@ -135,14 +135,14 @@ contract DeployAll is Script {
         vm.startBroadcast();
 
         // ═════════════════════════════════════════════════════════════
-        //  Phase 0 (testnet only): Deploy mock USDC if address is zero
+        //  Phase 0 (testnet only): Deploy mock STABLE if address is zero
         // ═════════════════════════════════════════════════════════════
-        if (usdc == address(0)) {
-            MockERC20Mintable mockUsdc = new MockERC20Mintable("USD Coin", "USDC", 6);
-            usdc = address(mockUsdc);
-            console2.log("[Phase 0] Mock USDC deployed:", usdc);
+        if (stable == address(0)) {
+            MockERC20Mintable mockStable = new MockERC20Mintable("Stable Coin", "STABLE", 6);
+            stable = address(mockStable);
+            console2.log("[Phase 0] Mock Stable deployed:", stable);
         }
-        console2.log("USDC           :", usdc);
+        console2.log("STABLE           :", stable);
 
         // ═════════════════════════════════════════════════════════════
         //  Phase 1: Implementations + Factories
@@ -248,7 +248,7 @@ contract DeployAll is Script {
         d.vault
             .initialize(
                 IMantleYieldVault.InitParams({
-                    asset: IERC20(usdc),
+                    asset: IERC20(stable),
                     name: "Mantle RWA Vault",
                     symbol: "mRWA",
                     admin: admin,
