@@ -787,45 +787,6 @@ contract AccountantTest is Test {
     }
 
     // =============================================================
-    //                    SET VAULT
-    // =============================================================
-
-    function test_setVault_succeeds() public {
-        address newVault = makeAddr("newVault");
-
-        vm.prank(admin);
-        accountant.setVault(newVault);
-
-        assertEq(address(accountant.vault()), newVault);
-    }
-
-    function test_setVault_emitsEvent() public {
-        address newVault = makeAddr("newVault");
-
-        vm.expectEmit(true, true, false, false);
-        emit Accountant.VaultUpdated(address(vault), newVault);
-
-        vm.prank(admin);
-        accountant.setVault(newVault);
-    }
-
-    function test_setVault_revertsWhenZero() public {
-        vm.expectRevert(Accountant.Accountant__ZeroAddress.selector);
-        vm.prank(admin);
-        accountant.setVault(address(0));
-    }
-
-    function test_setVault_revertsWhenNotAdmin() public {
-        bytes32 adminRole = accountant.DEFAULT_ADMIN_ROLE();
-
-        vm.expectRevert(
-            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user, adminRole)
-        );
-        vm.prank(user);
-        accountant.setVault(makeAddr("v"));
-    }
-
-    // =============================================================
     //                    SET RISK PARAMS
     // =============================================================
 
@@ -992,6 +953,49 @@ contract AccountantTest is Test {
         vm.prank(admin);
         accountant.setManagementFeeRate(maxFee);
         assertEq(accountant.managementFeeRate(), maxFee);
+    }
+
+    /// @dev Changing the fee rate must settle accrued fees first so the elapsed period
+    ///      is charged at the OLD rate, not retroactively at the new one.
+    function test_setManagementFeeRate_settlesAccruedFeesAtOldRateFirst() public {
+        uint256 supply = 100_000e18;
+        vault.setTotalSupply(supply);
+
+        // Prime the snapshot so totalSharesLastSettle == supply.
+        skip(1);
+        _settleFee();
+        uint64 settleAt = uint64(block.timestamp);
+
+        // Let time accrue under the OLD rate (MANAGEMENT_FEE_BPS = 50).
+        uint256 elapsed = 30 days;
+        skip(elapsed);
+
+        uint256 expectedShares = (supply * MANAGEMENT_FEE_BPS * elapsed) / (10_000 * 365 days);
+
+        vm.expectEmit(false, false, false, true);
+        emit Accountant.FeesDistributed(expectedShares);
+
+        vm.prank(admin);
+        accountant.setManagementFeeRate(200);
+
+        assertEq(vault.lastFeeShares(), expectedShares, "fees billed at old rate");
+        assertEq(accountant.managementFeeRate(), 200, "new rate stored");
+        assertEq(accountant.lastFeeSettleTimestamp(), settleAt + elapsed, "settle timestamp advanced");
+    }
+
+    /// @dev A no-op change (same block as last settle) should not mint fees.
+    function test_setManagementFeeRate_noSettleWhenNoTimeElapsed() public {
+        vault.setTotalSupply(100_000e18);
+        skip(1);
+        _settleFee(); // primes snapshot, advances lastFeeSettleTimestamp to now
+
+        uint256 mintsBefore = vault.totalFeeMintCalls();
+
+        vm.prank(admin);
+        accountant.setManagementFeeRate(200);
+
+        assertEq(vault.totalFeeMintCalls(), mintsBefore, "no fee mint when timeElapsed == 0");
+        assertEq(accountant.managementFeeRate(), 200);
     }
 
     function test_setManagementFeeRate_revertsWhenNotAdmin() public {
@@ -1858,24 +1862,6 @@ contract AccountantExecutorIntegrationTest is Test {
         accountant.setManagementFeeRate(tooHigh);
     }
 
-    function test_integration_setVault() public {
-        address newVault = makeAddr("newVault");
-
-        vm.expectEmit(true, true, false, false);
-        emit Accountant.VaultUpdated(address(vault), newVault);
-
-        vm.prank(admin);
-        accountant.setVault(newVault);
-
-        assertEq(address(accountant.vault()), newVault);
-    }
-
-    function test_integration_setVault_revertsWhenZero() public {
-        vm.expectRevert(Accountant.Accountant__ZeroAddress.selector);
-        vm.prank(admin);
-        accountant.setVault(address(0));
-    }
-
     function test_integration_setMaxComputeAge() public {
         uint32 newAge = 10 minutes;
 
@@ -1919,11 +1905,6 @@ contract AccountantExecutorIntegrationTest is Test {
             abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, bot, adminRole)
         );
         accountant.setManagementFeeRate(100);
-
-        vm.expectRevert(
-            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, bot, adminRole)
-        );
-        accountant.setVault(makeAddr("v"));
 
         vm.expectRevert(
             abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, bot, adminRole)

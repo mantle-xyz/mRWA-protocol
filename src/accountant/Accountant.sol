@@ -79,7 +79,6 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
     event RiskParamsUpdated(uint256 maxDeviation, uint256 minInterval);
     event ManagementFeeRateUpdated(uint256 oldRate, uint256 newRate);
     event MaxComputeAgeUpdated(uint256 oldAge, uint256 newAge);
-    event VaultUpdated(address indexed oldVault, address indexed newVault);
     event EmergencyRateUpdated(uint256 oldRate, uint256 newRate, uint256 timestamp);
     event CircuitBreakerTriggered(uint256 deviationBps, uint256 maxAllowed, uint256 proposedRate);
 
@@ -274,14 +273,6 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
     //                    ADMIN FUNCTIONS
     // =============================================================
 
-    function setVault(address newVault) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        if (newVault == address(0)) revert Accountant__ZeroAddress();
-        AccountantStorage storage s = _getAccountantStorage();
-        address oldVault = address(s.vault);
-        s.vault = IMantleYieldVault(newVault);
-        emit VaultUpdated(oldVault, newVault);
-    }
-
     function setRiskParams(uint32 newMaxDeviation, uint32 newMinInterval) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (newMaxDeviation == 0 || newMaxDeviation > MAX_DEVIATION_CEILING) {
             revert Accountant__InvalidDeviation(newMaxDeviation);
@@ -303,6 +294,7 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
     function setManagementFeeRate(uint32 newRate) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (newRate > MAX_MANAGEMENT_FEE_BPS) revert Accountant__InvalidFeeRate(newRate);
         AccountantStorage storage s = _getAccountantStorage();
+        _settleManagementFee(s);
         uint256 oldRate = s.managementFeeRate;
         s.managementFeeRate = newRate;
         emit ManagementFeeRateUpdated(oldRate, newRate);
