@@ -139,9 +139,9 @@ contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultA
     }
 
     function previewRedeem(uint256 shares) public view override(ERC4626Upgradeable, IERC4626) returns (uint256) {
-        uint256 grossAssets = _convertToAssets(shares, Math.Rounding.Floor);
-        uint256 fee = grossAssets.mulDiv(redemptionFeeBps, FEE_BASIS, Math.Rounding.Ceil);
-        return grossAssets - fee;
+        uint256 treasuryShare = shares.mulDiv(redemptionFeeBps, FEE_BASIS, Math.Rounding.Ceil);
+        uint256 netShares = shares - treasuryShare;
+        return _convertToAssets(netShares, Math.Rounding.Floor);
     }
 
     function previewWithdraw(uint256 assets) public view override(ERC4626Upgradeable, IERC4626) returns (uint256) {
