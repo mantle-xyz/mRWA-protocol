@@ -246,14 +246,13 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
     //                   EMERGENCY FUNCTIONS
     // =============================================================
 
-    /// @notice Force-override the exchange rate during a black swan event
-    ///         (e.g. massive bad debt in the underlying protocol) where the
-    ///         real NAV drop exceeds the normal circuit-breaker threshold.
-    ///         Bypasses deviation and cooldown checks, then triggers a global
-    ///         pause on both the Accountant and the Vault.
-    /// @dev Intended to be called exclusively by a protocol multisig behind a
-    ///      timelock. The Accountant should hold the PAUSER_ROLE on the Vault
-    ///      for the vault-side pause to succeed automatically.
+    /// @notice Recovery hook after the circuit breaker tripped. Force-override
+    ///         the exchange rate to a corrected value — bypassing the deviation
+    ///         and cooldown checks that paused the contract — and automatically
+    ///         unpause the Accountant so subsequent rate pushes can resume.
+    /// @dev Intended to be called exclusively by a protocol multisig.
+    ///      Does NOT touch the Vault; if the Vault was also paused
+    ///      it must be unpaused separately through its own pauser/admin.
     /// @param newRate The corrected exchange rate (18-decimal precision)
     function emergencyRateUpdate(uint64 newRate) external onlyRole(DEFAULT_ADMIN_ROLE) nonReentrant {
         if (newRate == 0) revert Accountant__InvalidRate();
