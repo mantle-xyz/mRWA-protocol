@@ -1144,6 +1144,36 @@ contract SanctionsTest is VaultTestBase {
         assertEq(gateway.maxDeposit(alice), 0);
         assertEq(gateway.maxRedeem(alice), 0);
     }
+
+    /// @dev When whitelistEnabled is false (default), max-views must not gate on whitelist status.
+    ///      Otherwise ERC-4626 integrators get false negatives even though deposit/redeem would succeed.
+    function test_gatewayMaxIgnoresWhitelistWhenDisabled() public view {
+        // whitelistEnabled is false by default; alice is not whitelisted.
+        assertFalse(gateway.whitelistEnabled());
+        assertFalse(oracle.isWhitelisted(alice));
+
+        assertGt(gateway.maxDeposit(alice), 0, "max-deposit should not be gated on whitelist when disabled");
+        assertGt(gateway.maxRedeem(alice), 0, "max-redeem should not be gated on whitelist when disabled");
+    }
+
+    /// @dev With whitelist enabled, non-whitelisted owners must see 0 on both max-views,
+    ///      mirroring the runtime _requireWhitelisted gate.
+    function test_gatewayMaxBlockedWhenWhitelistEnabledAndNotWhitelisted() public {
+        vm.prank(admin);
+        gateway.setWhitelistEnabled(true);
+
+        assertEq(gateway.maxDeposit(alice), 0);
+        assertEq(gateway.maxRedeem(alice), 0);
+    }
+
+    function test_gatewayMaxUnblockedWhenWhitelistEnabledAndWhitelisted() public {
+        vm.prank(admin);
+        gateway.setWhitelistEnabled(true);
+        oracle.setWhitelisted(alice, true);
+
+        assertGt(gateway.maxDeposit(alice), 0);
+        assertGt(gateway.maxRedeem(alice), 0);
+    }
 }
 
 // =============================================================
