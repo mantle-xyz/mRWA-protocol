@@ -9,6 +9,7 @@ import {
     AccessControlDefaultAdminRulesUpgradeable
 } from "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlDefaultAdminRulesUpgradeable.sol";
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /**
@@ -196,10 +197,6 @@ contract MantleVaultGateway is
     }
 
     function _isSubscribeRedeemPaused() internal view returns (bool paused_) {
-        try IAccountant(vault.accountant()).getRateSafe() returns (uint256) {
-            return false;
-        } catch {
-            return true;
-        }
+        return Pausable(vault.accountant()).paused();
     }
 }
