@@ -225,6 +225,9 @@ contract SubRedManagementAdapter is BaseAsync7540AdapterUpgradeable {
         uint8 assetDecimals = IERC20Metadata(address(_asset())).decimals();
         uint8 stDecimals = IERC20Metadata(s.stToken).decimals();
         expectedPosAmount = _estimatePosAmount(executableAssetAmount, assetDecimals, stDecimals);
+        if (expectedPosAmount == 0) {
+            return (false, 0, 0);
+        }
         ok = executableAssetAmount > 0;
     }
 
