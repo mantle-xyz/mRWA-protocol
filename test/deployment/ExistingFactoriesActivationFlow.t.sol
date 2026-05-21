@@ -184,6 +184,9 @@ contract ExistingFactoriesActivationFlowTest is Test {
         vm.setEnv("UPGRADE_INIT_SETTLE_MS", "0");
         vm.setEnv("F_INITIAL_RATE", "1000000000000000000");
         vm.setEnv("F_MANAGEMENT_FEE_BPS", "50");
+        vm.setEnv("F_MAX_ALLOWED_DEVIATION_BPS", "100");
+        vm.setEnv("F_MIN_UPDATE_INTERVAL_SECONDS", "72000");
+        vm.setEnv("F_MAX_COMPUTE_AGE_SECONDS", "300");
         vm.setEnv("F_BUFFER_TARGET_BPS", "1");
         vm.setEnv("F_REBALANCE_THRESHOLD_BPS", "10");
         vm.setEnv("F_REBALANCE_COOLDOWN", "3600");

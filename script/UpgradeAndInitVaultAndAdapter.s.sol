@@ -42,6 +42,9 @@ import {Script, console2} from "forge-std/Script.sol";
 /// - UPGRADE_INIT_ADAPTER_ACCOUNTANT
 /// - F_INITIAL_RATE                           Accountant.initialize starting exchange rate (1e18)
 /// - F_MANAGEMENT_FEE_BPS                     Accountant.initialize management fee bps
+/// - F_MAX_ALLOWED_DEVIATION_BPS              Accountant.initialize deviation cap bps
+/// - F_MIN_UPDATE_INTERVAL_SECONDS            Accountant.initialize min seconds between updates
+/// - F_MAX_COMPUTE_AGE_SECONDS                Accountant.initialize max compute-timestamp staleness
 /// - F_BUFFER_TARGET_BPS                      StrategyController.initialize buffer target
 /// - F_REBALANCE_THRESHOLD_BPS                StrategyController.initialize rebalance threshold
 /// - F_REBALANCE_COOLDOWN                     StrategyController.initialize rebalance cooldown (s)
@@ -75,6 +78,9 @@ contract UpgradeAndInitVaultAndAdapter is Script {
         address operatorExecutor = vm.envOr("UPGRADE_INIT_OPERATOR_EXECUTOR", address(0));
         uint64 initialRate = uint64(vm.envUint("F_INITIAL_RATE"));
         uint32 managementFeeBps = uint32(vm.envUint("F_MANAGEMENT_FEE_BPS"));
+        uint32 maxAllowedDeviation = uint32(vm.envUint("F_MAX_ALLOWED_DEVIATION_BPS"));
+        uint32 minUpdateInterval = uint32(vm.envUint("F_MIN_UPDATE_INTERVAL_SECONDS"));
+        uint32 maxComputeAge = uint32(vm.envUint("F_MAX_COMPUTE_AGE_SECONDS"));
         uint16 bufferTargetBps = uint16(vm.envUint("F_BUFFER_TARGET_BPS"));
         uint16 rebalanceThresholdBps = uint16(vm.envUint("F_REBALANCE_THRESHOLD_BPS"));
         uint64 rebalanceCooldown = uint64(vm.envUint("F_REBALANCE_COOLDOWN"));
@@ -180,7 +186,17 @@ contract UpgradeAndInitVaultAndAdapter is Script {
         Accountant accountant = Accountant(accountantProxy);
         if (!_proxyHasAdmin(accountantProxy, admin)) {
             vm.startBroadcast();
-            accountant.initialize(vaultProxy, initialRate, managementFeeBps, admin, pauser, accountantExecutor);
+            accountant.initialize(
+                vaultProxy,
+                initialRate,
+                managementFeeBps,
+                maxAllowedDeviation,
+                minUpdateInterval,
+                maxComputeAge,
+                admin,
+                pauser,
+                accountantExecutor
+            );
             vm.stopBroadcast();
             console2.log("[5/9] Accountant initialized");
             _settleBlock(settleMs);

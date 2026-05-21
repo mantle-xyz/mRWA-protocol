@@ -74,6 +74,9 @@ contract AccountantTest is Test {
 
     uint64 public constant INITIAL_RATE = 1e18;
     uint32 public constant MANAGEMENT_FEE_BPS = 50; // 0.5%
+    uint32 public constant MAX_ALLOWED_DEVIATION_BPS = 100; // 1%
+    uint32 public constant MIN_UPDATE_INTERVAL_SECONDS = 20 hours;
+    uint32 public constant MAX_COMPUTE_AGE_SECONDS = 5 minutes;
 
     function setUp() public {
         vm.warp(1000);
@@ -108,7 +111,20 @@ contract AccountantTest is Test {
         view
         returns (bytes memory)
     {
-        return abi.encodeCall(Accountant.initialize, (vault_, initialRate, managementFeeRate_, admin, pauser, executor));
+        return abi.encodeCall(
+            Accountant.initialize,
+            (
+                vault_,
+                initialRate,
+                managementFeeRate_,
+                MAX_ALLOWED_DEVIATION_BPS,
+                MIN_UPDATE_INTERVAL_SECONDS,
+                MAX_COMPUTE_AGE_SECONDS,
+                admin,
+                pauser,
+                executor
+            )
+        );
     }
 
     // =============================================================
@@ -141,7 +157,17 @@ contract AccountantTest is Test {
 
     function test_initialize_revertsOnDoubleInit() public {
         vm.expectRevert();
-        accountant.initialize(address(vault), INITIAL_RATE, MANAGEMENT_FEE_BPS, admin, pauser, executor);
+        accountant.initialize(
+            address(vault),
+            INITIAL_RATE,
+            MANAGEMENT_FEE_BPS,
+            MAX_ALLOWED_DEVIATION_BPS,
+            MIN_UPDATE_INTERVAL_SECONDS,
+            MAX_COMPUTE_AGE_SECONDS,
+            admin,
+            pauser,
+            executor
+        );
     }
 
     function test_initialize_revertsWhenVaultIsZero() public {
@@ -154,7 +180,18 @@ contract AccountantTest is Test {
         new BeaconProxy(
             address(beacon),
             abi.encodeCall(
-                Accountant.initialize, (address(vault), INITIAL_RATE, MANAGEMENT_FEE_BPS, address(0), pauser, executor)
+                Accountant.initialize,
+                (
+                    address(vault),
+                    INITIAL_RATE,
+                    MANAGEMENT_FEE_BPS,
+                    MAX_ALLOWED_DEVIATION_BPS,
+                    MIN_UPDATE_INTERVAL_SECONDS,
+                    MAX_COMPUTE_AGE_SECONDS,
+                    address(0),
+                    pauser,
+                    executor
+                )
             )
         );
     }
@@ -164,7 +201,18 @@ contract AccountantTest is Test {
         new BeaconProxy(
             address(beacon),
             abi.encodeCall(
-                Accountant.initialize, (address(vault), INITIAL_RATE, MANAGEMENT_FEE_BPS, admin, address(0), executor)
+                Accountant.initialize,
+                (
+                    address(vault),
+                    INITIAL_RATE,
+                    MANAGEMENT_FEE_BPS,
+                    MAX_ALLOWED_DEVIATION_BPS,
+                    MIN_UPDATE_INTERVAL_SECONDS,
+                    MAX_COMPUTE_AGE_SECONDS,
+                    admin,
+                    address(0),
+                    executor
+                )
             )
         );
     }
@@ -174,7 +222,18 @@ contract AccountantTest is Test {
         new BeaconProxy(
             address(beacon),
             abi.encodeCall(
-                Accountant.initialize, (address(vault), INITIAL_RATE, MANAGEMENT_FEE_BPS, admin, pauser, address(0))
+                Accountant.initialize,
+                (
+                    address(vault),
+                    INITIAL_RATE,
+                    MANAGEMENT_FEE_BPS,
+                    MAX_ALLOWED_DEVIATION_BPS,
+                    MIN_UPDATE_INTERVAL_SECONDS,
+                    MAX_COMPUTE_AGE_SECONDS,
+                    admin,
+                    pauser,
+                    address(0)
+                )
             )
         );
     }
@@ -1423,6 +1482,9 @@ contract AccountantExecutorIntegrationTest is Test {
 
     uint64 public constant INITIAL_RATE = 1e18;
     uint32 public constant MANAGEMENT_FEE_BPS = 50; // 0.5%
+    uint32 public constant MAX_ALLOWED_DEVIATION_BPS = 100; // 1%
+    uint32 public constant MIN_UPDATE_INTERVAL_SECONDS = 20 hours;
+    uint32 public constant MAX_COMPUTE_AGE_SECONDS = 5 minutes;
 
     function setUp() public {
         vm.warp(1000); // anchor a non-zero starting timestamp
@@ -1441,7 +1503,17 @@ contract AccountantExecutorIntegrationTest is Test {
             address(accBeacon),
             abi.encodeCall(
                 Accountant.initialize,
-                (address(vault), INITIAL_RATE, MANAGEMENT_FEE_BPS, admin, pauser, address(executor))
+                (
+                    address(vault),
+                    INITIAL_RATE,
+                    MANAGEMENT_FEE_BPS,
+                    MAX_ALLOWED_DEVIATION_BPS,
+                    MIN_UPDATE_INTERVAL_SECONDS,
+                    MAX_COMPUTE_AGE_SECONDS,
+                    admin,
+                    pauser,
+                    address(executor)
+                )
             )
         );
         accountant = Accountant(address(accProxy));

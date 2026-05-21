@@ -59,7 +59,9 @@ contract AccountantFactory {
      *      are not yet known at deployment time. The typical flow:
      *        1. accountant = factory.deployAccountant()
      *        2. Deploy vault / other contracts with accountant address
-     *        3. accountant.initialize(vault, initialRate, managementFeeRate, admin, pauser, executor)
+     *        3. accountant.initialize(vault, initialRate, managementFeeRate,
+     *                                 maxAllowedDeviation, minUpdateInterval, maxComputeAge,
+     *                                 admin, pauser, executor)
      *      IMPORTANT: The accountant is unprotected until initialized. In production,
      *      batch steps 1-3 in a single transaction (e.g. via deploy script / multicall)
      *      to prevent front-running.
@@ -78,6 +80,10 @@ contract AccountantFactory {
      * @param vault_ The MantleYieldVault address this accountant manages
      * @param initialRate Initial exchange rate (18-decimal precision)
      * @param managementFeeRate_ Annual management fee in basis points
+     * @param maxAllowedDeviation_ Circuit-breaker deviation cap in bps (1..MAX_DEVIATION_CEILING)
+     * @param minUpdateInterval_ Minimum seconds between rate updates
+     * @param maxComputeAge_ Maximum seconds the off-chain compute timestamp may lag block.timestamp
+     *                      (1..MAX_COMPUTE_AGE_CEILING)
      * @param admin Address granted DEFAULT_ADMIN_ROLE
      * @param pauser Address granted PAUSER_ROLE
      * @param executor Address granted ACCOUNTANT_EXECUTOR_ROLE and PAUSER_ROLE
@@ -86,12 +92,26 @@ contract AccountantFactory {
         address vault_,
         uint64 initialRate,
         uint32 managementFeeRate_,
+        uint32 maxAllowedDeviation_,
+        uint32 minUpdateInterval_,
+        uint32 maxComputeAge_,
         address admin,
         address pauser,
         address executor
     ) external returns (address accountant) {
         bytes memory initData = abi.encodeCall(
-            IAccountant.initialize, (vault_, initialRate, managementFeeRate_, admin, pauser, executor)
+            IAccountant.initialize,
+            (
+                vault_,
+                initialRate,
+                managementFeeRate_,
+                maxAllowedDeviation_,
+                minUpdateInterval_,
+                maxComputeAge_,
+                admin,
+                pauser,
+                executor
+            )
         );
 
         BeaconProxy proxy = new BeaconProxy(address(BEACON), initData);

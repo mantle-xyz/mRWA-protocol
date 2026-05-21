@@ -8,6 +8,9 @@ interface IAccountant {
         address vault_,
         uint64 initialRate,
         uint32 managementFeeRate_,
+        uint32 maxAllowedDeviation_,
+        uint32 minUpdateInterval_,
+        uint32 maxComputeAge_,
         address admin,
         address pauser_,
         address executor_

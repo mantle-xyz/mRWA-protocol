@@ -111,6 +111,9 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
         address vault_,
         uint64 initialRate,
         uint32 managementFeeRate_,
+        uint32 maxAllowedDeviation_,
+        uint32 minUpdateInterval_,
+        uint32 maxComputeAge_,
         address admin,
         address pauser_,
         address executor_
@@ -120,6 +123,12 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
         }
         if (initialRate == 0) revert Accountant__InvalidRate();
         if (managementFeeRate_ > MAX_MANAGEMENT_FEE_BPS) revert Accountant__InvalidFeeRate(managementFeeRate_);
+        if (maxAllowedDeviation_ == 0 || maxAllowedDeviation_ > MAX_DEVIATION_CEILING) {
+            revert Accountant__InvalidDeviation(maxAllowedDeviation_);
+        }
+        if (maxComputeAge_ == 0 || maxComputeAge_ > MAX_COMPUTE_AGE_CEILING) {
+            revert Accountant__InvalidComputeAge(maxComputeAge_);
+        }
 
         __AccessControl_init();
         __Pausable_init();
@@ -132,9 +141,9 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
         s.lastUpdateTimestamp = block.timestamp.toUint64();
         s.lastFeeSettleTimestamp = block.timestamp.toUint64();
         s.totalSharesLastSettle = IMantleYieldVault(vault_).totalSupply();
-        s.maxAllowedDeviation = 100; // 1% default
-        s.minUpdateInterval = 20 hours;
-        s.maxComputeAge = 5 minutes;
+        s.maxAllowedDeviation = maxAllowedDeviation_;
+        s.minUpdateInterval = minUpdateInterval_;
+        s.maxComputeAge = maxComputeAge_;
 
         _setRoleAdmin(PAUSER_ROLE, DEFAULT_ADMIN_ROLE);
         _setRoleAdmin(ACCOUNTANT_EXECUTOR_ROLE, DEFAULT_ADMIN_ROLE);
