@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import {IStrategyAdapter} from "../../interfaces/adapters/IStrategyAdapter.sol";
 import {IERC7540Redeem, IMantleYieldVault} from "../../interfaces/vault/IMantleYieldVault.sol";
 import {MantleYieldVaultStorage} from "./MantleYieldVaultStorage.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -127,6 +128,12 @@ abstract contract MantleYieldVaultAdminModule is MantleYieldVaultStorage {
 
     function rescueTokens(address token, address to, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (token == asset()) revert Vault__RescueAssetCannotBeUnderlying();
+        uint256 len = adapters.length;
+        for (uint256 i = 0; i < len; i++) {
+            if (IStrategyAdapter(adapters[i]).posToken() == token) {
+                revert Vault__RescueTokenNotAllowed(token);
+            }
+        }
         IERC20(token).safeTransfer(to, amount);
         emit TokenRescued(token, to, amount);
     }

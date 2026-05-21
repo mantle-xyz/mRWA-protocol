@@ -1292,6 +1292,34 @@ contract AdminTest is VaultTestBase {
         vm.expectRevert(IMantleYieldVault.Vault__RescueAssetCannotBeUnderlying.selector);
         vault.rescueTokens(address(stable), admin, 100e6);
     }
+
+    /// @dev rescueTokens must refuse to evacuate any registered adapter's posToken,
+    ///      otherwise admin could drain live strategy positions.
+    function test_rescueTokensRevertsForStrategyPosToken() public {
+        vm.prank(controllerAddr);
+        vault.registerAdapter(address(adapter));
+
+        address posToken = adapter.posToken();
+        MockPosToken(posToken).mint(address(vault), 100e6);
+
+        vm.prank(admin);
+        vm.expectRevert(abi.encodeWithSelector(IMantleYieldVault.Vault__RescueTokenNotAllowed.selector, posToken));
+        vault.rescueTokens(posToken, admin, 100e6);
+    }
+
+    /// @dev Sanity: unrelated tokens are still rescuable when adapters are registered.
+    function test_rescueTokensAllowsUnrelatedTokenWithAdaptersRegistered() public {
+        vm.prank(controllerAddr);
+        vault.registerAdapter(address(adapter));
+
+        MockStable otherToken = new MockStable();
+        otherToken.mint(address(vault), 50e6);
+
+        vm.prank(admin);
+        vault.rescueTokens(address(otherToken), admin, 50e6);
+
+        assertEq(otherToken.balanceOf(admin), 50e6);
+    }
 }
 
 // =============================================================
