@@ -395,6 +395,16 @@ contract SubRedManagementAdapterTest is Test {
         assertEq(expectedPosAmount, 19_999e18 + 99e16);
     }
 
+    function test_PreviewDeposit_ReturnsFalseWhenExpectedPosUnavailable() public {
+        oracle.setPrice(0);
+
+        (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount) = adapterWithOracle.previewDeposit(100e18);
+
+        assertFalse(ok);
+        assertEq(executableAssetAmount, 0);
+        assertEq(expectedPosAmount, 0);
+    }
+
     function test_PreviewRedeem_FloorsQuantityAndReturnsExecutableAsset() public {
         adapterWithOracle.setExecutionConstraints(0, SUBSCRIBE_STEP_ASSET, 0, REDEEM_STEP_POS_6);
 
