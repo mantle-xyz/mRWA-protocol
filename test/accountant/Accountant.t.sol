@@ -845,10 +845,26 @@ contract AccountantTest is Test {
         accountant.setRiskParams(200, 12 hours);
     }
 
-    function test_setRiskParams_allowsZeroInterval() public {
+    function test_setRiskParams_revertsWhenIntervalBelowFloor() public {
+        uint32 tooShort = accountant.MIN_UPDATE_INTERVAL_FLOOR() - 1;
+
+        vm.expectRevert(abi.encodeWithSelector(Accountant.Accountant__InvalidUpdateInterval.selector, tooShort));
+        vm.prank(admin);
+        accountant.setRiskParams(100, tooShort);
+    }
+
+    function test_setRiskParams_revertsWhenIntervalZero() public {
+        vm.expectRevert(abi.encodeWithSelector(Accountant.Accountant__InvalidUpdateInterval.selector, uint32(0)));
         vm.prank(admin);
         accountant.setRiskParams(100, 0);
-        assertEq(accountant.minUpdateInterval(), 0);
+    }
+
+    function test_setRiskParams_succeedsAtMinUpdateIntervalFloor() public {
+        uint32 minInterval = accountant.MIN_UPDATE_INTERVAL_FLOOR();
+
+        vm.prank(admin);
+        accountant.setRiskParams(100, minInterval);
+        assertEq(accountant.minUpdateInterval(), minInterval);
     }
 
     function test_setRiskParams_revertsWhenDeviationZero() public {
@@ -873,6 +889,22 @@ contract AccountantTest is Test {
         assertEq(accountant.maxAllowedDeviation(), maxDev);
     }
 
+    function test_setRiskParams_succeedsAtMaxUpdateIntervalCeiling() public {
+        uint32 maxInterval = accountant.MAX_UPDATE_INTERVAL_CEILING();
+
+        vm.prank(admin);
+        accountant.setRiskParams(100, maxInterval);
+        assertEq(accountant.minUpdateInterval(), maxInterval);
+    }
+
+    function test_setRiskParams_revertsWhenIntervalExceedsCeiling() public {
+        uint32 tooLong = accountant.MAX_UPDATE_INTERVAL_CEILING() + 1;
+
+        vm.expectRevert(abi.encodeWithSelector(Accountant.Accountant__InvalidUpdateInterval.selector, tooLong));
+        vm.prank(admin);
+        accountant.setRiskParams(100, tooLong);
+    }
+
     function test_setRiskParams_revertsWhenNotAdmin() public {
         bytes32 adminRole = accountant.DEFAULT_ADMIN_ROLE();
 
@@ -884,11 +916,13 @@ contract AccountantTest is Test {
     }
 
     function test_setRiskParams_affectsDeviationCheck() public {
+        uint32 floor = accountant.MIN_UPDATE_INTERVAL_FLOOR();
+
         vm.prank(admin);
-        accountant.setRiskParams(200, 0);
+        accountant.setRiskParams(200, floor);
 
         // 2% deviation now accepted
-        vm.warp(block.timestamp + 1);
+        vm.warp(block.timestamp + floor + 1);
         _doUpdate(1.02e18);
         assertEq(accountant.lastExchangeRate(), 1.02e18);
     }
@@ -1075,6 +1109,8 @@ contract AccountantTest is Test {
         assertEq(accountant.MAX_DEVIATION_CEILING(), 1000);
         assertEq(accountant.MAX_MANAGEMENT_FEE_BPS(), 500);
         assertEq(accountant.MAX_COMPUTE_AGE_CEILING(), 1 days);
+        assertEq(accountant.MAX_UPDATE_INTERVAL_CEILING(), 7 days);
+        assertEq(accountant.MIN_UPDATE_INTERVAL_FLOOR(), 1 minutes);
     }
 
     // =============================================================
@@ -1125,7 +1161,7 @@ contract AccountantTest is Test {
 
     function testFuzz_setRiskParams(uint256 deviation, uint256 interval) public {
         deviation = bound(deviation, 1, accountant.MAX_DEVIATION_CEILING());
-        interval = bound(interval, 0, 30 days);
+        interval = bound(interval, accountant.MIN_UPDATE_INTERVAL_FLOOR(), accountant.MAX_UPDATE_INTERVAL_CEILING());
 
         vm.prank(admin);
         accountant.setRiskParams(uint32(deviation), uint32(interval));
