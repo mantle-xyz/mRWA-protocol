@@ -39,8 +39,8 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
     /// @custom:storage-location erc7201:mrwa.storage.Accountant
     /// @dev Struct is tightly packed into 4 storage slots:
     ///      slot 0: vault(20) + maxAllowedDeviation(4) + managementFeeRate(4) + minUpdateInterval(4)
-    ///      slot 1: maxComputeAge(4) + lastComputeTimestamp(8) + lastExchangeRate(8) + lastUpdateTimestamp(8)
-    ///      slot 2: lastFeeSettleTimestamp(8)
+    ///      slot 1: maxComputeAge(4) + lastComputeTimestamp(8) + lastFeeSettleTimestamp(8) + lastUpdateTimestamp(8)
+    ///      slot 2: lastExchangeRate(32)
     ///      slot 3: totalSharesLastSettle(32)
     struct AccountantStorage {
         // ── slot 0 ──
