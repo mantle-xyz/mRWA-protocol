@@ -128,6 +128,8 @@ interface IMantleYieldVault is IERC4626, IERC7540Redeem {
     error Vault__InvalidSettlementDeviation(uint256 deviation);
     error Vault__DepositDailyCapExceeded(uint256 attempted, uint256 remaining);
     error Vault__RedeemDailyCapExceeded(uint256 attempted, uint256 remaining);
+    error Vault__ZeroAssets();
+    error Vault__ZeroShares();
 
     // =============================================================
     // Events (vault-specific; RedeemRequest is inherited from IERC7540Redeem)

@@ -50,6 +50,7 @@ contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultA
         uint256 treasuryShare = shares.mulDiv(redemptionFeeBps, FEE_BASIS, Math.Rounding.Ceil);
         uint256 netShares = shares - treasuryShare;
         uint256 estimatedAssets = _convertToAssets(netShares, Math.Rounding.Floor);
+        if (estimatedAssets == 0) revert Vault__ZeroAssets();
 
         if (treasuryShare > 0) {
             _update(owner, treasury, treasuryShare);
@@ -127,6 +128,7 @@ contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultA
         uint256 treasuryShare = shares.mulDiv(redemptionFeeBps, FEE_BASIS, Math.Rounding.Ceil);
         uint256 netShares = shares - treasuryShare;
         assets = _convertToAssets(netShares, Math.Rounding.Floor);
+        if (assets == 0) revert Vault__ZeroAssets();
         if (treasuryShare > 0) {
             _update(owner, treasury, treasuryShare);
             emit FeeSharesReceived(treasury, treasuryShare, FeeType.Redemption);
@@ -264,6 +266,7 @@ contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultA
         }
         depositDailyRemaining -= assets;
         shares = previewDeposit(assets);
+        if (shares == 0) revert Vault__ZeroShares();
         _deposit(receiver, receiver, assets, shares);
     }
 

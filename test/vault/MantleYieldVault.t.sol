@@ -458,6 +458,20 @@ contract DepositTest is VaultTestBase {
         gateway.deposit(100e6);
         vm.stopPrank();
     }
+
+    /// @dev If exchange rate is so high that the smallest unit rounds to 0 shares,
+    ///      deposit must revert with Vault__ZeroShares (the variable being checked is `shares`).
+    function test_depositRevertsZeroShares() public {
+        // Inflate rate so previewDeposit(1) = floor(1 * 1e18 / 2e18) = 0
+        mockAccountant.setExchangeRate(2e18);
+
+        stable.mint(bob, 1);
+        vm.startPrank(bob);
+        stable.approve(address(vault), 1);
+        vm.expectRevert(IMantleYieldVault.Vault__ZeroShares.selector);
+        gateway.deposit(1);
+        vm.stopPrank();
+    }
 }
 
 // =============================================================
@@ -511,6 +525,17 @@ contract SyncRedeemTest is VaultTestBase {
         vm.prank(alice);
         vm.expectRevert();
         gateway.redeem(aliceShares);
+    }
+
+    /// @dev When rate is so low that net shares convert to 0 assets, redeem must revert with ZeroAssets,
+    ///      preventing a burn-without-payout edge case.
+    function test_redeemRevertsZeroAssets() public {
+        // rate=1 → floor(netShares * 1 / 1e18) = 0 for any netShares < 1e18
+        mockAccountant.setExchangeRate(1);
+
+        vm.prank(alice);
+        vm.expectRevert(IMantleYieldVault.Vault__ZeroAssets.selector);
+        gateway.redeem(MIN_REDEEM);
     }
 
     function test_previewRedeemIncludesFee() public view {
@@ -613,6 +638,16 @@ contract AsyncRedeemTest is VaultTestBase {
         vault.markRequestsDone(ids, settled);
 
         assertEq(stable.balanceOf(alice), balBefore + reqAssets, "STABLE transferred directly by markRequestsDone");
+    }
+
+    /// @dev If shares clear minRedeemAmount but the rate is so low that net shares round to 0 assets,
+    ///      requestRedeem must revert — never queue a 0-payout request.
+    function test_requestRedeemRevertsZeroAssets() public {
+        mockAccountant.setExchangeRate(1);
+
+        vm.prank(alice);
+        vm.expectRevert(IMantleYieldVault.Vault__ZeroAssets.selector);
+        gateway.requestRedeem(MIN_REDEEM);
     }
 
     function test_multipleRequestsThenSettle() public {
