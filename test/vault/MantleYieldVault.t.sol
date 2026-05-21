@@ -201,6 +201,11 @@ contract MockAccountant {
         return exchangeRate;
     }
 
+    /// @notice Mirror of OpenZeppelin Pausable.paused() — required by MantleVaultGateway._isSubscribeRedeemPaused().
+    function paused() external view returns (bool) {
+        return pauseStatus;
+    }
+
     function setPauseStatus(bool paused_) external {
         pauseStatus = paused_;
     }
@@ -458,6 +463,20 @@ contract DepositTest is VaultTestBase {
         gateway.deposit(100e6);
         vm.stopPrank();
     }
+
+    /// @dev If exchange rate is so high that the smallest unit rounds to 0 shares,
+    ///      deposit must revert with Vault__ZeroShares (the variable being checked is `shares`).
+    function test_depositRevertsZeroShares() public {
+        // Inflate rate so previewDeposit(1) = floor(1 * 1e18 / 2e18) = 0
+        mockAccountant.setExchangeRate(2e18);
+
+        stable.mint(bob, 1);
+        vm.startPrank(bob);
+        stable.approve(address(vault), 1);
+        vm.expectRevert(IMantleYieldVault.Vault__ZeroShares.selector);
+        gateway.deposit(1);
+        vm.stopPrank();
+    }
 }
 
 // =============================================================
@@ -513,12 +532,37 @@ contract SyncRedeemTest is VaultTestBase {
         gateway.redeem(aliceShares);
     }
 
+    /// @dev When rate is so low that net shares convert to 0 assets, redeem must revert with ZeroAssets,
+    ///      preventing a burn-without-payout edge case.
+    function test_redeemRevertsZeroAssets() public {
+        // rate=1 → floor(netShares * 1 / 1e18) = 0 for any netShares < 1e18
+        mockAccountant.setExchangeRate(1);
+
+        vm.prank(alice);
+        vm.expectRevert(IMantleYieldVault.Vault__ZeroAssets.selector);
+        gateway.redeem(MIN_REDEEM);
+    }
+
     function test_previewRedeemIncludesFee() public view {
         uint256 shares = 1000e6;
-        uint256 gross = shares; // 1:1 exchange rate
-        uint256 fee = (gross * FEE_BPS + BPS_DENOMINATOR - 1) / BPS_DENOMINATOR; // ceil
-        uint256 expected = gross - fee;
+        // previewRedeem charges fee in *shares* then converts net shares to assets.
+        uint256 treasuryShare = (shares * FEE_BPS + BPS_DENOMINATOR - 1) / BPS_DENOMINATOR; // ceil
+        uint256 netShares = shares - treasuryShare;
+        uint256 expected = netShares; // 1:1 exchange rate
         assertEq(vault.previewRedeem(shares), expected);
+    }
+
+    /// @dev Regression: previewRedeem must mirror the fee mechanism inside redeem() / _requestRedeem().
+    ///      Previously preview computed fee on gross assets which diverged from actual fee-on-shares.
+    function test_previewRedeemMatchesActualRedeem() public {
+        mockAccountant.setExchangeRate(1.07e18);
+        uint256 shares = 250e6;
+        uint256 expected = vault.previewRedeem(shares);
+
+        vm.prank(alice);
+        uint256 actual = gateway.redeem(shares);
+
+        assertEq(actual, expected, "previewRedeem must equal redeem payout");
     }
 }
 
@@ -599,6 +643,16 @@ contract AsyncRedeemTest is VaultTestBase {
         vault.markRequestsDone(ids, settled);
 
         assertEq(stable.balanceOf(alice), balBefore + reqAssets, "STABLE transferred directly by markRequestsDone");
+    }
+
+    /// @dev If shares clear minRedeemAmount but the rate is so low that net shares round to 0 assets,
+    ///      requestRedeem must revert — never queue a 0-payout request.
+    function test_requestRedeemRevertsZeroAssets() public {
+        mockAccountant.setExchangeRate(1);
+
+        vm.prank(alice);
+        vm.expectRevert(IMantleYieldVault.Vault__ZeroAssets.selector);
+        gateway.requestRedeem(MIN_REDEEM);
     }
 
     function test_multipleRequestsThenSettle() public {
@@ -934,16 +988,26 @@ contract ExchangeRateTest is VaultTestBase {
     function test_accountantPauseBlocksSubscribeRedeem() public {
         mockAccountant.setPauseStatus(true);
 
+        // Verify the gateway reads the accountant's Pausable.paused() flag.
+        assertTrue(mockAccountant.paused(), "mock must expose paused() so gateway can read it");
+
         stable.mint(bob, 100e6);
         vm.startPrank(bob);
         stable.approve(address(vault), 100e6);
-        vm.expectRevert();
+        vm.expectRevert(MantleVaultGateway.EnforcedPause.selector);
         gateway.deposit(100e6);
         vm.stopPrank();
 
         vm.prank(alice);
-        vm.expectRevert();
+        vm.expectRevert(MantleVaultGateway.EnforcedPause.selector);
         gateway.redeem(10e6);
+    }
+
+    function test_accountantUnpausedAllowsSubscribeRedeem() public {
+        mockAccountant.setPauseStatus(false);
+        // Sanity baseline: redeem should succeed when the accountant is not paused.
+        vm.prank(alice);
+        gateway.redeem(MIN_REDEEM);
     }
 
     function test_exchangeRateAffectsSharePrice() public {
@@ -1143,6 +1207,36 @@ contract SanctionsTest is VaultTestBase {
 
         assertEq(gateway.maxDeposit(alice), 0);
         assertEq(gateway.maxRedeem(alice), 0);
+    }
+
+    /// @dev When whitelistEnabled is false (default), max-views must not gate on whitelist status.
+    ///      Otherwise ERC-4626 integrators get false negatives even though deposit/redeem would succeed.
+    function test_gatewayMaxIgnoresWhitelistWhenDisabled() public view {
+        // whitelistEnabled is false by default; alice is not whitelisted.
+        assertFalse(gateway.whitelistEnabled());
+        assertFalse(oracle.isWhitelisted(alice));
+
+        assertGt(gateway.maxDeposit(alice), 0, "max-deposit should not be gated on whitelist when disabled");
+        assertGt(gateway.maxRedeem(alice), 0, "max-redeem should not be gated on whitelist when disabled");
+    }
+
+    /// @dev With whitelist enabled, non-whitelisted owners must see 0 on both max-views,
+    ///      mirroring the runtime _requireWhitelisted gate.
+    function test_gatewayMaxBlockedWhenWhitelistEnabledAndNotWhitelisted() public {
+        vm.prank(admin);
+        gateway.setWhitelistEnabled(true);
+
+        assertEq(gateway.maxDeposit(alice), 0);
+        assertEq(gateway.maxRedeem(alice), 0);
+    }
+
+    function test_gatewayMaxUnblockedWhenWhitelistEnabledAndWhitelisted() public {
+        vm.prank(admin);
+        gateway.setWhitelistEnabled(true);
+        oracle.setWhitelisted(alice, true);
+
+        assertGt(gateway.maxDeposit(alice), 0);
+        assertGt(gateway.maxRedeem(alice), 0);
     }
 }
 

@@ -9,6 +9,7 @@ import {
     AccessControlDefaultAdminRulesUpgradeable
 } from "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlDefaultAdminRulesUpgradeable.sol";
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /**
@@ -133,6 +134,7 @@ contract MantleVaultGateway is
 
     function maxRedeem(address owner) external view override returns (uint256) {
         if (_isSubscribeRedeemPaused() || isSanctioned(owner)) return 0;
+        if (whitelistEnabled && !isWhitelisted(owner)) return 0;
         return vault.maxRedeem(owner);
     }
 
@@ -146,6 +148,7 @@ contract MantleVaultGateway is
 
     function maxDeposit(address owner) external view override returns (uint256) {
         if (_isSubscribeRedeemPaused() || isSanctioned(owner)) return 0;
+        if (whitelistEnabled && !isWhitelisted(owner)) return 0;
         return vault.maxDeposit(owner);
     }
 
@@ -196,10 +199,6 @@ contract MantleVaultGateway is
     }
 
     function _isSubscribeRedeemPaused() internal view returns (bool paused_) {
-        try IAccountant(vault.accountant()).getRateSafe() returns (uint256) {
-            return false;
-        } catch {
-            return true;
-        }
+        return Pausable(vault.accountant()).paused();
     }
 }
