@@ -9,7 +9,7 @@ envs:
   F_AWS_KMS_KEY_ID: ""
   F_SENDER: "0x207E804758e28F2b3fD6E4219671B327100b82f8"
   F_VERBOSE: true
-  F_RPC_URL: "https://rpc.mantle.xyz"
+  F_RPC_URL: "https://rpc.sepolia.mantle.xyz"
   F_VERIFY: "true" # set to "true" to verify on broadcast; use VerifyXxx tasks to verify post-deploy
 
   
