@@ -201,6 +201,11 @@ contract MockAccountant {
         return exchangeRate;
     }
 
+    /// @notice Mirror of OpenZeppelin Pausable.paused() — required by MantleVaultGateway._isSubscribeRedeemPaused().
+    function paused() external view returns (bool) {
+        return pauseStatus;
+    }
+
     function setPauseStatus(bool paused_) external {
         pauseStatus = paused_;
     }
@@ -983,16 +988,26 @@ contract ExchangeRateTest is VaultTestBase {
     function test_accountantPauseBlocksSubscribeRedeem() public {
         mockAccountant.setPauseStatus(true);
 
+        // Verify the gateway reads the accountant's Pausable.paused() flag.
+        assertTrue(mockAccountant.paused(), "mock must expose paused() so gateway can read it");
+
         stable.mint(bob, 100e6);
         vm.startPrank(bob);
         stable.approve(address(vault), 100e6);
-        vm.expectRevert();
+        vm.expectRevert(MantleVaultGateway.EnforcedPause.selector);
         gateway.deposit(100e6);
         vm.stopPrank();
 
         vm.prank(alice);
-        vm.expectRevert();
+        vm.expectRevert(MantleVaultGateway.EnforcedPause.selector);
         gateway.redeem(10e6);
+    }
+
+    function test_accountantUnpausedAllowsSubscribeRedeem() public {
+        mockAccountant.setPauseStatus(false);
+        // Sanity baseline: redeem should succeed when the accountant is not paused.
+        vm.prank(alice);
+        gateway.redeem(MIN_REDEEM);
     }
 
     function test_exchangeRateAffectsSharePrice() public {
