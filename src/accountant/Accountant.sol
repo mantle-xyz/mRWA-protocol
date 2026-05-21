@@ -41,8 +41,8 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
     /// @custom:storage-location erc7201:mrwa.storage.Accountant
     /// @dev Struct is tightly packed into 4 storage slots:
     ///      slot 0: vault(20) + maxAllowedDeviation(4) + managementFeeRate(4) + minUpdateInterval(4)
-    ///      slot 1: maxComputeAge(4) + lastComputeTimestamp(8) + lastExchangeRate(8) + lastUpdateTimestamp(8)
-    ///      slot 2: lastFeeSettleTimestamp(8)
+    ///      slot 1: maxComputeAge(4) + lastComputeTimestamp(8) + lastFeeSettleTimestamp(8) + lastUpdateTimestamp(8)
+    ///      slot 2: lastExchangeRate(32)
     ///      slot 3: totalSharesLastSettle(32)
     struct AccountantStorage {
         // ── slot 0 ──
@@ -81,7 +81,6 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
     event RiskParamsUpdated(uint256 maxDeviation, uint256 minInterval);
     event ManagementFeeRateUpdated(uint256 oldRate, uint256 newRate);
     event MaxComputeAgeUpdated(uint256 oldAge, uint256 newAge);
-    event VaultUpdated(address indexed oldVault, address indexed newVault);
     event EmergencyRateUpdated(uint256 oldRate, uint256 newRate, uint256 timestamp);
     event CircuitBreakerTriggered(uint256 deviationBps, uint256 maxAllowed, uint256 proposedRate);
 
@@ -89,7 +88,6 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
     //                       CUSTOM ERRORS
     // =============================================================
 
-    error Accountant__DeviationExceeded(uint256 deviationBps, uint256 maxAllowed);
     error Accountant__CooldownNotElapsed(uint256 timeRemaining);
     error Accountant__ZeroAddress();
     error Accountant__InvalidRate();
@@ -249,14 +247,13 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
     //                   EMERGENCY FUNCTIONS
     // =============================================================
 
-    /// @notice Force-override the exchange rate during a black swan event
-    ///         (e.g. massive bad debt in the underlying protocol) where the
-    ///         real NAV drop exceeds the normal circuit-breaker threshold.
-    ///         Bypasses deviation and cooldown checks, then triggers a global
-    ///         pause on both the Accountant and the Vault.
-    /// @dev Intended to be called exclusively by a protocol multisig behind a
-    ///      timelock. The Accountant should hold the PAUSER_ROLE on the Vault
-    ///      for the vault-side pause to succeed automatically.
+    /// @notice Recovery hook after the circuit breaker tripped. Force-override
+    ///         the exchange rate to a corrected value — bypassing the deviation
+    ///         and cooldown checks that paused the contract — and automatically
+    ///         unpause the Accountant so subsequent rate pushes can resume.
+    /// @dev Intended to be called exclusively by a protocol multisig.
+    ///      Does NOT touch the Vault; if the Vault was also paused
+    ///      it must be unpaused separately through its own pauser/admin.
     /// @param newRate The corrected exchange rate (18-decimal precision)
     function emergencyRateUpdate(uint64 newRate) external onlyRole(DEFAULT_ADMIN_ROLE) nonReentrant {
         if (newRate == 0) revert Accountant__InvalidRate();
@@ -276,14 +273,6 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
     // =============================================================
     //                    ADMIN FUNCTIONS
     // =============================================================
-
-    function setVault(address newVault) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        if (newVault == address(0)) revert Accountant__ZeroAddress();
-        AccountantStorage storage s = _getAccountantStorage();
-        address oldVault = address(s.vault);
-        s.vault = IMantleYieldVault(newVault);
-        emit VaultUpdated(oldVault, newVault);
-    }
 
     /// @notice Update the deviation and cooldown risk parameters.
     /// @dev `newMinInterval` is bounded to [MIN_UPDATE_INTERVAL_FLOOR, MAX_UPDATE_INTERVAL_CEILING]
@@ -312,6 +301,7 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
     function setManagementFeeRate(uint32 newRate) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (newRate > MAX_MANAGEMENT_FEE_BPS) revert Accountant__InvalidFeeRate(newRate);
         AccountantStorage storage s = _getAccountantStorage();
+        _settleManagementFee(s);
         uint256 oldRate = s.managementFeeRate;
         s.managementFeeRate = newRate;
         emit ManagementFeeRateUpdated(oldRate, newRate);
