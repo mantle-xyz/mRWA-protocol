@@ -15,6 +15,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
 
     uint256 public constant BPS_DENOMINATOR = 10_000;
+    uint256 public constant SWEEP_SETTLEMENT_TOLERANCE_PER_ITEM = 1;
     uint8 public constant REBALANCE_ACTION_NONE = 0;
     uint8 public constant REBALANCE_ACTION_INVEST = 1;
     uint8 public constant REBALANCE_ACTION_DIVEST = 2;
@@ -1094,6 +1095,17 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         }
     }
 
+    function _isSweepAmountWithinTolerance(uint256 expected, uint256 claimed, uint256 itemCount)
+        internal
+        pure
+        returns (bool)
+    {
+        if (claimed > expected) {
+            return false;
+        }
+        return expected - claimed <= itemCount * SWEEP_SETTLEMENT_TOLERANCE_PER_ITEM;
+    }
+
     function _settleAdapterBatchAtIndex(
         address[] calldata adapters,
         IStrategyControllerExecutor.InvestSettlementInput[] calldata investBatch,
@@ -1111,10 +1123,10 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
 
         (uint256 posClaimed, uint256 refundAssetClaimed) =
             _sweepAdapterAssetsToVaultInternal(adapter, investPosToSweep, investRefundToSweep);
-        if (posClaimed != investPosToSweep) {
+        if (!_isSweepAmountWithinTolerance(investPosToSweep, posClaimed, invest.settledPosAmounts.length)) {
             revert Controller__InvestSweepAmountMismatch(adapter, investPosToSweep, posClaimed);
         }
-        if (refundAssetClaimed != investRefundToSweep) {
+        if (!_isSweepAmountWithinTolerance(investRefundToSweep, refundAssetClaimed, invest.refundAssetAmounts.length)) {
             revert Controller__InvestRefundSweepAmountMismatch(adapter, investRefundToSweep, refundAssetClaimed);
         }
     }
@@ -1125,7 +1137,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         uint256 redeemAssetToSweep = _sumAmounts(redeem.settledAssetAmounts);
 
         (, uint256 redeemAssetClaimed) = _sweepAdapterAssetsToVaultInternal(adapter, 0, redeemAssetToSweep);
-        if (redeemAssetClaimed != redeemAssetToSweep) {
+        if (!_isSweepAmountWithinTolerance(redeemAssetToSweep, redeemAssetClaimed, redeem.settledAssetAmounts.length)) {
             revert Controller__RedeemSweepAmountMismatch(adapter, redeemAssetToSweep, redeemAssetClaimed);
         }
     }

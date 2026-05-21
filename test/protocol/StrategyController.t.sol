@@ -43,7 +43,9 @@ contract MockStrategyAdapter is IStrategyAdapter {
     address public lastClaimToken;
     uint256 public lastClaimAmount;
     uint256 public sweepReturnAmount;
+    uint256 public sweepReturnShortfall;
     bool public useSweepReturnAmount;
+    bool public useSweepReturnShortfall;
     uint256 public retryCount;
     uint256 public lastRetryPosAmount;
     address public lastRetryReceiver;
@@ -86,6 +88,13 @@ contract MockStrategyAdapter is IStrategyAdapter {
     function setSweepReturnAmount(uint256 amount_) external {
         sweepReturnAmount = amount_;
         useSweepReturnAmount = true;
+        useSweepReturnShortfall = false;
+    }
+
+    function setSweepReturnShortfall(uint256 shortfall_) external {
+        sweepReturnShortfall = shortfall_;
+        useSweepReturnShortfall = true;
+        useSweepReturnAmount = false;
     }
 
     function name() external pure returns (string memory) {
@@ -169,6 +178,9 @@ contract MockStrategyAdapter is IStrategyAdapter {
         lastClaimAmount = amount;
         if (useSweepReturnAmount) {
             return sweepReturnAmount;
+        }
+        if (useSweepReturnShortfall) {
+            return amount > sweepReturnShortfall ? amount - sweepReturnShortfall : 0;
         }
         return amount;
     }
@@ -1555,6 +1567,83 @@ contract StrategyControllerUnitTest is Test {
         );
     }
 
+    function test_SettleAdapterInvest_AllowsOneWeiPositionSweepShortfallPerItem() public {
+        _registerSingleAsyncStrategy();
+        uint256 inFlightId = vault.createInFlight(address(asyncAdapter), address(posToken), 10e18, 10e18, true);
+        uint256[] memory investInFlightIds = new uint256[](1);
+        investInFlightIds[0] = inFlightId;
+        uint256[] memory investSettledPosAmounts = new uint256[](1);
+        investSettledPosAmounts[0] = 10e18;
+        uint256[] memory investRefundAssetAmounts = new uint256[](1);
+        investRefundAssetAmounts[0] = 0;
+        asyncAdapter.setSweepReturnShortfall(1);
+
+        vm.prank(address(executorGateway));
+        controller.settleAdapter(
+            address(asyncAdapter),
+            _investSettlement(investInFlightIds, investSettledPosAmounts, investRefundAssetAmounts),
+            _redeemSettlement(new uint256[](0), new uint256[](0))
+        );
+
+        (,,,,, uint256 settledAmount, bool isInvest,, IMantleYieldVault.InFlightStatus status) =
+            vault.inFlightRecords(inFlightId);
+        assertTrue(isInvest);
+        assertEq(uint8(status), uint8(IMantleYieldVault.InFlightStatus.CONFIRMED));
+        assertEq(settledAmount, 10e18);
+    }
+
+    function test_SettleAdapterInvest_AllowsOneWeiRefundSweepShortfallPerItem() public {
+        _registerSingleAsyncStrategy();
+        uint256 inFlightId = vault.createInFlight(address(asyncAdapter), address(posToken), 10e18, 10e18, true);
+        uint256[] memory investInFlightIds = new uint256[](1);
+        investInFlightIds[0] = inFlightId;
+        uint256[] memory investSettledPosAmounts = new uint256[](1);
+        investSettledPosAmounts[0] = 0;
+        uint256[] memory investRefundAssetAmounts = new uint256[](1);
+        investRefundAssetAmounts[0] = 10e18;
+        asyncAdapter.setSweepReturnShortfall(1);
+
+        vm.prank(address(executorGateway));
+        controller.settleAdapter(
+            address(asyncAdapter),
+            _investSettlement(investInFlightIds, investSettledPosAmounts, investRefundAssetAmounts),
+            _redeemSettlement(new uint256[](0), new uint256[](0))
+        );
+
+        (,,,,, uint256 settledAmount, bool isInvest,, IMantleYieldVault.InFlightStatus status) =
+            vault.inFlightRecords(inFlightId);
+        assertTrue(isInvest);
+        assertEq(uint8(status), uint8(IMantleYieldVault.InFlightStatus.CONFIRMED));
+        assertEq(settledAmount, 0);
+    }
+
+    function test_RevertWhen_SettleAdapterInvestPositionSweepShortfallExceedsPerItemTolerance() public {
+        _registerSingleAsyncStrategy();
+        uint256 inFlightId = vault.createInFlight(address(asyncAdapter), address(posToken), 10e18, 10e18, true);
+        uint256[] memory investInFlightIds = new uint256[](1);
+        investInFlightIds[0] = inFlightId;
+        uint256[] memory investSettledPosAmounts = new uint256[](1);
+        investSettledPosAmounts[0] = 10e18;
+        uint256[] memory investRefundAssetAmounts = new uint256[](1);
+        investRefundAssetAmounts[0] = 0;
+        asyncAdapter.setSweepReturnShortfall(2);
+
+        vm.prank(address(executorGateway));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                StrategyController.Controller__InvestSweepAmountMismatch.selector,
+                address(asyncAdapter),
+                10e18,
+                10e18 - 2
+            )
+        );
+        controller.settleAdapter(
+            address(asyncAdapter),
+            _investSettlement(investInFlightIds, investSettledPosAmounts, investRefundAssetAmounts),
+            _redeemSettlement(new uint256[](0), new uint256[](0))
+        );
+    }
+
     function test_RebalanceInvestAsync_StillInvestsWhenPendingDoesNotCoverFullShortfall() public {
         _registerSingleAsyncStrategy();
         // Existing pending invest in-flight has large token amount for this adapter.
@@ -2007,6 +2096,111 @@ contract StrategyControllerUnitTest is Test {
         vm.expectRevert(
             abi.encodeWithSelector(
                 StrategyController.Controller__RedeemSweepAmountMismatch.selector, address(asyncAdapter), 100e18, 0
+            )
+        );
+        controller.settleAdapter(
+            address(asyncAdapter),
+            _investSettlement(new uint256[](0), new uint256[](0), new uint256[](0)),
+            _redeemSettlement(redeemInFlightIds, redeemSettledAmounts)
+        );
+    }
+
+    function test_SettleAdapterRedeem_AllowsOneWeiAssetSweepShortfallPerItem() public {
+        _registerSingleAsyncStrategy();
+        uint256 redeemInFlightId = vault.createInFlight(address(asyncAdapter), address(posToken), 50e18, 100e18, false);
+        uint256[] memory redeemInFlightIds = new uint256[](1);
+        redeemInFlightIds[0] = redeemInFlightId;
+        uint256[] memory redeemSettledAmounts = new uint256[](1);
+        redeemSettledAmounts[0] = 100e18;
+        asyncAdapter.setSweepReturnShortfall(1);
+
+        vm.prank(address(executorGateway));
+        controller.settleAdapter(
+            address(asyncAdapter),
+            _investSettlement(new uint256[](0), new uint256[](0), new uint256[](0)),
+            _redeemSettlement(redeemInFlightIds, redeemSettledAmounts)
+        );
+
+        (,,,,, uint256 settledAmount, bool isInvest,, IMantleYieldVault.InFlightStatus status) =
+            vault.inFlightRecords(redeemInFlightId);
+        assertFalse(isInvest);
+        assertEq(uint8(status), uint8(IMantleYieldVault.InFlightStatus.CONFIRMED));
+        assertEq(settledAmount, 100e18);
+    }
+
+    function test_SettleAdapterRedeem_AllowsSweepShortfallEqualToSettlementItemCount() public {
+        _registerSingleAsyncStrategy();
+        uint256 redeemInFlightIdA = vault.createInFlight(address(asyncAdapter), address(posToken), 50e18, 100e18, false);
+        uint256 redeemInFlightIdB = vault.createInFlight(address(asyncAdapter), address(posToken), 50e18, 100e18, false);
+        uint256[] memory redeemInFlightIds = new uint256[](2);
+        redeemInFlightIds[0] = redeemInFlightIdA;
+        redeemInFlightIds[1] = redeemInFlightIdB;
+        uint256[] memory redeemSettledAmounts = new uint256[](2);
+        redeemSettledAmounts[0] = 100e18;
+        redeemSettledAmounts[1] = 100e18;
+        asyncAdapter.setSweepReturnShortfall(2);
+
+        vm.prank(address(executorGateway));
+        controller.settleAdapter(
+            address(asyncAdapter),
+            _investSettlement(new uint256[](0), new uint256[](0), new uint256[](0)),
+            _redeemSettlement(redeemInFlightIds, redeemSettledAmounts)
+        );
+
+        (,,,,, uint256 settledAmountA,,, IMantleYieldVault.InFlightStatus statusA) =
+            vault.inFlightRecords(redeemInFlightIdA);
+        (,,,,, uint256 settledAmountB,,, IMantleYieldVault.InFlightStatus statusB) =
+            vault.inFlightRecords(redeemInFlightIdB);
+        assertEq(uint8(statusA), uint8(IMantleYieldVault.InFlightStatus.CONFIRMED));
+        assertEq(uint8(statusB), uint8(IMantleYieldVault.InFlightStatus.CONFIRMED));
+        assertEq(settledAmountA, 100e18);
+        assertEq(settledAmountB, 100e18);
+    }
+
+    function test_RevertWhen_SettleAdapterRedeemSweepShortfallExceedsPerItemTolerance() public {
+        _registerSingleAsyncStrategy();
+        uint256 redeemInFlightIdA = vault.createInFlight(address(asyncAdapter), address(posToken), 50e18, 100e18, false);
+        uint256 redeemInFlightIdB = vault.createInFlight(address(asyncAdapter), address(posToken), 50e18, 100e18, false);
+        uint256[] memory redeemInFlightIds = new uint256[](2);
+        redeemInFlightIds[0] = redeemInFlightIdA;
+        redeemInFlightIds[1] = redeemInFlightIdB;
+        uint256[] memory redeemSettledAmounts = new uint256[](2);
+        redeemSettledAmounts[0] = 100e18;
+        redeemSettledAmounts[1] = 100e18;
+        asyncAdapter.setSweepReturnShortfall(3);
+
+        vm.prank(address(executorGateway));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                StrategyController.Controller__RedeemSweepAmountMismatch.selector,
+                address(asyncAdapter),
+                200e18,
+                200e18 - 3
+            )
+        );
+        controller.settleAdapter(
+            address(asyncAdapter),
+            _investSettlement(new uint256[](0), new uint256[](0), new uint256[](0)),
+            _redeemSettlement(redeemInFlightIds, redeemSettledAmounts)
+        );
+    }
+
+    function test_RevertWhen_SettleAdapterRedeemSweepClaimExceedsExpected() public {
+        _registerSingleAsyncStrategy();
+        uint256 redeemInFlightId = vault.createInFlight(address(asyncAdapter), address(posToken), 50e18, 100e18, false);
+        uint256[] memory redeemInFlightIds = new uint256[](1);
+        redeemInFlightIds[0] = redeemInFlightId;
+        uint256[] memory redeemSettledAmounts = new uint256[](1);
+        redeemSettledAmounts[0] = 100e18;
+        asyncAdapter.setSweepReturnAmount(100e18 + 1);
+
+        vm.prank(address(executorGateway));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                StrategyController.Controller__RedeemSweepAmountMismatch.selector,
+                address(asyncAdapter),
+                100e18,
+                100e18 + 1
             )
         );
         controller.settleAdapter(
