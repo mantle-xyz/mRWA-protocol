@@ -112,5 +112,5 @@ envs:
   TRANSFER_OLD_ADMIN: "0x207E804758e28F2b3fD6E4219671B327100b82f8"
   TRANSFER_NEW_ADMIN: "0xa48f3f5a97d1162EA2f1bDCffFa7f2a8876e0e2E" # Final SecurityCouncil Safe / timelock
   TRANSFER_NEW_BEACON_OWNER: "0xa48f3f5a97d1162EA2f1bDCffFa7f2a8876e0e2E" # Final SecurityCouncil Safe / timelock
-  TRANSFER_RENOUNCE_OLD_ADMIN: "false" # false on first run; set to true only after new admin/owner is verified
+  TRANSFER_ACCEPT_DEFAULT_ADMIN: "false" # false on first run; set to true only after new admin/owner is verified
   TRANSFER_RENOUNCE_OLD_ADMIN: "false" # false on first run; set to true only after authorization/owner verification
