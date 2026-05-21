@@ -118,6 +118,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     error Controller__ClaimInputsLengthMismatch();
     error Controller__UpdateStrategiesLengthMismatch();
     error Controller__DuplicateStrategyUpdate(address adapter);
+    error Controller__DuplicateStrategyPosToken(address posToken, address existingAdapter, address newAdapter);
     error Controller__InvestPosAmountUnavailable(address adapter, uint256 assetAmount);
     /// @notice Adapter pool (step-aligned total value) is strictly less than the required shortfall.
     ///         Request stays PENDING and can be retried once adapter value grows.
@@ -503,7 +504,27 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
 
     function _ensureVaultAdapterRegistered(address adapter) internal {
         if (!vault.isAdapter(adapter)) {
+            _validateUniqueAdapterPosToken(adapter);
             vault.registerAdapter(adapter);
+        }
+    }
+
+    function _validateUniqueAdapterPosToken(address adapter) internal view {
+        address posToken = IStrategyAdapter(adapter).posToken();
+        if (posToken == address(0)) {
+            revert Controller__InvalidStrategy(adapter);
+        }
+
+        address[] memory registeredAdapters = vault.getAdapters();
+        uint256 len = registeredAdapters.length;
+        for (uint256 i = 0; i < len; i++) {
+            address existingAdapter = registeredAdapters[i];
+            if (existingAdapter == adapter) {
+                continue;
+            }
+            if (IStrategyAdapter(existingAdapter).posToken() == posToken) {
+                revert Controller__DuplicateStrategyPosToken(posToken, existingAdapter, adapter);
+            }
         }
     }
 
