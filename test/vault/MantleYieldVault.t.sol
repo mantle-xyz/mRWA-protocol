@@ -515,10 +515,24 @@ contract SyncRedeemTest is VaultTestBase {
 
     function test_previewRedeemIncludesFee() public view {
         uint256 shares = 1000e6;
-        uint256 gross = shares; // 1:1 exchange rate
-        uint256 fee = (gross * FEE_BPS + BPS_DENOMINATOR - 1) / BPS_DENOMINATOR; // ceil
-        uint256 expected = gross - fee;
+        // previewRedeem charges fee in *shares* then converts net shares to assets.
+        uint256 treasuryShare = (shares * FEE_BPS + BPS_DENOMINATOR - 1) / BPS_DENOMINATOR; // ceil
+        uint256 netShares = shares - treasuryShare;
+        uint256 expected = netShares; // 1:1 exchange rate
         assertEq(vault.previewRedeem(shares), expected);
+    }
+
+    /// @dev Regression: previewRedeem must mirror the fee mechanism inside redeem() / _requestRedeem().
+    ///      Previously preview computed fee on gross assets which diverged from actual fee-on-shares.
+    function test_previewRedeemMatchesActualRedeem() public {
+        mockAccountant.setExchangeRate(1.07e18);
+        uint256 shares = 250e6;
+        uint256 expected = vault.previewRedeem(shares);
+
+        vm.prank(alice);
+        uint256 actual = gateway.redeem(shares);
+
+        assertEq(actual, expected, "previewRedeem must equal redeem payout");
     }
 }
 
