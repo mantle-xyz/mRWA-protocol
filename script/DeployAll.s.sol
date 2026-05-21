@@ -73,6 +73,9 @@ import {Script, console2} from "forge-std/Script.sol";
 ///   F_CAP_MANAGER_ADDRESS        – Vault CAP_MANAGER_ROLE
 ///   F_INITIAL_RATE               – Accountant starting exchange rate (e.g. 1e18)
 ///   F_MANAGEMENT_FEE_BPS         – Accountant management fee in bps (e.g. 50)
+///   F_MAX_ALLOWED_DEVIATION_BPS  – Accountant circuit-breaker deviation cap in bps (e.g. 100)
+///   F_MIN_UPDATE_INTERVAL_SECONDS – Accountant minimum seconds between rate updates (e.g. 72000)
+///   F_MAX_COMPUTE_AGE_SECONDS    – Accountant max compute timestamp staleness (e.g. 300)
 ///   F_BUFFER_TARGET_BPS          – StrategyController buffer target
 ///   F_REBALANCE_THRESHOLD_BPS    – StrategyController rebalance threshold
 ///   F_REBALANCE_COOLDOWN         – StrategyController rebalance cooldown (seconds)
@@ -125,6 +128,9 @@ contract DeployAll is Script {
         address capManager = vm.envAddress("F_CAP_MANAGER_ADDRESS");
         uint64 initialRate = uint64(vm.envUint("F_INITIAL_RATE"));
         uint32 managementFeeBps = uint32(vm.envUint("F_MANAGEMENT_FEE_BPS"));
+        uint32 maxAllowedDeviation = uint32(vm.envUint("F_MAX_ALLOWED_DEVIATION_BPS"));
+        uint32 minUpdateInterval = uint32(vm.envUint("F_MIN_UPDATE_INTERVAL_SECONDS"));
+        uint32 maxComputeAge = uint32(vm.envUint("F_MAX_COMPUTE_AGE_SECONDS"));
         uint16 bufferTargetBps = uint16(vm.envUint("F_BUFFER_TARGET_BPS"));
         uint16 rebalanceThresholdBps = uint16(vm.envUint("F_REBALANCE_THRESHOLD_BPS"));
         uint64 rebalanceCooldown = uint64(vm.envUint("F_REBALANCE_COOLDOWN"));
@@ -226,7 +232,17 @@ contract DeployAll is Script {
 
         // 2g. Accountant — init now (vault + AccountantExecutor addresses are known)
         address accountantAddr = d.accountantFactory
-            .deployAndInitAccountant(vaultAddr, initialRate, managementFeeBps, admin, pauser, acctExecAddr);
+            .deployAndInitAccountant(
+                vaultAddr,
+                initialRate,
+                managementFeeBps,
+                maxAllowedDeviation,
+                minUpdateInterval,
+                maxComputeAge,
+                admin,
+                pauser,
+                acctExecAddr
+            );
         d.accountant = Accountant(accountantAddr);
 
         console2.log("");

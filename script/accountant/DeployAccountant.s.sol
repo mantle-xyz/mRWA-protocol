@@ -16,13 +16,16 @@ import {Script, console2} from "forge-std/Script.sol";
 ///         5. Wires ACCOUNTANT_EXECUTOR_ROLE, BOT_ROLE, and FEE_SETTLER_ROLE
 ///
 /// Required env vars (set via deploy-config YAML):
-///   F_VAULT_ADDRESS        – MantleYieldVault proxy address
-///   F_INITIAL_RATE         – starting exchange rate (18-decimal, e.g. 1e18)
-///   F_MANAGEMENT_FEE_BPS   – management fee in bps (e.g. 50 = 0.5%)
-///   F_ADMIN_ADDRESS        – admin address (also used as beacon owner)
-///   F_PAUSER_ADDRESS       – address to receive PAUSER_ROLE on the Accountant
-///   F_BOT_ADDRESS          – bot address to receive BOT_ROLE on the Executor
-///   F_FEE_SETTLER_ADDRESS  – bot address to receive FEE_SETTLER_ROLE on the Executor
+///   F_VAULT_ADDRESS              – MantleYieldVault proxy address
+///   F_INITIAL_RATE               – starting exchange rate (18-decimal, e.g. 1e18)
+///   F_MANAGEMENT_FEE_BPS         – management fee in bps (e.g. 50 = 0.5%)
+///   F_MAX_ALLOWED_DEVIATION_BPS  – circuit-breaker deviation cap in bps (e.g. 100 = 1%)
+///   F_MIN_UPDATE_INTERVAL_SECONDS – minimum seconds between rate updates (e.g. 72000 = 20h)
+///   F_MAX_COMPUTE_AGE_SECONDS    – max seconds compute timestamp may lag (e.g. 300 = 5min)
+///   F_ADMIN_ADDRESS              – admin address (also used as beacon owner)
+///   F_PAUSER_ADDRESS             – address to receive PAUSER_ROLE on the Accountant
+///   F_BOT_ADDRESS                – bot address to receive BOT_ROLE on the Executor
+///   F_FEE_SETTLER_ADDRESS        – bot address to receive FEE_SETTLER_ROLE on the Executor
 contract DeployAccountant is Script {
     function run()
         external
@@ -37,6 +40,9 @@ contract DeployAccountant is Script {
         address vaultAddr = vm.envAddress("F_VAULT_ADDRESS");
         uint64 initialRate = uint64(vm.envUint("F_INITIAL_RATE"));
         uint32 managementFeeBps = uint32(vm.envUint("F_MANAGEMENT_FEE_BPS"));
+        uint32 maxAllowedDeviation = uint32(vm.envUint("F_MAX_ALLOWED_DEVIATION_BPS"));
+        uint32 minUpdateInterval = uint32(vm.envUint("F_MIN_UPDATE_INTERVAL_SECONDS"));
+        uint32 maxComputeAge = uint32(vm.envUint("F_MAX_COMPUTE_AGE_SECONDS"));
         address admin = vm.envAddress("F_ADMIN_ADDRESS");
         address pauser = vm.envAddress("F_PAUSER_ADDRESS");
         address bot = vm.envAddress("F_BOT_ADDRESS");
@@ -47,6 +53,9 @@ contract DeployAccountant is Script {
         console2.log("Vault          :", vaultAddr);
         console2.log("Initial rate   :", initialRate);
         console2.log("Mgmt fee (bps) :", managementFeeBps);
+        console2.log("Max deviation  :", maxAllowedDeviation);
+        console2.log("Min interval(s):", minUpdateInterval);
+        console2.log("Max age (s)    :", maxComputeAge);
         console2.log("Pauser         :", pauser);
         console2.log("Bot            :", bot);
         console2.log("Fee settler    :", feeSettler);
@@ -72,7 +81,15 @@ contract DeployAccountant is Script {
 
         // ---- 4. Deploy Accountant instance via BeaconProxy ----
         address accountantAddr = factory.deployAndInitAccountant(
-            vaultAddr, initialRate, managementFeeBps, admin, pauser, address(executorProxy)
+            vaultAddr,
+            initialRate,
+            managementFeeBps,
+            maxAllowedDeviation,
+            minUpdateInterval,
+            maxComputeAge,
+            admin,
+            pauser,
+            address(executorProxy)
         );
         accountant = Accountant(accountantAddr);
         console2.log("[4/5] Accountant (proxy) :", accountantAddr);
