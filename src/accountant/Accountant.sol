@@ -86,7 +86,6 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
     //                       CUSTOM ERRORS
     // =============================================================
 
-    error Accountant__DeviationExceeded(uint256 deviationBps, uint256 maxAllowed);
     error Accountant__CooldownNotElapsed(uint256 timeRemaining);
     error Accountant__ZeroAddress();
     error Accountant__InvalidRate();
