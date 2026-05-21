@@ -191,6 +191,7 @@ contract MockControllerVault {
     mapping(address => uint256) public investInFlightByAdapter;
     mapping(address => uint256) public redeemInFlightByAdapter;
     mapping(address => bool) public isAdapterRegistry;
+    address[] public adapterList;
 
     struct Req {
         uint256 shares;
@@ -308,13 +309,26 @@ contract MockControllerVault {
         return isAdapterRegistry[adapter];
     }
 
+    function getAdapters() external view returns (address[] memory) {
+        return adapterList;
+    }
+
     function registerAdapter(address adapter) external {
+        adapterList.push(adapter);
         isAdapterRegistry[adapter] = true;
     }
 
     function removeAdapter(address adapter) external {
         require(investInFlightByAdapter[adapter] == 0 && redeemInFlightByAdapter[adapter] == 0, "HAS_IN_FLIGHT");
         isAdapterRegistry[adapter] = false;
+        uint256 len = adapterList.length;
+        for (uint256 i = 0; i < len; i++) {
+            if (adapterList[i] == adapter) {
+                adapterList[i] = adapterList[len - 1];
+                adapterList.pop();
+                break;
+            }
+        }
     }
 
     function updateRequestBatch(uint256[] calldata ids, IMantleYieldVault.RequestStatus newStatus) external {
@@ -443,6 +457,7 @@ contract StrategyControllerUnitTest is Test {
 
     MockAsset internal asset;
     MockAsset internal posToken;
+    MockAsset internal asyncPosToken;
     MockControllerVault internal vault;
     StrategyController internal controller;
     DummyExecutor internal executorGateway;
@@ -459,6 +474,7 @@ contract StrategyControllerUnitTest is Test {
     function setUp() public {
         asset = new MockAsset();
         posToken = new MockAsset();
+        asyncPosToken = new MockAsset();
         vault = new MockControllerVault(address(asset));
         executorGateway = new DummyExecutor();
 
@@ -470,7 +486,7 @@ contract StrategyControllerUnitTest is Test {
         controller = StrategyController(address(new ERC1967Proxy(address(implementation), initData)));
 
         syncAdapter = new MockStrategyAdapter(address(asset), address(posToken));
-        asyncAdapter = new MockStrategyAdapter(address(asset), address(posToken));
+        asyncAdapter = new MockStrategyAdapter(address(asset), address(asyncPosToken));
     }
 
     function _registerTwoStrategies() internal {
@@ -585,6 +601,45 @@ contract StrategyControllerUnitTest is Test {
         controller.registerStrategy(address(syncAdapter), 5000, 1, false);
         vm.expectRevert();
         controller.registerStrategy(address(syncAdapter), 5000, 1, false);
+        vm.stopPrank();
+    }
+
+    function test_RevertWhen_RegisterStrategyDuplicatePosToken() public {
+        MockStrategyAdapter duplicatePosTokenAdapter = new MockStrategyAdapter(address(asset), address(posToken));
+
+        vm.startPrank(manager);
+        controller.registerStrategy(address(syncAdapter), 5000, 1, false);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                StrategyController.Controller__DuplicateStrategyPosToken.selector,
+                address(posToken),
+                address(syncAdapter),
+                address(duplicatePosTokenAdapter)
+            )
+        );
+        controller.registerStrategy(address(duplicatePosTokenAdapter), 5000, 2, true);
+        vm.stopPrank();
+    }
+
+    function test_RevertWhen_ActivateStrategyDuplicatePosToken() public {
+        MockStrategyAdapter duplicatePosTokenAdapter = new MockStrategyAdapter(address(asset), address(posToken));
+
+        vm.startPrank(manager);
+        controller.registerStrategy(address(syncAdapter), 5000, 1, false);
+        controller.activateStrategy(address(syncAdapter));
+        controller.deactivateStrategy(address(syncAdapter));
+
+        controller.registerStrategy(address(duplicatePosTokenAdapter), 5000, 2, true);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                StrategyController.Controller__DuplicateStrategyPosToken.selector,
+                address(posToken),
+                address(duplicatePosTokenAdapter),
+                address(syncAdapter)
+            )
+        );
+        controller.activateStrategy(address(syncAdapter));
         vm.stopPrank();
     }
 
@@ -1367,7 +1422,7 @@ contract StrategyControllerUnitTest is Test {
         assertTrue(isInvest);
         assertEq(uint8(status), uint8(IMantleYieldVault.InFlightStatus.CONFIRMED));
         assertEq(asyncAdapter.claimCount(), 1);
-        assertEq(asyncAdapter.lastClaimToken(), address(posToken));
+        assertEq(asyncAdapter.lastClaimToken(), address(asyncPosToken));
         assertEq(asyncAdapter.lastClaimAmount(), 10e18);
         assertEq(vault.investInFlightTotal(), 0);
         assertEq(vault.investInFlightByAdapter(address(asyncAdapter)), 0);
@@ -1858,7 +1913,7 @@ contract StrategyControllerUnitTest is Test {
         controller.settleAdapters(adapters, investBatch, redeemBatch);
 
         assertEq(asyncAdapter.claimCount(), 1);
-        assertEq(asyncAdapter.lastClaimToken(), address(posToken));
+        assertEq(asyncAdapter.lastClaimToken(), address(asyncPosToken));
         assertEq(asyncAdapter.lastClaimAmount(), 25e18);
         assertEq(syncAdapter.claimCount(), 1);
         assertEq(syncAdapter.lastClaimToken(), address(asset));

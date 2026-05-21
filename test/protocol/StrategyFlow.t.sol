@@ -54,6 +54,7 @@ contract MockVaultFlow {
     mapping(address => uint256) public investInFlightByAdapter;
     mapping(address => uint256) public redeemInFlightByAdapter;
     mapping(address => bool) public isAdapterRegistry;
+    address[] public adapterList;
 
     mapping(uint256 => uint256) public liabilities;
     mapping(uint256 => IMantleYieldVault.RequestStatus) public requestStatus;
@@ -153,13 +154,26 @@ contract MockVaultFlow {
         return isAdapterRegistry[adapter];
     }
 
+    function getAdapters() external view returns (address[] memory) {
+        return adapterList;
+    }
+
     function registerAdapter(address adapter) external {
+        adapterList.push(adapter);
         isAdapterRegistry[adapter] = true;
     }
 
     function removeAdapter(address adapter) external {
         require(investInFlightByAdapter[adapter] == 0 && redeemInFlightByAdapter[adapter] == 0, "HAS_IN_FLIGHT");
         isAdapterRegistry[adapter] = false;
+        uint256 len = adapterList.length;
+        for (uint256 i = 0; i < len; i++) {
+            if (adapterList[i] == adapter) {
+                adapterList[i] = adapterList[len - 1];
+                adapterList.pop();
+                break;
+            }
+        }
     }
 
     function updateRequestBatch(uint256[] calldata ids, IMantleYieldVault.RequestStatus status) external {
