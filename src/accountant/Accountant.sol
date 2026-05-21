@@ -24,6 +24,8 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
     uint32 public constant MAX_DEVIATION_CEILING = 1000; // 10% absolute cap on configurable deviation
     uint32 public constant MAX_MANAGEMENT_FEE_BPS = 500; // 5% absolute cap on management fee
     uint32 public constant MAX_COMPUTE_AGE_CEILING = 1 days;
+    uint32 public constant MAX_UPDATE_INTERVAL_CEILING = 7 days;
+    uint32 public constant MIN_UPDATE_INTERVAL_FLOOR = 1 minutes;
 
     // =============================================================
     //                          ROLES
@@ -95,6 +97,7 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
     error Accountant__FutureComputeTimestamp(uint256 provided, uint256 blockTimestamp);
     error Accountant__ComputeTimestampTooOld(uint256 provided, uint256 blockTimestamp, uint256 maxAge);
     error Accountant__InvalidComputeAge(uint256 age);
+    error Accountant__InvalidUpdateInterval(uint256 interval);
 
     // =============================================================
     //                    CONSTRUCTOR / INITIALIZER
@@ -271,9 +274,15 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
     //                    ADMIN FUNCTIONS
     // =============================================================
 
+    /// @notice Update the deviation and cooldown risk parameters.
+    /// @dev `newMinInterval` is bounded to [MIN_UPDATE_INTERVAL_FLOOR, MAX_UPDATE_INTERVAL_CEILING]
+    ///      to keep the temporal smoothing meaningful and guard against misconfiguration.
     function setRiskParams(uint32 newMaxDeviation, uint32 newMinInterval) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (newMaxDeviation == 0 || newMaxDeviation > MAX_DEVIATION_CEILING) {
             revert Accountant__InvalidDeviation(newMaxDeviation);
+        }
+        if (newMinInterval < MIN_UPDATE_INTERVAL_FLOOR || newMinInterval > MAX_UPDATE_INTERVAL_CEILING) {
+            revert Accountant__InvalidUpdateInterval(newMinInterval);
         }
         AccountantStorage storage s = _getAccountantStorage();
         s.maxAllowedDeviation = newMaxDeviation;
