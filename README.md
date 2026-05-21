@@ -1,66 +1,61 @@
-## Foundry
+# mRWA Protocol
 
-**Foundry is a blazing fast, portable and modular toolkit for Ethereum application development written in Rust.**
+## Prerequisites
 
-Foundry consists of:
+- Foundry is installed
+- `task` and `yq` are installed
+- `.env` is configured (see `.env.example`)
+- `rpc_endpoints` are configured in `foundry.toml`
+- `deploy-config/<network>/<profile>.yaml` is prepared
 
-- **Forge**: Ethereum testing framework (like Truffle, Hardhat and DappTools).
-- **Cast**: Swiss army knife for interacting with EVM smart contracts, sending transactions and getting chain data.
-- **Anvil**: Local Ethereum node, akin to Ganache, Hardhat Network.
-- **Chisel**: Fast, utilitarian, and verbose solidity REPL.
+## Common Commands
 
-## Documentation
-
-https://book.getfoundry.sh/
-
-## Usage
-
-### Build
-
-```shell
-$ forge build
+```bash
+make build
+make test
 ```
 
-### Test
+**Pre-commit auto-formatting (repo only):** run `make install-hooks` once at the repository root. After that, every `git commit` will run `forge fmt` and re-stage modified `.sol` files automatically.
 
-```shell
-$ forge test
+## Deployment and Upgrades
+
+All deployment and upgrade operations are executed through `Taskfile.yaml`.
+
+Common commands:
+
+```bash
+NETWORK=mantle-sepolia task DeployAll
+NETWORK=mantle-sepolia task RegisterStrategy
+NETWORK=mantle-sepolia task UpgradeAll
 ```
 
-### Format
+Upgrade individual modules:
 
-```shell
-$ forge fmt
+```bash
+NETWORK=mantle-sepolia task UpgradeSanctionsOracle
+NETWORK=mantle-sepolia task UpgradeAccountant
+NETWORK=mantle-sepolia task UpgradeStrategyController
+NETWORK=mantle-sepolia task UpgradeGateway
+NETWORK=mantle-sepolia task UpgradeVault
+NETWORK=mantle-sepolia task UpgradeOperatorExecutor
+NETWORK=mantle-sepolia task UpgradeAccountantExecutor
 ```
 
-### Gas Snapshots
+You can also pass through Foundry arguments:
 
-```shell
-$ forge snapshot
+```bash
+NETWORK=mantle-sepolia task DeployAll -- --broadcast -vvvv
+NETWORK=mantle-sepolia task UpgradeVault -- --broadcast
 ```
 
-### Anvil
+## Task Parameters
 
-```shell
-$ anvil
-```
+- `NETWORK`: maps to `deploy-config/<network>/`
+- `PROFILE`: defaults to `default`
+- `CLI_ARGS`: passed through to `forge script`
 
-### Deploy
+## Security Notes
 
-```shell
-$ forge script script/Counter.s.sol:CounterScript --rpc-url <your_rpc_url> --private-key <your_private_key>
-```
-
-### Cast
-
-```shell
-$ cast <subcommand>
-```
-
-### Help
-
-```shell
-$ forge --help
-$ anvil --help
-$ cast --help
-```
+- Do not commit `.env`
+- `F_PRIVATE_KEY` must include the `0x` prefix
+- If a private key is exposed, rotate it immediately and migrate permissions

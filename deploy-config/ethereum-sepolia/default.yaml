@@ -1,0 +1,78 @@
+chainId: 11155111
+
+envs:
+  # ── Wallet / RPC ──────────────────────────────────────────────
+  F_WALLET_TYPE: PRIVATE_KEY # options: AWS_KMS, PRIVATE_KEY, LEDGER, MNEMONIC
+  # 0x65Cf61678Cf120a8F40c2F3aEDCb50BBA0e85c78 is driven by mnemonic index 1
+  F_PRIVATE_KEY: "0x31e261ca732cabd3e3cdc349e45a0af87187c798d021d84b6e55b5abe9de4ea3"
+  F_MNEMONIC: "suggest tuition hint exclude shove leave liquid since famous bid mention raise"
+  F_MNEMONIC_INDEX: 0
+  F_AWS_KMS_KEY_ID: ""
+  F_SENDER: "0x65Cf61678Cf120a8F40c2F3aEDCb50BBA0e85c78"
+  F_VERBOSE: true
+  F_RPC_URL: "https://eth-sepolia.g.alchemy.com/v2/XMS1J6f654XZolfd7oaMe-kaNPEpWifX"
+
+  # ── Addresses (roles) ────────────────────────────────────────
+  F_ADMIN_ADDRESS: "0x65Cf61678Cf120a8F40c2F3aEDCb50BBA0e85c78"
+  # 0x3C8af6063c934dc25F7dB727bBB6c7DeEBE21Bb2 is driven by mnemonic index 1
+  F_COMPLIANCE_BOT_ADDRESS: "0x3C8af6063c934dc25F7dB727bBB6c7DeEBE21Bb2"   # SanctionsOracle COMPLIANCE_ROLE
+  F_BOT_ADDRESS: "0x3C8af6063c934dc25F7dB727bBB6c7DeEBE21Bb2"              # AccountantExecutor BOT_ROLE
+  F_FEE_SETTLER_ADDRESS: "0x3C8af6063c934dc25F7dB727bBB6c7DeEBE21Bb2"      # AccountantExecutor FEE_SETTLER_ROLE
+  F_SIGNER_ADDRESS: "0x3C8af6063c934dc25F7dB727bBB6c7DeEBE21Bb2"           # OperatorExecutor SIGNER_ROLE
+  F_STRATEGY_MANAGER_ADDRESS: "0x3C8af6063c934dc25F7dB727bBB6c7DeEBE21Bb2" # StrategyController STRATEGY_MANAGER_ROLE
+  F_TREASURY_ADDRESS: "0x3C8af6063c934dc25F7dB727bBB6c7DeEBE21Bb2"         # Vault fee share recipient
+  F_PAUSER_ADDRESS: "0x3C8af6063c934dc25F7dB727bBB6c7DeEBE21Bb2"           # Vault PAUSER_ROLE
+  F_CAP_MANAGER_ADDRESS: "0x3C8af6063c934dc25F7dB727bBB6c7DeEBE21Bb2"      # Vault CAP_MANAGER_ROLE
+  F_ACCOUNTANT_FACTORY: "0x37f91bf7aab61707a4d21043e8f99622ea78a9ac"
+  F_SANCTIONS_ORACLE_FACTORY: "0x857b339b894d00806031ac13ab3cb17cb588749c"
+  F_VAULT_FACTORY: "0x0cf7ce1b8bc6b506680a902faddc90da40d195c4"
+  F_GATEWAY_FACTORY: "0x9e0973be913a51bcb0738920854a31c0c379ab45"
+  F_ACCOUNTANT_EXECUTOR: "0x7efaa6a98622f54d650189963121b97a8cfe859b"
+  F_OPERATOR_EXECUTOR: "0x2394456594ccbfc8d5c492ea82f9ae08950edb4e"
+
+  # ── Accountant params ────────────────────────────────────────
+  F_INITIAL_RATE: "1000000000000000000" # 1e18
+  F_MANAGEMENT_FEE_BPS: "50"           # 0.5%
+  F_MAX_ALLOWED_DEVIATION_BPS: "100"  # 1% circuit-breaker (≤MAX_DEVIATION_CEILING=1000)
+  F_MIN_UPDATE_INTERVAL_SECONDS: "72000" # 20 hours
+  F_MAX_COMPUTE_AGE_SECONDS: "300"     # 5 minutes (≤MAX_COMPUTE_AGE_CEILING=86400)
+
+  # ── StrategyController params ────────────────────────────────
+  F_BUFFER_TARGET_BPS: "0"           # 0%
+  F_REBALANCE_THRESHOLD_BPS: "10"     # 0.1%
+  F_REBALANCE_COOLDOWN: "3600"         # 1 hour
+
+  # ── RegisterStrategy params ──────────────────────────────────
+  F_CONTROLLER_ADDRESS: "0xa68d8b8886c35c2f37dee48d0b56f399a5d88208"     # StrategyController proxy
+  F_STRATEGY_ADAPTER_ADDRESS: "0xf82c030bd9a3ad97dfd2838e2c1721f50f75da1e"
+  F_TARGET_WEIGHT_BPS: "10000"       # 100%
+  F_PRIORITY: "0"                    # execution priority (lower = higher)
+  F_IS_ASYNC: "true"                 # true for ERC-7540, false for ERC-4626
+  F_SET_ORDER: "true"                # update strategyOrder after registration
+
+  # ── DeploySubRedManagementAdapter params ─────────────────────
+  ADAPTER_VAULT: "0x5ba7050cb1574cdc052c4bfdec46299d9b049fb6"
+  ADAPTER_SUBRED_MANAGEMENT: "0x99c967ada4b3ab4e011ef2379d58e11816bd219b"
+  ADAPTER_ST_TOKEN: "0xc2add5c914d4953a5382162b08e70fbe6cf47b30"
+  ADAPTER_ADMIN: "0x65Cf61678Cf120a8F40c2F3aEDCb50BBA0e85c78"
+  ADAPTER_CONTROLLER: "0xa68d8b8886c35c2f37dee48d0b56f399a5d88208"
+  ADAPTER_ACCOUNTANT: "0x93a44c2c92c9ec8a290bcf6a5efb8459c3ee184d"
+  ADAPTER_PRICE_ORACLE: "0x0000000000000000000000000000000000000000"  # optional, default: address(0)
+  ADAPTER_MANUAL_POS_TOKEN_PRICE: "0" # optional, default: 0; only set non-zero when ADAPTER_PRICE_ORACLE is address(0)
+  F_STABLE_ADDRESS: "0xc40fa5d8cf408baa63019137033d2698377fb243"
+
+  # ── UpgradeStrategyController params ─────────────────────
+  F_STRATEGY_CONTROLLER_FACTORY: "0x5899e2c2e5dd3e9e88811e6fb905c64f8e906479"
+
+  # ── Vault params ─────────────────────────────────────────────
+  F_MAX_REDEMPTION_FEE_BPS: "500"      # 5% cap
+  F_MAX_RATE_CHANGE_BPS: "500"         # 5% cap
+  F_REDEMPTION_FEE_BPS: "10"           # 0.1%
+  F_MIN_REDEEM_AMOUNT: "1000000"       # 1 STABLE (6 decimals)
+  F_MIN_DEPOSIT_AMOUNT: "1000000"      # 1 STABLE (6 decimals)
+  F_MAX_SETTLEMENT_DEVIATION_BPS: "1000" # 10% absolute cap
+  # Daily caps (initial values). type(uint256).max = unlimited; 0 = blocked. CAP_MANAGER_ROLE 后续可调。
+  F_DEPOSIT_DAILY_REMAINING: "115792089237316195423570985008687907853269984665640564039457584007913129639935" # uint256 max = unlimited (STABLE units)
+  F_REDEEM_DAILY_REMAINING: "115792089237316195423570985008687907853269984665640564039457584007913129639935" # uint256 max = unlimited (share units)
+  F_SYNC_REDEEM_DISABLED: "false"
+  F_WHITELIST_ENABLED: "false" # Gateway whitelist enforcement; admin can flip via setWhitelistEnabled

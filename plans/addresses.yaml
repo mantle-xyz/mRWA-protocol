@@ -1,0 +1,33 @@
+# ── Ethereum Sepolia (chainId: 11155111) ──────────────────
+# Deployed via DeployAll.s.sol + DeployMockSubRedManagement.s.sol + DeploySubRedManagementAdapter.s.sol
+
+# Tokens
+MockStable:	0xc40fa5d8cf408baa63019137033d2698377fb243
+MockSTToken:	0xC2ADD5C914d4953a5382162b08E70fBe6cf47b30
+MockSubRedManagement:	0x99c967ada4b3ab4e011ef2379d58e11816bd219b
+SubRedManagementAdapter:	0xf82c030bd9a3ad97dfd2838e2c1721f50f75da1e
+
+# Core protocol proxies
+SanctionsOracle:	0x4d3132ddf07f5d14e9bc2cc984dfdd72bc408eec
+MantleYieldVault:	0x5ba7050cb1574cdc052c4bfdec46299d9b049fb6
+MantleVaultGateway:	0xba21ea135533eab352a2a0ad1b02d049ed240915
+StrategyController:	0xa68d8b8886c35c2f37dee48d0b56f399a5d88208
+Accountant:	0x93a44c2c92c9ec8a290bcf6a5efb8459c3ee184d
+OperatorExecutor:	0x2394456594ccbfc8d5c492ea82f9ae08950edb4e
+AccountantExecutor:	0x7efaa6a98622f54d650189963121b97a8cfe859b
+
+# Factories
+SanctionsOracleFactory:	0x857b339b894d00806031ac13ab3cb17cb588749c
+VaultFactory:	0x0cf7ce1b8bc6b506680a902faddc90da40d195c4
+GatewayFactory:	0x9e0973be913a51bcb0738920854a31c0c379ab45
+AccountantFactory:	0x37f91bf7aab61707a4d21043e8f99622ea78a9ac
+StrategyControllerFactory:	0x5899e2c2e5dd3e9e88811e6fb905c64f8e906479
+
+# Implementations
+SanctionsOracleImpl:	0x14ad880c836b34b00d41447c2e3341af43c3f9c6
+MantleYieldVaultImpl:	0xe913b8976781fabcbbdfb8812ea566a2a923f5c6
+MantleVaultGatewayImpl:	0x3882891732ca7117d914ca9e22641aa228784bd5
+AccountantImpl:	0x74951682b00065c08d430aff0d6774379aaa6788
+StrategyControllerImpl:	0xb2a6d9f50d7e3d30e5db14e66d942676fd9f3cb5
+AccountantExecutorImpl:	0xa4d3474066fe08cf00db8540f744432df0529a11
+OperatorExecutorImpl:	0x4fcdbc029ffb8cf54901dfd28224dff59ec6ae2a

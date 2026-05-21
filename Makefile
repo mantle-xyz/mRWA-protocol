@@ -1,6 +1,6 @@
 -include .env
 
-.PHONY: all build clean test fmt snapshot gas lint deploy upgrade
+.PHONY: all build clean test fmt snapshot gas lint install-hooks setup
 
 all: clean install build
 
@@ -42,37 +42,19 @@ fmt-check:
 lint:
 	forge fmt --check && forge build
 
-# ==================== Deploy (Mantle Sepolia) ====================
+# only for this repo, not for submodules, only run once
+install-hooks:
+	git config core.hooksPath .githooks
 
-deploy-sepolia:
-	forge script script/Deploy.s.sol:DeployScript \
-		--rpc-url mantle_sepolia \
-		--broadcast \
-		--verify \
-		--verifier etherscan \
-		-vvvv
-
-# ==================== Deploy (Mainnet) ====================
-
-deploy-mainnet:
-	forge script script/Deploy.s.sol:DeployScript \
-		--rpc-url mainnet \
-		--broadcast \
-		--verify \
-		--verifier etherscan \
-		-vvvv
-
-# ==================== Upgrade ====================
-
-upgrade-sepolia:
-	forge script script/Upgrade.s.sol:UpgradeScript \
-		--rpc-url mantle_sepolia \
-		--broadcast \
-		--verify \
-		--verifier etherscan \
-		-vvvv
-
-# ==================== Utilities ====================
+setup: install-hooks
+	@MIN="1.4.1"; \
+	CUR=$$(forge --version 2>/dev/null | head -1 | sed 's/^[^0-9]*//' | cut -d- -f1); \
+	if [ -z "$$CUR" ] || [ "$$(printf '%s\n' "$$MIN" "$$CUR" | sort -V | head -1)" != "$$MIN" ]; then \
+		echo "forge $$CUR < $$MIN, installing v$$MIN ..."; \
+		foundryup -i v$$MIN; \
+	else \
+		echo "forge $$CUR >= $$MIN, OK"; \
+	fi
 
 slither:
 	slither .

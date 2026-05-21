@@ -1,0 +1,241 @@
+version: 3
+dotenv: ['.env']
+env:
+  ROOT_DIR: "{{ .ROOT_DIR }}"
+  CONFIG_YAML: 
+    sh: printf "%s/deploy-config/%s/%s.yaml" {{.ROOT_DIR}} {{ .NETWORK }} {{ .PROFILE | default "default" }}
+  CONFIG_JSON: 
+    sh: printf "%s/deploy-config/%s/%s.json" {{.ROOT_DIR}} {{ .NETWORK }} {{ .PROFILE | default "default" }}
+  DEPLOYMENTS_DIR: 
+    sh: printf "%s/deployments/%s" {{.ROOT_DIR}} {{ .NETWORK }}
+
+tasks:
+  test:
+    cmds:
+     - |
+       env
+  _config_yaml2json:
+    internal: true
+    silent: true
+    desc: update json before forge script
+    cmd: yq -o json {{.CONFIG_YAML}} > {{.CONFIG_JSON}}
+  _script:
+    internal: true
+    # silent: true
+    cmds:
+      - task: _config_yaml2json
+      - |
+        eval "$(yq '.envs | ... comments="" | to_entries | .[] | select((.value|tostring) != "" and (.key|test("^[A-Za-z_][A-Za-z0-9_]*$"))) | "export " + .key + "=" + (.value|tostring|@sh)' {{.CONFIG_YAML}})"
+        source {{.ROOT_DIR}}/lib/func.sh
+        if [[ -z "${NETWORK}" ]]; then
+          log_error "NETWORK env is empty: NETWORK=anvil task yourTask"
+        fi
+
+        mkdir -p $DEPLOYMENTS_DIR
+        forge_script {{.EXTRA_ARGS}}
+  _test:
+    internal: true
+    cmds: 
+      - |
+        eval "$(yq '.envs | ... comments="" | to_entries | .[] | select((.value|tostring) != "" and (.key|test("^[A-Za-z_][A-Za-z0-9_]*$"))) | "export " + .key + "=" + (.value|tostring|@sh)' {{.CONFIG_YAML}})"
+        source {{.ROOT_DIR}}/lib/func.sh
+        forge_test {{.EXTRA_ARGS}}
+  #InitAnvilNetwork:
+  #  silent: true
+  #  cmds:
+  #    - |
+  #      NETWORK=anvil forge script script/libraries/AnvilGenesis.s.sol:AnvilGenesis
+  #      yq ea 'select(fi==0).alloc = select(fi==1) | select(fi==0)' {{.ROOT_DIR}}/script/libraries/genesis.json {{.ROOT_DIR}}/state-dump/anvil/31337-default.json \
+  #        > {{.ROOT_DIR}}/deploy-config/anvil/genesis.json
+  InitForkedNetwork:
+    # silent: true
+    cmds:
+      - |
+        eval "$(yq '.envs | ... comments="" | to_entries | .[] | select((.value|tostring) != "" and (.key|test("^[A-Za-z_][A-Za-z0-9_]*$"))) | "export " + .key + "=" + (.value|tostring|@sh)' {{.CONFIG_YAML}})"
+        source {{.ROOT_DIR}}/lib/func.sh
+        sender_impersonate_safe_signer_on_forked_network deployerSafeAddress
+  
+  DeployAll:
+    cmds:
+      - task: _script
+        vars:
+          EXTRA_ARGS: ${ROOT_DIR}/script/DeployAll.s.sol {{.CLI_ARGS}}
+
+  DeployEmptyVaultAndAdapterFactories:
+    desc: Deploy VaultFactory and SubRedManagementAdapterFactory with an empty beacon implementation
+    cmds:
+      - task: _script
+        vars:
+          EXTRA_ARGS: ${ROOT_DIR}/script/DeployEmptyVaultAndAdapterFactories.s.sol {{.CLI_ARGS}}
+
+  DeployRemainingForExistingFactories:
+    desc: Phase A — given existing Vault+Adapter empty factories, deploy SanctionsOracle + Accountant (uninit) + AccountantExecutor + OperatorExecutor + StrategyController (uninit) + Gateway
+    cmds:
+      - task: _script
+        vars:
+          EXTRA_ARGS: ${ROOT_DIR}/script/DeployRemainingForExistingFactories.s.sol {{.CLI_ARGS}}
+
+  UpgradeAndInitVaultAndAdapter:
+    desc: Phase B — upgrade Vault+Adapter beacons to real impls, init Vault/Accountant/Controller/Adapter proxies, wire post-init roles
+    cmds:
+      - task: _script
+        vars:
+          EXTRA_ARGS: ${ROOT_DIR}/script/UpgradeAndInitVaultAndAdapter.s.sol {{.CLI_ARGS}}
+
+  TransferProtocolOwnership:
+    desc: Grant final admin, transfer beacon ownership, or renounce old admin after verification
+    cmds:
+      - task: _script
+        vars:
+          EXTRA_ARGS: ${ROOT_DIR}/script/TransferProtocolOwnership.s.sol {{.CLI_ARGS}}
+
+  DeployInstance:
+    desc: Deploy a new protocol instance using existing on-chain factories (no new impls/factories)
+    cmds:
+      - task: _script
+        vars:
+          EXTRA_ARGS: ${ROOT_DIR}/script/DeployInstance.s.sol {{.CLI_ARGS}}
+
+  VerifyInstance:
+    desc: Verify DeployInstance contracts on block explorer (re-runs with --resume; F_VERIFY=true adds --verify)
+    cmds:
+      - task: _script
+        vars:
+          EXTRA_ARGS: ${ROOT_DIR}/script/DeployInstance.s.sol --broadcast --resume {{.CLI_ARGS}}
+
+  VerifySubRedManagementAdapter:
+    desc: Verify SubRedManagementAdapter on block explorer (re-runs with --resume; F_VERIFY=true adds --verify)
+    cmds:
+      - task: _script
+        vars:
+          EXTRA_ARGS: ${ROOT_DIR}/script/strategy/DeploySubRedManagementAdapter.s.sol --broadcast --resume {{.CLI_ARGS}}
+
+
+  RegisterStrategy:
+    cmds:
+      - task: _script
+        vars:
+          EXTRA_ARGS: ${ROOT_DIR}/script/strategy/RegisterStrategy.s.sol {{.CLI_ARGS}}
+
+  UpgradeAccountant:
+    cmds:
+      - task: _script
+        vars:
+          EXTRA_ARGS: ${ROOT_DIR}/script/accountant/UpgradeAccountant.s.sol {{.CLI_ARGS}}
+
+
+  DeploySubRedManagementAdapterFactory:
+    desc: Deploy SubRedManagementAdapterFactory with real implementation behind UpgradeableBeacon
+    cmds:
+      - task: _script
+        vars:
+          EXTRA_ARGS: ${ROOT_DIR}/script/strategy/DeploySubRedManagementAdapterFactory.s.sol {{.CLI_ARGS}}
+
+  DeploySubRedManagementAdapter:
+    cmds:
+      - task: _script
+        vars:
+          EXTRA_ARGS: ${ROOT_DIR}/script/strategy/DeploySubRedManagementAdapter.s.sol {{.CLI_ARGS}}
+
+  DeploySubRedManagementAdapterUpgradeable:
+    desc: Deploy an upgradeable SubRedManagementAdapter as BeaconProxy via SubRedManagementAdapterFactory
+    cmds:
+      - task: _script
+        vars:
+          EXTRA_ARGS: ${ROOT_DIR}/script/strategy/DeploySubRedManagementAdapterUpgradeable.s.sol {{.CLI_ARGS}}
+
+  VerifySubRedManagementAdapterUpgradeable:
+    desc: Verify upgradeable SubRedManagementAdapter on block explorer (re-runs with --resume; F_VERIFY=true adds --verify)
+    cmds:
+      - task: _script
+        vars:
+          EXTRA_ARGS: ${ROOT_DIR}/script/strategy/DeploySubRedManagementAdapterUpgradeable.s.sol --broadcast --resume {{.CLI_ARGS}}
+
+  ReplaceStrategyAdapter:
+    desc: |
+      Replace an active adapter with a new one (preserving slot/weight/priority/isAsync).
+      Preconditions: OLD adapter has 0 in-flight (invest + redeem). Run settleAdapter first if needed.
+      Required env in YAML: F_CONTROLLER_ADDRESS, REPLACE_OLD_ADAPTER, REPLACE_NEW_ADAPTER.
+      Optional overrides: REPLACE_WEIGHT_BPS, REPLACE_PRIORITY, REPLACE_IS_ASYNC.
+    cmds:
+      - task: _script
+        vars:
+          EXTRA_ARGS: ${ROOT_DIR}/script/strategy/ReplaceStrategyAdapter.s.sol {{.CLI_ARGS}}
+
+  DeployMockSubRedManagement:
+    cmds:
+      - task: _script
+        vars:
+          EXTRA_ARGS: ${ROOT_DIR}/script/strategy/DeployMockSubRedManagement.s.sol {{.CLI_ARGS}}
+
+
+  UpgradeStrategyController:
+    cmds:
+      - task: _script
+        vars:
+          EXTRA_ARGS: ${ROOT_DIR}/script/strategy/UpgradeStrategyController.s.sol {{.CLI_ARGS}}
+
+  UpgradeSubRedManagementAdapter:
+    desc: Upgrade the upgradeable SubRedManagementAdapter beacon implementation (all BeaconProxy instances)
+    cmds:
+      - task: _script
+        vars:
+          EXTRA_ARGS: ${ROOT_DIR}/script/strategy/UpgradeSubRedManagementAdapter.s.sol {{.CLI_ARGS}}
+
+  UpgradeSanctionsOracle:
+    cmds:
+      - task: _script
+        vars:
+          EXTRA_ARGS: ${ROOT_DIR}/script/compliance/UpgradeSanctionsOracle.s.sol {{.CLI_ARGS}}
+
+  UpgradeGateway:
+    cmds:
+      - task: _script
+        vars:
+          EXTRA_ARGS: ${ROOT_DIR}/script/vault/UpgradeGateway.s.sol {{.CLI_ARGS}}
+
+  UpgradeVault:
+    cmds:
+      - task: _script
+        vars:
+          EXTRA_ARGS: ${ROOT_DIR}/script/vault/UpgradeVault.s.sol {{.CLI_ARGS}}
+
+  UpgradeOperatorExecutor:
+    cmds:
+      - task: _script
+        vars:
+          EXTRA_ARGS: ${ROOT_DIR}/script/protocol/UpgradeOperatorExecutor.s.sol {{.CLI_ARGS}}
+
+  UpgradeAccountantExecutor:
+    cmds:
+      - task: _script
+        vars:
+          EXTRA_ARGS: ${ROOT_DIR}/script/accountant/UpgradeAccountantExecutor.s.sol {{.CLI_ARGS}}
+
+  UpgradeAll:
+    desc: Upgrade all upgradeable contracts (BeaconProxy + UUPS)
+    cmds:
+      - task: UpgradeSanctionsOracle
+        vars:
+          CLI_ARGS: "{{.CLI_ARGS}}"
+      - task: UpgradeAccountant
+        vars:
+          CLI_ARGS: "{{.CLI_ARGS}}"
+      - task: UpgradeStrategyController
+        vars:
+          CLI_ARGS: "{{.CLI_ARGS}}"
+      - task: UpgradeGateway
+        vars:
+          CLI_ARGS: "{{.CLI_ARGS}}"
+      - task: UpgradeVault
+        vars:
+          CLI_ARGS: "{{.CLI_ARGS}}"
+      - task: UpgradeOperatorExecutor
+        vars:
+          CLI_ARGS: "{{.CLI_ARGS}}"
+      - task: UpgradeAccountantExecutor
+        vars:
+          CLI_ARGS: "{{.CLI_ARGS}}"
+      - task: UpgradeSubRedManagementAdapter
+        vars:
+          CLI_ARGS: "{{.CLI_ARGS}}"

@@ -1,7 +1,21 @@
 name: CI
 
+# Same Solidity roots as `forge fmt` (src / test / script). Pure doc-only commits skip CI.
+# push: only main/develop (post-merge / direct-to-default); pull_request: all PRs (avoids duplicate runs on feature branches).
+# Also: toolchain files that affect build/fmt, and this workflow file. Manual runs have no path filter.
 on:
   push:
+    branches:
+      - main
+      - develop
+    paths:
+      - "src/**"
+      - "test/**"
+      - "script/**"
+      - "deploy-config/**"
+      - "foundry.toml"
+      - "remappings.txt"
+      - ".github/workflows/**"
   pull_request:
   workflow_dispatch:
 
@@ -19,6 +33,18 @@ jobs:
 
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.4.1
+
+      - name: Cache Forge compilation
+        uses: actions/cache@v4
+        with:
+          path: |
+            cache
+            out
+          key: forge-build-${{ hashFiles('src/**', 'test/**', 'script/**', 'foundry.toml', 'remappings.txt') }}
+          restore-keys: |
+            forge-build-
 
       - name: Show Forge version
         run: |
