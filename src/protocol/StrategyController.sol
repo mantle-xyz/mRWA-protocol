@@ -520,9 +520,6 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         uint256 len = registeredAdapters.length;
         for (uint256 i = 0; i < len; i++) {
             address existingAdapter = registeredAdapters[i];
-            if (existingAdapter == adapter) {
-                continue;
-            }
             if (IStrategyAdapter(existingAdapter).posToken() == posToken) {
                 revert Controller__DuplicateStrategyPosToken(posToken, existingAdapter, adapter);
             }
