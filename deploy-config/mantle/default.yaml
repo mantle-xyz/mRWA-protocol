@@ -15,99 +15,59 @@ envs:
 
   # ── Addresses (roles) ────────────────────────────────────────
   F_ADMIN_ADDRESS: "0x207E804758e28F2b3fD6E4219671B327100b82f8"
-  F_COMPLIANCE_BOT_ADDRESS: "" # Phase A 前填写 KMS Compliance Bot, grants SanctionsOracle COMPLIANCE_ROLE
-  F_BOT_ADDRESS: "" # Phase A 前填写 KMS Accountant Bot, grants AccountantExecutor BOT_ROLE
-  F_FEE_SETTLER_ADDRESS: "0x..." # AccountantExecutor FEE_SETTLER_ROLE
-  F_SIGNER_ADDRESS: "" # Phase A 前填写 KMS Operator Bot, grants OperatorExecutor BOT_ROLE
-  F_TREASURY_ADDRESS: "" # Phase A 前填写 fee recipient / sanction safe
-  F_PAUSER_ADDRESS: "" # Phase B 前填写 Vault + StrategyController PAUSER_ROLE
-  F_CAP_MANAGER_ADDRESS: "" # Phase B 前填写 CAP_MANAGER_ROLE holder for daily cap reset
+  F_COMPLIANCE_BOT_ADDRESS: "" # SanctionsOracle COMPLIANCE_ROLE
+  F_BOT_ADDRESS: "" # AccountantExecutor BOT_ROLE
+  F_FEE_SETTLER_ADDRESS: "" # AccountantExecutor FEE_SETTLER_ROLE
+  F_SIGNER_ADDRESS: "" # OperatorExecutor SIGNER_ROLE
+  F_TREASURY_ADDRESS: "" # Vault fee share recipient / sanction safe
+  F_PAUSER_ADDRESS: "" # Vault + StrategyController PAUSER_ROLE
+  F_CAP_MANAGER_ADDRESS: "" # Vault CAP_MANAGER_ROLE
 
-  # ── Existing factory + Phase A outputs ────────────────────────
-  F_ACCOUNTANT_FACTORY: ""
+  # ── Protocol params ────────────────────────
+  F_STABLE_ADDRESS: "" # USDT0 address
+  # ── Accountant params ───────────────────────
+  F_INITIAL_RATE: "1000000000000000000" # 1e18 
+  F_MANAGEMENT_FEE_BPS: "0" # 0%
+  F_MAX_ALLOWED_DEVIATION_BPS: "100" # 1% circuit-breaker (≤MAX_DEVIATION_CEILING=1000)
+  F_MIN_UPDATE_INTERVAL_SECONDS: "72000" # 20 hours
+  F_MAX_COMPUTE_AGE_SECONDS: "300" # 5 minutes (≤MAX_COMPUTE_AGE_CEILING=86400)
+  # ── StrategyController params ──────────────────
+  F_BUFFER_TARGET_BPS: "100" # 1% buffer
+  F_REBALANCE_THRESHOLD_BPS: "10" # 0.1% rebalance tolerance
+  F_REBALANCE_COOLDOWN: "600" # 10 minutes cooldown
+  # ── Vault params ──────────────────────────
+  F_MAX_REDEMPTION_FEE_BPS: "0" # Maximum allowed redemption fee rate
+  F_REDEMPTION_FEE_BPS: "0" # 0% redemption fee rate
+  F_MIN_REDEEM_AMOUNT: "260000000000" # 1 share (6 decimals)
+  F_MIN_DEPOSIT_AMOUNT: "260000000000" # 1 USDC (6 decimals)
+  F_MAX_SETTLEMENT_DEVIATION_BPS: "1000" # 10% absolute cap
+  F_DEPOSIT_DAILY_REMAINING: "0" # Deposit Daily caps (initial value) USDT
+  F_REDEEM_DAILY_REMAINING: "0" # Redeem Daily caps (initial value) share
+  F_SYNC_REDEEM_DISABLED: "true"
+  F_WHITELIST_ENABLED: "true"
+  
+  
+  # ── Existing Empty deployment ───────────────────
+  DEPLOY_EMPTY_FACTORIES_BEACON_OWNER: "0x207E804758e28F2b3fD6E4219671B327100b82f8"
+  EXISTING_VAULT_PROXY: ""
+  UPGRADE_INIT_VAULT_FACTORY: ""
+  UPGRADE_INIT_SUBRED_ADAPTER_FACTORY: ""
+  UPGRADE_INIT_VAULT_PROXY: ""
+  UPGRADE_INIT_ADAPTER_PROXY: ""
+  
+  # ── Phase A output: backfill after DeployRemainingForExistingFactories ──
   F_SANCTIONS_ORACLE_FACTORY: ""
-  F_VAULT_FACTORY: "0xaa5c9c993d960349f18a8ed4e88dc107c3454840"
-  F_GATEWAY_FACTORY: ""
-  F_ACCOUNTANT: ""
   F_SANCTIONS_ORACLE: ""
+  F_ACCOUNTANT_FACTORY: ""
+  F_ACCOUNTANT: ""
   F_ACCOUNTANT_EXECUTOR: ""
   F_OPERATOR_EXECUTOR: ""
   F_STRATEGY_CONTROLLER_FACTORY: ""
   F_CONTROLLER_ADDRESS: ""
+  F_GATEWAY_FACTORY: ""
   F_GATEWAY: ""
-
-  # ── Accountant params ────────────────────────────────────────
-  F_INITIAL_RATE: "1000000000000000000" # 1e18
-  F_MANAGEMENT_FEE_BPS: "50" # 0.5%
-  F_MAX_ALLOWED_DEVIATION_BPS: "100" # 1% circuit-breaker (≤MAX_DEVIATION_CEILING=1000)
-  F_MIN_UPDATE_INTERVAL_SECONDS: "72000" # 20 hours
-  F_MAX_COMPUTE_AGE_SECONDS: "300" # 5 minutes (≤MAX_COMPUTE_AGE_CEILING=86400)
-
-  # ── StrategyController params ────────────────────────────────
-  F_BUFFER_TARGET_BPS: "1" # 0.01%
-  F_REBALANCE_THRESHOLD_BPS: "10" # 0.1%
-  F_REBALANCE_COOLDOWN: "3600" # 1 hour
-
-  # ── RegisterStrategy params ──────────────────────────────────
-  F_STRATEGY_ADAPTER_ADDRESS: "0x15269bd17a9dcc6e053292d9f78b748e3efd1d6b" # existing DigiFt-whitelisted Adapter proxy
-  F_TARGET_WEIGHT_BPS: "10000" # 100%
-  F_PRIORITY: "0" # execution priority (lower = higher)
-  F_IS_ASYNC: "true" # true for ERC-7540, false for ERC-4626
-  F_SET_ORDER: "true" # update strategyOrder after registration
-
-  # ── DeploySubRedManagementAdapter params ─────────────────────
-  ADAPTER_VAULT: ""
-  ADAPTER_SUBRED_MANAGEMENT: ""
-  ADAPTER_ST_TOKEN: ""
-  ADAPTER_ADMIN: ""
-  ADAPTER_CONTROLLER: ""
-  ADAPTER_ACCOUNTANT: ""
-  ADAPTER_PRICE_ORACLE: "" # optional, default: address(0)
-  ADAPTER_MANUAL_POS_TOKEN_PRICE: "0" # optional, default: 0; only set non-zero when ADAPTER_PRICE_ORACLE is address(0)
-  # Venue step sizes & minimums (raw units). 0 = "no constraint".
-  # DigiFt stToken has 2-decimal granularity on their side: step = 0.01 stToken = 1e16 raw units
-  ADAPTER_SUBSCRIBE_STEP_ASSET: "10000" # STABLE 6 decimals; 0 = no step alignment
-  ADAPTER_REDEEM_STEP_POS: "1000000000000000000" # 1e16 = 0.01 stToken (DigiFt's 2-decimal granularity)
-  ADAPTER_MIN_SUBSCRIBE_ASSET: "20000000000" # STABLE 6 decimals; update once DigiFt min known
-  ADAPTER_MIN_REDEEM_POS: "1500000000000000000000" # stToken 18 decimals; update once DigiFt min known
-
-  # ── ReplaceStrategyAdapter params ───────────────────────────
-  # Set these just before running `task ReplaceStrategyAdapter`.
-  TARGET_CONTROLLER_ADDRESS: ""
-  REPLACE_OLD_ADAPTER: "" # adapter to retire (must have 0 in-flight)
-  REPLACE_NEW_ADAPTER: "" # new adapter (already deployed via DeploySubRedManagementAdapter)
-  REPLACE_SETTLE_MS: "5000" # ms to sleep between steps for Mantle Sepolia RPC state sync (0 = disable)
-  # Optional overrides — leave unset to inherit OLD's config:
-  # REPLACE_WEIGHT_BPS: ""
-  # REPLACE_PRIORITY: ""
-  # REPLACE_IS_ASYNC: ""
-  F_STABLE_ADDRESS: "0xcb89f5acc8f21a115192a0649fdf6b5d75880289"
-
-  # ── Vault params ─────────────────────────────────────────────
-  F_MAX_REDEMPTION_FEE_BPS: "500" # 5% cap
-  F_MAX_RATE_CHANGE_BPS: "500" # 5% cap
-  F_REDEMPTION_FEE_BPS: "10" # 0.1%
-  F_MIN_REDEEM_AMOUNT: "1000000" # 1 STABLE (6 decimals)
-  F_MIN_DEPOSIT_AMOUNT: "1000000" # 1 STABLE (6 decimals)
-  F_MAX_SETTLEMENT_DEVIATION_BPS: "1000" # 10% absolute cap
-  # Daily caps (initial values). 0 = blocked. CAP_MANAGER_ROLE 后续可调。
-  F_DEPOSIT_DAILY_REMAINING: "0" # uint256 max = unlimited (STABLE units)
-  F_REDEEM_DAILY_REMAINING: "0" # uint256 max = unlimited (share units)
-  F_SYNC_REDEEM_DISABLED: "false"
-  F_WHITELIST_ENABLED: "false" # Gateway whitelist enforcement; admin can flip via setWhitelistEnabled
-
-  # ── Task: DeployEmptyVaultAndAdapterFactories ────────────────
-  DEPLOY_EMPTY_FACTORIES_BEACON_OWNER: ""
-
-  # ── Task: DeployRemainingForExistingFactories (Phase A) ─────
-  # Existing on-chain Vault BeaconProxy (passed to Gateway.init's vault pointer)
-  EXISTING_VAULT_PROXY: "0xdc26d4c8643db1eb68d31cce8aa9f221d8fb2b8c"
-
-  # ── Task: UpgradeAndInitVaultAndAdapter (Phase B) ────────────
-  UPGRADE_INIT_VAULT_FACTORY: "0xaa5c9c993d960349f18a8ed4e88dc107c3454840"
-  UPGRADE_INIT_SUBRED_ADAPTER_FACTORY: "0x6d827ca00b26817286a94abfce7aa83418ddbb40"
-  UPGRADE_INIT_VAULT_PROXY: "0xdc26d4c8643db1eb68d31cce8aa9f221d8fb2b8c"
-  UPGRADE_INIT_ADAPTER_PROXY: "0x15269bd17a9dcc6e053292d9f78b748e3efd1d6b"
+  
+  # ── Phase B input: UpgradeAndInitVaultAndAdapter ──────────────
   UPGRADE_INIT_ADMIN: "0x207E804758e28F2b3fD6E4219671B327100b82f8"
   UPGRADE_INIT_STABLE: "0xcb89f5acc8f21a115192a0649fdf6b5d75880289"
   UPGRADE_INIT_GATEWAY: ""                    # filled from Phase A address dump
@@ -118,32 +78,39 @@ envs:
   UPGRADE_INIT_TREASURY: ""                   # copy F_TREASURY_ADDRESS before Phase B
   UPGRADE_INIT_PAUSER: ""                     # copy F_PAUSER_ADDRESS before Phase B
   UPGRADE_INIT_CAP_MANAGER: ""                # copy F_CAP_MANAGER_ADDRESS before Phase B
-  UPGRADE_INIT_VAULT_NAME: "Mantle RWA Vault"
-  UPGRADE_INIT_VAULT_SYMBOL: "mRWA"
-  UPGRADE_INIT_MAX_REDEMPTION_FEE_BPS: "500"
-  UPGRADE_INIT_REDEMPTION_FEE_BPS: "10"
-  UPGRADE_INIT_MIN_REDEEM_AMOUNT: "1000000"
-  UPGRADE_INIT_MIN_DEPOSIT_AMOUNT: "1000000"
+  UPGRADE_INIT_VAULT_NAME: "Mantle DYNA"
+  UPGRADE_INIT_VAULT_SYMBOL: "mDYNA"
+  UPGRADE_INIT_MAX_REDEMPTION_FEE_BPS: "0"
+  UPGRADE_INIT_REDEMPTION_FEE_BPS: "0"
+  UPGRADE_INIT_MIN_REDEEM_AMOUNT: "260000000000"
+  UPGRADE_INIT_MIN_DEPOSIT_AMOUNT: "260000000000"
   UPGRADE_INIT_MAX_SETTLEMENT_DEVIATION_BPS: "1000" # 10% absolute cap
-  # Daily caps (initial values). 0 = blocked. CAP_MANAGER_ROLE 后续可调。
-  UPGRADE_INIT_DEPOSIT_DAILY_REMAINING: "0" # uint256 max = unlimited
-  UPGRADE_INIT_REDEEM_DAILY_REMAINING: "0" # uint256 max = unlimited
-  UPGRADE_INIT_ADAPTER_SUBRED_MANAGEMENT: ""
-  UPGRADE_INIT_ADAPTER_ST_TOKEN: ""
+  UPGRADE_INIT_DEPOSIT_DAILY_REMAINING: "0" # Deposit Daily caps (initial value)
+  UPGRADE_INIT_REDEEM_DAILY_REMAINING: "0" # Redeem Daily caps (initial value)
+  UPGRADE_INIT_ADAPTER_SUBRED_MANAGEMENT: "" # Fill in before Phase B: DigiFt SubRedManagement
+  UPGRADE_INIT_ADAPTER_ST_TOKEN: "" # Fill in before Phase B: DigiFt stToken
   UPGRADE_INIT_ADAPTER_ADMIN: "0x207E804758e28F2b3fD6E4219671B327100b82f8"
   UPGRADE_INIT_ADAPTER_CONTROLLER: ""
   UPGRADE_INIT_ADAPTER_ACCOUNTANT: ""
-  UPGRADE_INIT_ADAPTER_PRICE_ORACLE: ""  # existing PriceOracle; set before Phase B
-  UPGRADE_INIT_ADAPTER_MANUAL_POS_TOKEN_PRICE: "0"
-  UPGRADE_INIT_ADAPTER_SUBSCRIBE_STEP_ASSET: "10000"
-  UPGRADE_INIT_ADAPTER_REDEEM_STEP_POS: "1000000000000000000"
-  UPGRADE_INIT_ADAPTER_MIN_SUBSCRIBE_ASSET: "20000000000"
-  UPGRADE_INIT_ADAPTER_MIN_REDEEM_POS: "1500000000000000000000"
+  UPGRADE_INIT_ADAPTER_PRICE_ORACLE: "" # Fill in before Phase B: Dyan price oracle
+  UPGRADE_INIT_ADAPTER_MANUAL_POS_TOKEN_PRICE: "0" # 0 = no manual price set; must be 0 when PRICE_ORACLE is non-zero
+  UPGRADE_INIT_ADAPTER_SUBSCRIBE_STEP_ASSET: "10000" # USDC raw units; 10000 = 0.01 USDC subscription step
+  UPGRADE_INIT_ADAPTER_REDEEM_STEP_POS: "1000000000000000000" # redeem step 1e18 = 1 stToken, 1e16 = 0.01 stToken
+  UPGRADE_INIT_ADAPTER_MIN_SUBSCRIBE_ASSET: "12000000000"  # Minimum subscription $12000
+  UPGRADE_INIT_ADAPTER_MIN_REDEEM_POS: "1000000000000000000000" # Minimum redemption 1000 stToken
   UPGRADE_INIT_SETTLE_MS: "5000"
-
-  # ── Task: TransferProtocolOwnership (Phase C, after verification) ─
+  
+  
+  # ── Phase C: backfill / confirm before RegisterStrategy ─────────────────────
+  F_STRATEGY_ADAPTER_ADDRESS: ""
+  F_TARGET_WEIGHT_BPS: "10000"
+  F_PRIORITY: "0"
+  F_IS_ASYNC: "true"
+  F_SET_ORDER: "true"
+  
+  # ── Phase C: TransferProtocolOwnership, execute after all checks complete ─────
   TRANSFER_OLD_ADMIN: "0x207E804758e28F2b3fD6E4219671B327100b82f8"
-  TRANSFER_NEW_ADMIN: "" # final SecurityCouncil Safe / timelock
-  TRANSFER_NEW_BEACON_OWNER: "" # final SecurityCouncil Safe / timelock
-  TRANSFER_ACCEPT_DEFAULT_ADMIN: "false" # set true only for Vault/Gateway accept phase
-  TRANSFER_RENOUNCE_OLD_ADMIN: "false" # first run false; set true only after grant/owner verification
+  TRANSFER_NEW_ADMIN: "" # Final SecurityCouncil Safe / timelock
+  TRANSFER_NEW_BEACON_OWNER: "" # Final SecurityCouncil Safe / timelock
+  TRANSFER_ACCEPT_DEFAULT_ADMIN: "false" # false on first run; set to true only after new admin/owner is verified
+  TRANSFER_RENOUNCE_OLD_ADMIN: "false" # false on first run; set to true only after authorization/owner verification
