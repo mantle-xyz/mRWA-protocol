@@ -29,8 +29,8 @@ envs:
   F_INITIAL_RATE: "1000000000000000000" # 1e18 
   F_MANAGEMENT_FEE_BPS: "0" # 0%
   F_MAX_ALLOWED_DEVIATION_BPS: "100" # 1% circuit-breaker (≤MAX_DEVIATION_CEILING=1000)
-  F_MIN_UPDATE_INTERVAL_SECONDS: "72000" # 20 hours
-  F_MAX_COMPUTE_AGE_SECONDS: "300" # 5 minutes (≤MAX_COMPUTE_AGE_CEILING=86400)
+  F_MIN_UPDATE_INTERVAL_SECONDS: "240" # 4 minutes
+  F_MAX_COMPUTE_AGE_SECONDS: "240" # 4 minutes
   # ── StrategyController params ──────────────────
   F_BUFFER_TARGET_BPS: "100" # 1% buffer
   F_REBALANCE_THRESHOLD_BPS: "10" # 0.1% rebalance tolerance
