@@ -34,7 +34,7 @@ envs:
   # ── StrategyController params ──────────────────
   F_BUFFER_TARGET_BPS: "100" # 1% buffer
   F_REBALANCE_THRESHOLD_BPS: "10" # 0.1% rebalance tolerance
-  F_REBALANCE_COOLDOWN: "600" # 10 minutes cooldown
+  F_REBALANCE_COOLDOWN: "500" # 9 minutes cooldown
   # ── Vault params ──────────────────────────
   F_MAX_REDEMPTION_FEE_BPS: "0" # Maximum allowed redemption fee rate
   F_REDEMPTION_FEE_BPS: "0" # 0.1% redemption fee rate
