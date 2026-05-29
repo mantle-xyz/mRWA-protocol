@@ -133,6 +133,7 @@ contract MantleVaultGateway is
     }
 
     function maxRedeem(address owner) external view override returns (uint256) {
+        if (syncRedeemDisabled) return 0;
         if (_isSubscribeRedeemPaused() || isSanctioned(owner)) return 0;
         if (whitelistEnabled && !isWhitelisted(owner)) return 0;
         return vault.maxRedeem(owner);

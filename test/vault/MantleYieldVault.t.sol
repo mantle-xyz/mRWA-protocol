@@ -1864,6 +1864,28 @@ contract SyncRedeemDisabledTest is VaultTestBase {
         assertGt(vault.maxRedeem(alice), 0);
     }
 
+    /// @dev ERC-4626 compliance: gateway.maxRedeem must return 0 when redeem would revert,
+    ///      including the syncRedeemDisabled toggle.
+    function test_gatewayMaxRedeemReturnsZeroWhenSyncDisabled() public {
+        // Sanity: before disabling, gateway.maxRedeem mirrors vault.maxRedeem.
+        assertGt(gateway.maxRedeem(alice), 0);
+
+        vm.prank(admin);
+        gateway.setSyncRedeemDisabled(true);
+
+        assertEq(gateway.maxRedeem(alice), 0, "gateway.maxRedeem must return 0 when syncRedeemDisabled");
+    }
+
+    function test_gatewayMaxRedeemRecoversWhenSyncReenabled() public {
+        vm.prank(admin);
+        gateway.setSyncRedeemDisabled(true);
+        assertEq(gateway.maxRedeem(alice), 0);
+
+        vm.prank(admin);
+        gateway.setSyncRedeemDisabled(false);
+        assertGt(gateway.maxRedeem(alice), 0);
+    }
+
     function test_maxWithdrawNotAffectedWhenSyncDisabled() public {
         vm.prank(admin);
         gateway.setSyncRedeemDisabled(true);
