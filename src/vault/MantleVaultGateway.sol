@@ -112,6 +112,7 @@ contract MantleVaultGateway is
     }
 
     function isWhitelisted(address account) public view override returns (bool) {
+        if (!whitelistEnabled) return true;
         return sanctionsOracle.isWhitelisted(account);
     }
 
