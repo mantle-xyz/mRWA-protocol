@@ -108,12 +108,10 @@ contract DeployVault is Script {
                 sanctionsOracle: ISanctionsOracle(sanctionsOracle),
                 sanctionSafe: treasury,
                 admin: admin,
-                syncRedeemDisabled: vm.envBool("F_SYNC_REDEEM_DISABLED")
+                syncRedeemDisabled: vm.envBool("F_SYNC_REDEEM_DISABLED"),
+                whitelistEnabled: vm.envOr("F_WHITELIST_ENABLED", false)
             })
         );
-        if (vm.envOr("F_WHITELIST_ENABLED", false)) {
-            gateway.setWhitelistEnabled(true);
-        }
         console2.log("[4/5] Vault Gateway      :", params.gateway);
         console2.log("       Whitelist enabled :", gateway.whitelistEnabled());
 

@@ -11,6 +11,7 @@ interface IMantleVaultGateway {
         address sanctionSafe;
         address admin;
         bool syncRedeemDisabled;
+        bool whitelistEnabled;
     }
 
     error Gateway__NotWhitelisted(address account);

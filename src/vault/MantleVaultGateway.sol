@@ -49,6 +49,8 @@ contract MantleVaultGateway is
         sanctionsOracle = params.sanctionsOracle;
         sanctionSafe = params.sanctionSafe;
         syncRedeemDisabled = params.syncRedeemDisabled;
+        whitelistEnabled = params.whitelistEnabled;
+        if (params.whitelistEnabled) emit WhitelistEnabledUpdated(true);
     }
 
     function deposit(uint256 assets) external nonReentrant returns (uint256 shares) {

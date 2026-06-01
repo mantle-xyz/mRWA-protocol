@@ -148,13 +148,11 @@ contract DeployRemainingForExistingFactories is Script {
                     sanctionsOracle: ISanctionsOracle(oracleAddr),
                     sanctionSafe: treasury,
                     admin: admin,
-                    syncRedeemDisabled: syncRedeemDisabled
+                    syncRedeemDisabled: syncRedeemDisabled,
+                    whitelistEnabled: whitelistEnabled
                 })
             );
         d.gateway = MantleVaultGateway(gatewayAddr);
-        if (whitelistEnabled) {
-            d.gateway.setWhitelistEnabled(true);
-        }
         console2.log("[6/6] Gateway          :", gatewayAddr);
 
         vm.stopBroadcast();

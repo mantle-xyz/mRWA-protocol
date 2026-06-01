@@ -284,6 +284,7 @@ contract DeployAll is Script {
             );
 
         // 3b. Gateway.initialize
+        bool whitelistEnabled = vm.envOr("F_WHITELIST_ENABLED", false);
         d.gateway
             .initialize(
                 IMantleVaultGateway.InitParams({
@@ -291,17 +292,11 @@ contract DeployAll is Script {
                     sanctionsOracle: ISanctionsOracle(oracleAddr),
                     sanctionSafe: admin,
                     admin: admin,
-                    syncRedeemDisabled: vm.envBool("F_SYNC_REDEEM_DISABLED")
+                    syncRedeemDisabled: vm.envBool("F_SYNC_REDEEM_DISABLED"),
+                    whitelistEnabled: whitelistEnabled
                 })
             );
-
-        // 3b.1. Optional: enable whitelist enforcement (default off, admin can toggle later)
-        if (vm.envOr("F_WHITELIST_ENABLED", false)) {
-            d.gateway.setWhitelistEnabled(true);
-            console2.log("  Gateway whitelist     : ENABLED");
-        } else {
-            console2.log("  Gateway whitelist     : disabled");
-        }
+        console2.log("  Gateway whitelist     :", whitelistEnabled ? "ENABLED" : "disabled");
 
         // 3c. StrategyController.initialize (reads vault.asset(), so vault must be init'd)
         d.controller = StrategyController(controllerAddr);

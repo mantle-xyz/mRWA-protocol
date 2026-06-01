@@ -312,7 +312,8 @@ contract VaultE2E is Script {
                 sanctionsOracle: ISanctionsOracle(address(oracle)),
                 sanctionSafe: treasury,
                 admin: admin,
-                syncRedeemDisabled: false
+                syncRedeemDisabled: false,
+                whitelistEnabled: false
             })
         );
         vm.stopBroadcast();

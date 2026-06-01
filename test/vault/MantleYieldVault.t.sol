@@ -277,7 +277,8 @@ abstract contract VaultTestBase is Test {
                 sanctionsOracle: ISanctionsOracle(address(oracle)),
                 sanctionSafe: treasuryAddr,
                 admin: admin,
-                syncRedeemDisabled: false
+                syncRedeemDisabled: false,
+                whitelistEnabled: false
             })
         );
 
@@ -1211,6 +1212,30 @@ contract SanctionsTest is VaultTestBase {
 
     /// @dev When whitelistEnabled is false (default), max-views must not gate on whitelist status.
     ///      Otherwise ERC-4626 integrators get false negatives even though deposit/redeem would succeed.
+    /// @dev `whitelistEnabled` can be set via gateway InitParams at deployment, ensuring
+    ///      whitelist enforcement is active from block one with no follow-up setter call.
+    function test_gatewayInitializesWhitelistEnabledTrue() public {
+        // Deploy a fresh uninitialized gateway via the factory.
+        address freshGatewayAddr = gatewayFactory.deployGateway();
+        MantleVaultGateway freshGateway = MantleVaultGateway(freshGatewayAddr);
+
+        vm.prank(admin);
+        vm.expectEmit(false, false, false, true, freshGatewayAddr);
+        emit IMantleVaultGateway.WhitelistEnabledUpdated(true);
+        freshGateway.initialize(
+            IMantleVaultGateway.InitParams({
+                vault: address(vault),
+                sanctionsOracle: ISanctionsOracle(address(oracle)),
+                sanctionSafe: treasuryAddr,
+                admin: admin,
+                syncRedeemDisabled: false,
+                whitelistEnabled: true
+            })
+        );
+
+        assertTrue(freshGateway.whitelistEnabled());
+    }
+
     function test_gatewayMaxIgnoresWhitelistWhenDisabled() public view {
         // whitelistEnabled is false by default; alice is not whitelisted.
         assertFalse(gateway.whitelistEnabled());
