@@ -32,6 +32,7 @@ contract MockStrategyAdapter is IStrategyAdapter {
     bool public failAsync;
     bool public failRetry;
     bool public failEstimate;
+    bool public returnZeroEstimate;
     bool public failDepositCustomError;
     bool public failAsyncCustomError;
     bool public depositReturnZero;
@@ -67,6 +68,10 @@ contract MockStrategyAdapter is IStrategyAdapter {
 
     function setFailEstimate(bool e) external {
         failEstimate = e;
+    }
+
+    function setReturnZeroEstimate(bool z) external {
+        returnZeroEstimate = z;
     }
 
     function setFailRetry(bool r) external {
@@ -119,6 +124,7 @@ contract MockStrategyAdapter is IStrategyAdapter {
 
     function estimatePosAmount(uint256 assetAmount) external view returns (uint256 positionAmount) {
         if (failEstimate) revert("ESTIMATE_FAIL");
+        if (returnZeroEstimate) return 0;
         return assetAmount;
     }
 
@@ -1694,6 +1700,21 @@ contract StrategyControllerUnitTest is Test {
         assertEq(asyncAdapter.depositCount(), 1);
         assertEq(vault.inFlightIdCursor(), 2);
         assertEq(vault.investInFlightTotal(), 1_483_000_000);
+    }
+
+    function test_RebalanceInvestAsync_SkipsWhenPendingExistsAndEstimateReturnsZero() public {
+        _registerSingleAsyncStrategy();
+        vault.createInFlight(address(asyncAdapter), address(posToken), 400e18, 400e18, true);
+        asyncAdapter.setReturnZeroEstimate(true);
+        asset.mint(address(vault), 1_000e18);
+
+        vm.warp(2 hours);
+        vm.prank(address(executorGateway));
+        controller.rebalance();
+
+        assertEq(asyncAdapter.depositCount(), 0);
+        assertEq(vault.inFlightIdCursor(), 1);
+        assertEq(vault.investInFlightTotal(), 400e18);
     }
 
     function test_RebalanceInvestSync_StillInvestsWhenPendingDoesNotCoverFullShortfall() public {

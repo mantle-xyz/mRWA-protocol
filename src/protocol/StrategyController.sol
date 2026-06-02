@@ -868,22 +868,24 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
 
             if (pendingInvestPos > 0) {
                 // Compare pending coverage against the adapter's full shortfall, not this round's capped alloc.
-                // If estimation fails (returns 0 via fallback), skip deduction to avoid asset/pos unit mismatch.
                 uint256 estimatedPosForShortfall = _estimatePosAmount(adapter, shortfall, 0);
-                if (estimatedPosForShortfall > 0) {
-                    if (pendingInvestPos >= estimatedPosForShortfall) {
-                        emit InvestSkipped(adapter, originalAlloc, "");
-                        continue;
-                    }
+                if (estimatedPosForShortfall == 0) {
+                    emit InvestSkipped(adapter, originalAlloc, "");
+                    continue;
+                }
 
-                    // uncoveredShortfall = shortfall * (estimatedPos - pendingPos) / estimatedPos
-                    uint256 uncoveredShortfall =
-                        Math.mulDiv(shortfall, estimatedPosForShortfall - pendingInvestPos, estimatedPosForShortfall);
-                    alloc = uncoveredShortfall < remaining ? uncoveredShortfall : remaining;
-                    if (alloc == 0) {
-                        emit InvestSkipped(adapter, originalAlloc, "");
-                        continue;
-                    }
+                if (pendingInvestPos >= estimatedPosForShortfall) {
+                    emit InvestSkipped(adapter, originalAlloc, "");
+                    continue;
+                }
+
+                // uncoveredShortfall = shortfall * (estimatedPos - pendingPos) / estimatedPos
+                uint256 uncoveredShortfall =
+                    Math.mulDiv(shortfall, estimatedPosForShortfall - pendingInvestPos, estimatedPosForShortfall);
+                alloc = uncoveredShortfall < remaining ? uncoveredShortfall : remaining;
+                if (alloc == 0) {
+                    emit InvestSkipped(adapter, originalAlloc, "");
+                    continue;
                 }
             }
 
