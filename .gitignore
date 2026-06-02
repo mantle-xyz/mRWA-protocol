@@ -17,6 +17,9 @@ out/
 **/cache_forge/
 deployments/
 
+
+# Ops
+ops/
 # Docs
 docs/
 
