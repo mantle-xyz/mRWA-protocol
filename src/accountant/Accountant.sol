@@ -5,6 +5,7 @@ import {IMantleYieldVault} from "../interfaces/vault/IMantleYieldVault.sol";
 import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 
 /// @title Accountant
@@ -347,6 +348,9 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
     /// @dev Settle accrued management fees by minting vault shares to the treasury.
     ///      Uses min(currentSupply, lastSettleSupply) as the fee base to prevent
     ///      overcharging when share supply changes drastically between settlements.
+    ///      When fee shares are minted, atomically scales lastExchangeRate down by
+    ///      the exact dilution factor so deposits/redemptions executed before the
+    ///      next off-chain rate push transact at the post-fee NAV-per-share.
     function _settleManagementFee(AccountantStorage storage s) internal {
         uint256 timeElapsed = block.timestamp - s.lastFeeSettleTimestamp;
         if (timeElapsed == 0) return;
@@ -359,7 +363,15 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
         s.totalSharesLastSettle = currentTotalShares;
 
         if (sharesToMint > 0) {
+            uint256 oldRate = s.lastExchangeRate;
+            // Floor rounding: post-fee rate is rounded down, so the gap-period
+            // error favors remaining share holders over the marginal transactor.
+            uint256 newRate =
+                Math.mulDiv(oldRate, currentTotalShares, currentTotalShares + sharesToMint, Math.Rounding.Floor);
+            s.lastExchangeRate = newRate;
+
             s.vault.mintFeeShares(sharesToMint);
+            emit ExchangeRateUpdated(oldRate, newRate, block.timestamp);
             emit FeesDistributed(sharesToMint);
         }
     }
