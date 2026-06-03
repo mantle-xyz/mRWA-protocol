@@ -77,6 +77,7 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
     // =============================================================
 
     event ExchangeRateUpdated(uint256 oldRate, uint256 newRate, uint256 timestamp);
+    event ExchangeRateAdjustedForFee(uint256 oldRate, uint256 newRate, uint256 sharesMinted);
     event FeesDistributed(uint256 sharesMinted);
     event RiskParamsUpdated(uint256 maxDeviation, uint256 minInterval);
     event ManagementFeeRateUpdated(uint256 oldRate, uint256 newRate);
@@ -347,6 +348,9 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
     /// @dev Settle accrued management fees by minting vault shares to the treasury.
     ///      Uses min(currentSupply, lastSettleSupply) as the fee base to prevent
     ///      overcharging when share supply changes drastically between settlements.
+    ///      When fee shares are minted, atomically scales lastExchangeRate down by the
+    ///      exact dilution factor so deposits/redemptions in the gap before the next
+    ///      off-chain rate push transact at the post-fee NAV-per-share.
     function _settleManagementFee(AccountantStorage storage s) internal {
         uint256 timeElapsed = block.timestamp - s.lastFeeSettleTimestamp;
         if (timeElapsed == 0) return;
@@ -359,7 +363,12 @@ contract Accountant is AccessControlUpgradeable, PausableUpgradeable, Reentrancy
         s.totalSharesLastSettle = currentTotalShares;
 
         if (sharesToMint > 0) {
+            uint256 oldRate = s.lastExchangeRate;
+            uint256 newRate = (oldRate * currentTotalShares) / (currentTotalShares + sharesToMint);
+            s.lastExchangeRate = newRate;
+
             s.vault.mintFeeShares(sharesToMint);
+            emit ExchangeRateAdjustedForFee(oldRate, newRate, sharesToMint);
             emit FeesDistributed(sharesToMint);
         }
     }
