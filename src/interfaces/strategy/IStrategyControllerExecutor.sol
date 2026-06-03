@@ -7,11 +7,13 @@ interface IStrategyControllerExecutor {
         uint256[] inFlightIds;
         uint256[] settledPosAmounts;
         uint256[] refundAssetAmounts;
+        bool[] isAbnormal;
     }
 
     struct RedeemSettlementInput {
         uint256[] inFlightIds;
         uint256[] settledAssetAmounts;
+        bool[] isAbnormal;
     }
 
     function rebalance() external;
