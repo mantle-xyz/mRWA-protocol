@@ -7,6 +7,7 @@ import {IMantleYieldVault} from "../interfaces/vault/IMantleYieldVault.sol";
 import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import {Initializable} from "@openzeppelin/contracts/proxy/utils/Initializable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
@@ -51,6 +52,18 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
 
     modifier onlyOperatorExecutor() {
         _checkRole(OPERATOR_EXECUTOR_ROLE, msg.sender);
+        _;
+    }
+
+    /// @notice Block rate-dependent operator flows whenever the vault or accountant is paused.
+    /// @dev Pause on the accountant indicates the published rate is stale or under circuit-breaker;
+    ///      pause on the vault is the protocol-wide emergency stop. Both must allow operation.
+    modifier whenAccountantAndVaultNotPaused() {
+        if (Pausable(address(vault)).paused()) revert Controller__VaultPaused();
+        address accountantAddr = vault.accountant();
+        if (accountantAddr != address(0) && Pausable(accountantAddr).paused()) {
+            revert Controller__AccountantPaused();
+        }
         _;
     }
 
@@ -99,6 +112,8 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     error Controller__InvalidBps();
     error Controller__InvalidExecutorContract(address executor);
     error Controller__CooldownNotElapsed();
+    error Controller__VaultPaused();
+    error Controller__AccountantPaused();
     error Controller__InvalidStrategy(address adapter);
     error Controller__InvalidPriorityOrder(address adapter);
     error Controller__StrategyInactive(address adapter);
@@ -573,7 +588,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
      * @dev Invests when idealCash > targetCash + threshold; divests when idealCash + threshold < targetCash.
      *      Reverts if cooldown has not elapsed. Divest is blocked while pending redeem requests exist.
      */
-    function rebalance() external onlyOperatorExecutor nonReentrant {
+    function rebalance() external onlyOperatorExecutor nonReentrant whenAccountantAndVaultNotPaused {
         if (block.timestamp < uint256(lastRebalance) + uint256(rebalanceCooldown)) {
             revert Controller__CooldownNotElapsed();
         }
@@ -608,7 +623,12 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
      *      Reverts with DivestInsufficient only when adapter pool (step-aligned) is strictly below
      *      shortfall; partial fills due to step residual or below-min are tolerated.
      */
-    function processRedeemBatch(uint256[] calldata ids) external onlyOperatorExecutor nonReentrant {
+    function processRedeemBatch(uint256[] calldata ids)
+        external
+        onlyOperatorExecutor
+        nonReentrant
+        whenAccountantAndVaultNotPaused
+    {
         _validateSortedIds(ids);
 
         uint256 batchTotalAsset = _batchTotalBySharesAndRate(ids);
@@ -657,6 +677,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         external
         onlyOperatorExecutor
         nonReentrant
+        whenAccountantAndVaultNotPaused
     {
         _validateSortedIds(ids);
         _markBatchReady(ids, settledAssets);

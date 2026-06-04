@@ -190,9 +190,21 @@ contract MockStrategyAdapter is IStrategyAdapter {
     }
 }
 
+/// @dev Minimal mock that exposes `paused()` so the controller's
+///      `whenAccountantAndVaultNotPaused` modifier can be exercised.
+contract MockPausable {
+    bool public paused;
+
+    function setPaused(bool p) external {
+        paused = p;
+    }
+}
+
 contract MockControllerVault {
     ERC20 public immutable token;
     uint256 public mockedExchangeRate = 1e18;
+    bool public paused;
+    address public accountant;
 
     uint256 public locked;
     uint256 public investInFlightTotal;
@@ -233,6 +245,14 @@ contract MockControllerVault {
 
     function asset() external view returns (address) {
         return address(token);
+    }
+
+    function setPaused(bool p) external {
+        paused = p;
+    }
+
+    function setAccountant(address a) external {
+        accountant = a;
     }
 
     function setLocked(uint256 v) external {
@@ -2329,5 +2349,106 @@ contract StrategyControllerUnitTest is Test {
         vm.prank(manager);
         vm.expectRevert();
         controller.retryRedeemInFlight(address(syncAdapter), inFlightId, 50e18);
+    }
+
+    // ---------------------------------------------------------------------
+    // Vault / Accountant pause respect — covers the rate-dependent operator
+    // flows (rebalance / processRedeemBatch / finalizeRedeemBatch) so that
+    // stale-rate windows after a circuit-breaker trip or vault emergency
+    // halt cannot continue advancing redemption settlement.
+    // ---------------------------------------------------------------------
+
+    function test_Rebalance_RevertsWhenVaultPaused() public {
+        _registerSingleAsyncStrategy();
+        asset.mint(address(vault), 1_000e18);
+        vault.setPaused(true);
+
+        vm.warp(2 hours);
+        vm.prank(address(executorGateway));
+        vm.expectRevert(StrategyController.Controller__VaultPaused.selector);
+        controller.rebalance();
+    }
+
+    function test_Rebalance_RevertsWhenAccountantPaused() public {
+        _registerSingleAsyncStrategy();
+        asset.mint(address(vault), 1_000e18);
+        MockPausable acct = new MockPausable();
+        acct.setPaused(true);
+        vault.setAccountant(address(acct));
+
+        vm.warp(2 hours);
+        vm.prank(address(executorGateway));
+        vm.expectRevert(StrategyController.Controller__AccountantPaused.selector);
+        controller.rebalance();
+    }
+
+    function test_Rebalance_SkipsAccountantCheckWhenAccountantUnset() public {
+        _registerSingleAsyncStrategy();
+        asset.mint(address(vault), 1_000e18);
+        // vault.accountant() == address(0) by default — modifier short-circuits and the call proceeds.
+
+        vm.warp(2 hours);
+        vm.prank(address(executorGateway));
+        controller.rebalance();
+    }
+
+    function test_ProcessRedeemBatch_RevertsWhenVaultPaused() public {
+        _registerSingleAsyncStrategy();
+        vault.setRequest(1, 100e18, 0, IMantleYieldVault.RequestStatus.PENDING);
+        vault.setPaused(true);
+
+        uint256[] memory ids = new uint256[](1);
+        ids[0] = 1;
+
+        vm.prank(address(executorGateway));
+        vm.expectRevert(StrategyController.Controller__VaultPaused.selector);
+        controller.processRedeemBatch(ids);
+    }
+
+    function test_ProcessRedeemBatch_RevertsWhenAccountantPaused() public {
+        _registerSingleAsyncStrategy();
+        vault.setRequest(1, 100e18, 0, IMantleYieldVault.RequestStatus.PENDING);
+        MockPausable acct = new MockPausable();
+        acct.setPaused(true);
+        vault.setAccountant(address(acct));
+
+        uint256[] memory ids = new uint256[](1);
+        ids[0] = 1;
+
+        vm.prank(address(executorGateway));
+        vm.expectRevert(StrategyController.Controller__AccountantPaused.selector);
+        controller.processRedeemBatch(ids);
+    }
+
+    function test_FinalizeRedeemBatch_RevertsWhenVaultPaused() public {
+        _registerSingleAsyncStrategy();
+        vault.setRequest(1, 100e18, 0, IMantleYieldVault.RequestStatus.PROCESSING);
+        vault.setPaused(true);
+
+        uint256[] memory ids = new uint256[](1);
+        ids[0] = 1;
+        uint256[] memory settled = new uint256[](1);
+        settled[0] = 100e18;
+
+        vm.prank(address(executorGateway));
+        vm.expectRevert(StrategyController.Controller__VaultPaused.selector);
+        controller.finalizeRedeemBatch(ids, settled);
+    }
+
+    function test_FinalizeRedeemBatch_RevertsWhenAccountantPaused() public {
+        _registerSingleAsyncStrategy();
+        vault.setRequest(1, 100e18, 0, IMantleYieldVault.RequestStatus.PROCESSING);
+        MockPausable acct = new MockPausable();
+        acct.setPaused(true);
+        vault.setAccountant(address(acct));
+
+        uint256[] memory ids = new uint256[](1);
+        ids[0] = 1;
+        uint256[] memory settled = new uint256[](1);
+        settled[0] = 100e18;
+
+        vm.prank(address(executorGateway));
+        vm.expectRevert(StrategyController.Controller__AccountantPaused.selector);
+        controller.finalizeRedeemBatch(ids, settled);
     }
 }

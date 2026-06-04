@@ -44,6 +44,8 @@ contract MockSubRedManagementFlow is ISubRedManagement {
 contract MockVaultFlow {
     ERC20 public immutable stable;
     uint256 public mockedExchangeRate = 1e18;
+    bool public paused;
+    address public accountant;
 
     uint256 public lockedTotal;
     uint256 public investInFlightTotal;
