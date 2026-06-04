@@ -21,6 +21,14 @@ contract MockAsset is ERC20 {
     }
 }
 
+contract MockAccountantPause {
+    bool public paused;
+
+    function setPaused(bool paused_) external {
+        paused = paused_;
+    }
+}
+
 contract MockStrategyAdapter is IStrategyAdapter {
     address public immutable ASSET;
     address public immutable POS_TOKEN;
@@ -192,6 +200,7 @@ contract MockStrategyAdapter is IStrategyAdapter {
 
 contract MockControllerVault {
     ERC20 public immutable token;
+    address public accountant;
     uint256 public mockedExchangeRate = 1e18;
 
     uint256 public locked;
@@ -233,6 +242,10 @@ contract MockControllerVault {
 
     function asset() external view returns (address) {
         return address(token);
+    }
+
+    function setAccountant(address accountant_) external {
+        accountant = accountant_;
     }
 
     function setLocked(uint256 v) external {
@@ -471,6 +484,7 @@ contract StrategyControllerUnitTest is Test {
     MockAsset internal posToken;
     MockAsset internal asyncPosToken;
     MockControllerVault internal vault;
+    MockAccountantPause internal accountant;
     StrategyController internal controller;
     DummyExecutor internal executorGateway;
 
@@ -488,6 +502,8 @@ contract StrategyControllerUnitTest is Test {
         posToken = new MockAsset();
         asyncPosToken = new MockAsset();
         vault = new MockControllerVault(address(asset));
+        accountant = new MockAccountantPause();
+        vault.setAccountant(address(accountant));
         executorGateway = new DummyExecutor();
 
         StrategyController implementation = new StrategyController();
@@ -561,6 +577,10 @@ contract StrategyControllerUnitTest is Test {
 
     function _errorData(string memory reason) internal pure returns (bytes memory) {
         return abi.encodeWithSelector(bytes4(keccak256("Error(string)")), reason);
+    }
+
+    function _accountantPausedError() internal pure returns (bytes4) {
+        return bytes4(keccak256("Controller__AccountantPaused()"));
     }
 
     function _customErrorData(bytes4 selector, uint256 value) internal pure returns (bytes memory) {
@@ -981,6 +1001,18 @@ contract StrategyControllerUnitTest is Test {
         assertTrue(shouldRebalance);
         assertEq(action, controller.REBALANCE_ACTION_INVEST());
         assertEq(amount, 900e18);
+    }
+
+    function test_PreviewRebalance_ReturnsNoneWhenAccountantPaused() public {
+        asset.mint(address(vault), 1_000e18);
+        accountant.setPaused(true);
+
+        vm.warp(2 hours);
+        (bool shouldRebalance, uint8 action, uint256 amount) = controller.previewRebalance();
+
+        assertFalse(shouldRebalance);
+        assertEq(action, controller.REBALANCE_ACTION_NONE());
+        assertEq(amount, 0);
     }
 
     function test_PreviewRebalance_InvestAmountCapsToFreeCash() public {
@@ -2303,6 +2335,71 @@ contract StrategyControllerUnitTest is Test {
         (,,,,,, bool isInvest,, IMantleYieldVault.InFlightStatus status) = vault.inFlightRecords(inFlightId);
         assertFalse(isInvest);
         assertEq(uint8(status), uint8(IMantleYieldVault.InFlightStatus.PENDING));
+    }
+
+    function test_accountantPaused_rebalance_reverts() public {
+        accountant.setPaused(true);
+
+        vm.prank(address(executorGateway));
+        vm.expectRevert(_accountantPausedError());
+        controller.rebalance();
+    }
+
+    function test_accountantPaused_processRedeemBatch_reverts() public {
+        accountant.setPaused(true);
+
+        vm.prank(address(executorGateway));
+        vm.expectRevert(_accountantPausedError());
+        controller.processRedeemBatch(_toSingletonArray(1));
+    }
+
+    function test_accountantPaused_finalizeRedeemBatch_reverts() public {
+        accountant.setPaused(true);
+
+        vm.prank(address(executorGateway));
+        vm.expectRevert(_accountantPausedError());
+        controller.finalizeRedeemBatch(_toSingletonArray(1), _toSingletonArray(1));
+    }
+
+    function test_accountantPaused_settleAdapter_reverts() public {
+        accountant.setPaused(true);
+
+        vm.prank(address(executorGateway));
+        vm.expectRevert(_accountantPausedError());
+        controller.settleAdapter(
+            address(asyncAdapter),
+            _investSettlement(new uint256[](0), new uint256[](0), new uint256[](0)),
+            _redeemSettlement(new uint256[](0), new uint256[](0))
+        );
+    }
+
+    function test_accountantPaused_settleAdapters_reverts() public {
+        accountant.setPaused(true);
+
+        address[] memory adapters = new address[](1);
+        adapters[0] = address(asyncAdapter);
+        IStrategyControllerExecutor.InvestSettlementInput[] memory investBatch =
+            new IStrategyControllerExecutor.InvestSettlementInput[](1);
+        investBatch[0] = _investSettlement(new uint256[](0), new uint256[](0), new uint256[](0));
+        IStrategyControllerExecutor.RedeemSettlementInput[] memory redeemBatch =
+            new IStrategyControllerExecutor.RedeemSettlementInput[](1);
+        redeemBatch[0] = _redeemSettlement(new uint256[](0), new uint256[](0));
+
+        vm.prank(address(executorGateway));
+        vm.expectRevert(_accountantPausedError());
+        controller.settleAdapters(adapters, investBatch, redeemBatch);
+    }
+
+    function test_retryRedeemInFlight_notBlockedByAccountantPaused() public {
+        _registerSingleAsyncStrategy();
+        uint256 inFlightId = vault.createInFlight(address(asyncAdapter), address(posToken), 50e18, 100e18, false);
+        accountant.setPaused(true);
+
+        vm.prank(manager);
+        controller.retryRedeemInFlight(address(asyncAdapter), inFlightId, 30e18);
+
+        assertEq(asyncAdapter.retryCount(), 1);
+        assertEq(asyncAdapter.lastRetryPosAmount(), 30e18);
     }
 
     function test_RevertWhen_RetryRedeemInFlight_PosAmountExceedsOriginalTokenAmount() public {

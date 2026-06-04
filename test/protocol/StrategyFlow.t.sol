@@ -26,6 +26,14 @@ contract MockSTTokenFlow is ERC20 {
     }
 }
 
+contract MockAccountantFlow {
+    bool public paused;
+
+    function setPaused(bool paused_) external {
+        paused = paused_;
+    }
+}
+
 contract MockSubRedManagementFlow is ISubRedManagement {
     address public lastStToken;
     uint256 public lastAmount;
@@ -43,6 +51,7 @@ contract MockSubRedManagementFlow is ISubRedManagement {
 
 contract MockVaultFlow {
     ERC20 public immutable stable;
+    address public accountant;
     uint256 public mockedExchangeRate = 1e18;
 
     uint256 public lockedTotal;
@@ -79,6 +88,10 @@ contract MockVaultFlow {
 
     function asset() external view returns (address) {
         return address(stable);
+    }
+
+    function setAccountant(address accountant_) external {
+        accountant = accountant_;
     }
 
     function deposit(uint256 amount) external {
@@ -303,6 +316,7 @@ contract MockVaultFlow {
 contract StrategyFlowTest is Test {
     MockStableFlow internal stable;
     MockVaultFlow internal vault;
+    MockAccountantFlow internal accountant;
     StrategyController internal controller;
     MockSubRedManagementFlow internal subRedISNR;
     MockSubRedManagementFlow internal subRedUMINT;
@@ -317,6 +331,8 @@ contract StrategyFlowTest is Test {
     function setUp() public {
         stable = new MockStableFlow();
         vault = new MockVaultFlow(address(stable));
+        accountant = new MockAccountantFlow();
+        vault.setAccountant(address(accountant));
         StrategyController implementation = new StrategyController();
         bytes memory initData = abi.encodeCall(
             StrategyController.initialize, (address(vault), address(this), address(this), address(this), 0, 0, 0)
