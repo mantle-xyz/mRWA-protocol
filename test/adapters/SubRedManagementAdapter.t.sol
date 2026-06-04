@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import {AccountantExecutor} from "../../src/accountant/AccountantExecutor.sol";
 import {SubRedManagementAdapter} from "../../src/adapters/digift/SubRedManagementAdapter.sol";
 import {ISubRedManagement} from "../../src/interfaces/adapters/digift/ISubRedManagement.sol";
 import {MockDFeedPriceOracle} from "../../src/mocks/strategy/MockDFeedPriceOracle.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {Test} from "forge-std/Test.sol";
 import {Vm} from "forge-std/Vm.sol";
@@ -371,6 +373,35 @@ contract SubRedManagementAdapterTest is Test {
     function test_GetPosTokenPrice_UsesManualWhenNoOracleConfigured() public {
         adapter.setManualPosTokenPrice(4e18);
         assertEq(adapter.getPosTokenPrice(), 4e18);
+    }
+
+    /// @dev Real relay path: AccountantExecutor (not an EOA stand-in) holds
+    ///      ACCOUNTANT_EXECUTOR_ROLE on the adapter and must be able to update
+    ///      the manual price via executeSetManualPosTokenPrice.
+    function test_SetManualPosTokenPrice_ViaRealAccountantExecutor() public {
+        address admin = makeAddr("admin");
+        address bot = makeAddr("bot");
+
+        AccountantExecutor execImpl = new AccountantExecutor();
+        AccountantExecutor executor = AccountantExecutor(
+            address(new ERC1967Proxy(address(execImpl), abi.encodeCall(AccountantExecutor.initialize, (admin))))
+        );
+        bytes32 botRole = executor.BOT_ROLE();
+        vm.prank(admin);
+        executor.grantRole(botRole, bot);
+
+        SubRedManagementAdapter realWiredAdapter = new SubRedManagementAdapter(
+            address(vault), address(subRed), address(stToken), admin, admin, address(executor), address(0)
+        );
+
+        vm.prank(bot);
+        executor.executeSetManualPosTokenPrice(address(realWiredAdapter), 4e18);
+        assertEq(realWiredAdapter.getPosTokenPrice(), 4e18);
+
+        // Direct call from admin must still fail: only the executor holds the role.
+        vm.expectRevert();
+        vm.prank(admin);
+        realWiredAdapter.setManualPosTokenPrice(5e18);
     }
 
     function test_PreviewDeposit_FloorsToIncrement() public {

@@ -2,13 +2,14 @@
 pragma solidity ^0.8.24;
 
 import {IAccountant} from "../interfaces/accountant/IAccountant.sol";
+import {IStrategyAdapterCore} from "../interfaces/adapters/IStrategyAdapterCore.sol";
 import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
 /// @title AccountantExecutor
-/// @notice Authorized relay for Accountant.updateExchangeRate.
-///         BOT_ROLE can trigger exchange rate updates, and FEE_SETTLER_ROLE can
-///         trigger management fee settlement.
+/// @notice Authorized relay for Accountant operations and adapter manual price updates.
+///         BOT_ROLE can trigger exchange rate updates and adapter manual price
+///         updates, and FEE_SETTLER_ROLE can trigger management fee settlement.
 ///         DEFAULT_ADMIN_ROLE manages executor role membership and authorizes upgrades.
 contract AccountantExecutor is AccessControlUpgradeable, UUPSUpgradeable {
     // =============================================================
@@ -25,6 +26,7 @@ contract AccountantExecutor is AccessControlUpgradeable, UUPSUpgradeable {
     event RateUpdateExecuted(address indexed executor, uint256 newRate, uint256 computeTimestamp);
     event ManagementFeeSettled(address indexed executor, address indexed accountant);
     event AccountantPaused(address indexed accountant);
+    event ManualPosTokenPriceSet(address indexed executor, address indexed adapter, uint256 priceE18);
     // =============================================================
     //                       CUSTOM ERRORS
     // =============================================================
@@ -73,6 +75,17 @@ contract AccountantExecutor is AccessControlUpgradeable, UUPSUpgradeable {
         if (accountant_ == address(0)) revert AccountantExecutor__ZeroAddress();
         IAccountant(accountant_).settleManagementFee();
         emit ManagementFeeSettled(msg.sender, accountant_);
+    }
+
+    /// @notice Set the manual position-token price on an adapter (1e18 precision).
+    /// @dev Relay for adapters running in manual-price mode (no oracle configured).
+    ///      The adapter itself rejects the call when an oracle is set.
+    /// @param adapter_ The adapter contract to call
+    /// @param priceE18 New manual price in 1e18 precision; 0 clears the manual override
+    function executeSetManualPosTokenPrice(address adapter_, uint256 priceE18) external onlyRole(BOT_ROLE) {
+        if (adapter_ == address(0)) revert AccountantExecutor__ZeroAddress();
+        IStrategyAdapterCore(adapter_).setManualPosTokenPrice(priceE18);
+        emit ManualPosTokenPriceSet(msg.sender, adapter_, priceE18);
     }
 
     // =============================================================

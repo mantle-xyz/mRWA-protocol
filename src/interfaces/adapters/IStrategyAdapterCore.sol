@@ -23,4 +23,7 @@ interface IStrategyAdapterCore {
     function deposit(uint256 amount, address receiver) external returns (uint256 sharesOrPos);
     function sweepToVault(address token, uint256 amount) external returns (uint256 claimed);
     function setPaused(bool paused) external;
+    /// @notice Set manual position-token price (1e18 precision). Set to 0 to clear manual override.
+    /// @dev Only callable when no oracle is configured. Gated by ACCOUNTANT_EXECUTOR_ROLE.
+    function setManualPosTokenPrice(uint256 priceE18) external;
 }

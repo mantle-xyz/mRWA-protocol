@@ -100,6 +100,8 @@ contract MockStrategyAdapter is IStrategyAdapter {
         return 1e18;
     }
 
+    function setManualPosTokenPrice(uint256) external override {}
+
     function estimatePosAmount(uint256 assetAmount) external pure override returns (uint256) {
         return assetAmount;
     }
