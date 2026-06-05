@@ -35,6 +35,8 @@ contract MockStrategyAdapter is IStrategyAdapter {
     bool public failDepositCustomError;
     bool public failAsyncCustomError;
     bool public depositReturnZero;
+    bool public failPreviewDeposit;
+    bool public failPreviewRedeem;
 
     uint256 public depositCount;
     uint256 public withdrawCount;
@@ -85,6 +87,14 @@ contract MockStrategyAdapter is IStrategyAdapter {
         depositReturnZero = z;
     }
 
+    function setFailPreviewDeposit(bool f) external {
+        failPreviewDeposit = f;
+    }
+
+    function setFailPreviewRedeem(bool f) external {
+        failPreviewRedeem = f;
+    }
+
     function setSweepReturnAmount(uint256 amount_) external {
         sweepReturnAmount = amount_;
         useSweepReturnAmount = true;
@@ -124,17 +134,19 @@ contract MockStrategyAdapter is IStrategyAdapter {
 
     function previewDeposit(uint256 assetAmount)
         external
-        pure
+        view
         returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
     {
+        if (failPreviewDeposit) revert("PREVIEW_DEPOSIT_FAIL");
         return (assetAmount > 0, assetAmount, 0);
     }
 
     function previewRedeem(uint256 assetAmount)
         external
-        pure
+        view
         returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
     {
+        if (failPreviewRedeem) revert("PREVIEW_REDEEM_FAIL");
         return (assetAmount > 0, assetAmount, 0);
     }
 
@@ -1278,6 +1290,64 @@ contract StrategyControllerUnitTest is Test {
             abi.encodeWithSelector(StrategyController.Controller__DivestInsufficient.selector, 100e18, 50e18)
         );
         controller.processRedeemBatch(ids);
+    }
+
+    // ---------------------------------------------------------------------
+    // Issue #51: a reverting previewDeposit/previewRedeem must not DoS the
+    // rebalancer or redemption processing. A reverting preview is isolated
+    // exactly like the state-changing adapter calls: the adapter is skipped
+    // (DivestSkipped/InvestSkipped with revert data) and the loop continues.
+    // ---------------------------------------------------------------------
+
+    function test_RebalanceInvest_EmitsInvestSkipped_OnPreviewDepositRevert() public {
+        // Without the fix the unguarded previewDeposit reverts the whole
+        // rebalance(); with it, the adapter is skipped and rebalance completes.
+        _registerSingleSyncStrategy();
+        asset.mint(address(vault), 1_000e18);
+        syncAdapter.setFailPreviewDeposit(true);
+
+        vm.recordLogs();
+        vm.warp(2 hours);
+        vm.prank(address(executorGateway));
+        controller.rebalance();
+
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        _assertSkippedLog(
+            logs, INVEST_SKIPPED_EVENT_SIG, address(syncAdapter), 900e18, _errorData("PREVIEW_DEPOSIT_FAIL")
+        );
+        // Reverting adapter did not deposit, and rebalance did not revert.
+        assertEq(syncAdapter.depositCount(), 0);
+    }
+
+    function test_ProcessRedeemBatch_PreviewRedeemRevert_SkipsAndHealsViaNextAdapter() public {
+        // sync (priority 1, first in order) reverts in previewRedeem; async
+        // (priority 2) is healthy and covers the full shortfall. Without the
+        // fix sync's revert bubbles up and DoSes the whole batch before async
+        // is ever reached. With it, sync is skipped and async clears the batch.
+        _registerTwoStrategies();
+        syncAdapter.setTotalValue(700e18);
+        asyncAdapter.setTotalValue(1_000e18);
+        syncAdapter.setFailPreviewRedeem(true);
+
+        uint256[] memory ids = new uint256[](1);
+        ids[0] = 1;
+        vault.setRequest(1, 700e18, 0, IMantleYieldVault.RequestStatus.PENDING);
+        vault.setLocked(700e18); // cashDeficit = shortfall = 700
+
+        vm.recordLogs();
+        vm.prank(address(executorGateway));
+        controller.processRedeemBatch(ids);
+
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        _assertSkippedLog(
+            logs, DIVEST_SKIPPED_EVENT_SIG, address(syncAdapter), 700e18, _errorData("PREVIEW_REDEEM_FAIL")
+        );
+        // Failing adapter skipped, healthy adapter cleared the shortfall.
+        assertEq(syncAdapter.withdrawCount(), 0);
+        assertEq(asyncAdapter.asyncCount(), 1);
+        // Request advanced to PROCESSING (batch was not DoS'd).
+        (,,,,,,, IMantleYieldVault.RequestStatus status) = vault.requests(1);
+        assertEq(uint8(status), uint8(IMantleYieldVault.RequestStatus.PROCESSING));
     }
 
     function test_RevertWhen_ProcessRedeemBatchIdsNotSorted() public {

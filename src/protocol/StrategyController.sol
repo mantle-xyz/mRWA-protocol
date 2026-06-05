@@ -887,7 +887,20 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
                 }
             }
 
-            (bool ok, uint256 executableAsset, uint256 expectedPos) = IStrategyAdapter(adapter).previewDeposit(alloc);
+            // Isolate the preview view-call like every other adapter interaction:
+            // a reverting adapter (oracle/decimals revert, malicious override) is
+            // skipped instead of reverting the whole rebalance(). See issue #51.
+            bool ok;
+            uint256 executableAsset;
+            uint256 expectedPos;
+            try IStrategyAdapter(adapter).previewDeposit(alloc) returns (bool ok_, uint256 exec_, uint256 pos_) {
+                ok = ok_;
+                executableAsset = exec_;
+                expectedPos = pos_;
+            } catch (bytes memory revertData) {
+                emit InvestSkipped(adapter, alloc, revertData);
+                continue;
+            }
             if (!ok || executableAsset == 0) {
                 emit InvestSkipped(adapter, alloc, "");
                 continue;
@@ -931,8 +944,20 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
             }
 
             // Preview validates step constraints and returns adjusted amounts.
-            (bool redeemOk, uint256 executableRedeem, uint256 redeemPosAmount) =
-                IStrategyAdapter(adapter).previewRedeem(requestAsset);
+            // Isolate the preview view-call like every other adapter interaction:
+            // a reverting adapter (oracle/decimals revert, malicious override) is
+            // skipped instead of reverting rebalance()/processRedeemBatch(). See issue #51.
+            bool redeemOk;
+            uint256 executableRedeem;
+            uint256 redeemPosAmount;
+            try IStrategyAdapter(adapter).previewRedeem(requestAsset) returns (bool ok_, uint256 exec_, uint256 pos_) {
+                redeemOk = ok_;
+                executableRedeem = exec_;
+                redeemPosAmount = pos_;
+            } catch (bytes memory revertData) {
+                emit DivestSkipped(adapter, requestAsset, revertData);
+                continue;
+            }
             if (!redeemOk || executableRedeem == 0) {
                 emit DivestSkipped(adapter, requestAsset, "");
                 continue;
