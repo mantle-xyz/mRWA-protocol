@@ -32,6 +32,8 @@ abstract contract BaseAdapterUpgradeable is
     bytes32 public constant CONTROLLER_ROLE = keccak256("CONTROLLER_ROLE");
     bytes32 public constant ACCOUNTANT_EXECUTOR_ROLE = keccak256("ACCOUNTANT_EXECUTOR_ROLE");
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
+    uint16 public constant DEFAULT_MAX_MANUAL_PRICE_DEVIATION_BPS = 1000; // 10%
+    uint16 public constant MAX_MANUAL_PRICE_DEVIATION_CEILING = 3000; // 30%
 
     // =============================================================
     //                  ERC-7201 NAMESPACED STORAGE
@@ -43,6 +45,7 @@ abstract contract BaseAdapterUpgradeable is
         address vault;
         address priceOracle;
         uint256 manualPosTokenPrice;
+        uint16 maxManualPriceDeviationBps;
     }
 
     /// @dev keccak256(abi.encode(uint256(keccak256("mrwa.storage.BaseAdapter")) - 1)) & ~bytes32(uint256(0xff))
@@ -65,12 +68,18 @@ abstract contract BaseAdapterUpgradeable is
     error Unsupported();
     error SweepProtectedToken(address token);
     error InvalidToken(address token);
+    error InvalidManualPrice();
+    error InvalidManualPriceDeviation(uint256 bps);
+    error ManualPriceDeviationExceeded(
+        uint256 oldPriceE18, uint256 newPriceE18, uint256 deviationBps, uint256 maxDeviationBps
+    );
 
     // =============================================================
     //                          EVENTS
     // =============================================================
 
     event ManualPosTokenPriceUpdated(uint256 oldPriceE18, uint256 newPriceE18, address indexed updater);
+    event MaxManualPriceDeviationBpsUpdated(uint16 oldBps, uint16 newBps, address indexed updater);
     event PriceOracleUpdated(address indexed oldOracle, address indexed newOracle, address indexed updater);
 
     // =============================================================
@@ -126,6 +135,7 @@ abstract contract BaseAdapterUpgradeable is
         s.vault = vault_;
         s.asset = IERC20(IMantleYieldVault(vault_).asset());
         s.priceOracle = priceOracle_;
+        s.maxManualPriceDeviationBps = DEFAULT_MAX_MANUAL_PRICE_DEVIATION_BPS;
 
         if (address(s.asset) == address(0)) {
             revert InvalidAddress();
@@ -204,6 +214,11 @@ abstract contract BaseAdapterUpgradeable is
         return _getBaseAdapterStorage().priceOracle;
     }
 
+    function maxManualPriceDeviationBps() public view returns (uint16) {
+        uint16 configured = _getBaseAdapterStorage().maxManualPriceDeviationBps;
+        return configured == 0 ? DEFAULT_MAX_MANUAL_PRICE_DEVIATION_BPS : configured;
+    }
+
     // =============================================================
     //                       CORE ACTIONS
     // =============================================================
@@ -243,15 +258,39 @@ abstract contract BaseAdapterUpgradeable is
         emit AdapterPaused(address(this), paused_);
     }
 
-    /// @notice Set manual position-token price (1e18 precision). Set to 0 to clear manual override.
+    /// @notice Set manual position-token price (1e18 precision).
+    /// @dev The first nonzero price initializes manual pricing; later updates are bounded by maxManualPriceDeviationBps.
     function setManualPosTokenPrice(uint256 priceE18) external virtual onlyAccountantExecutor {
         BaseAdapterStorage storage s = _getBaseAdapterStorage();
         if (s.priceOracle != address(0)) {
             revert Unsupported();
         }
+        if (priceE18 == 0) {
+            revert InvalidManualPrice();
+        }
         uint256 oldPrice = s.manualPosTokenPrice;
+        if (oldPrice > 0) {
+            uint256 delta = priceE18 > oldPrice ? priceE18 - oldPrice : oldPrice - priceE18;
+            uint256 maxDeviation = maxManualPriceDeviationBps();
+            uint256 deviationBps = Math.mulDiv(delta, 10_000, oldPrice, Math.Rounding.Ceil);
+            if (deviationBps > maxDeviation) {
+                revert ManualPriceDeviationExceeded(oldPrice, priceE18, deviationBps, maxDeviation);
+            }
+        }
         s.manualPosTokenPrice = priceE18;
         emit ManualPosTokenPriceUpdated(oldPrice, priceE18, msg.sender);
+    }
+
+    /// @notice Update the max allowed per-call manual price deviation.
+    function setMaxManualPriceDeviationBps(uint16 newBps) external onlyAdmin {
+        if (newBps == 0 || newBps > MAX_MANUAL_PRICE_DEVIATION_CEILING) {
+            revert InvalidManualPriceDeviation(newBps);
+        }
+
+        BaseAdapterStorage storage s = _getBaseAdapterStorage();
+        uint16 oldBps = maxManualPriceDeviationBps();
+        s.maxManualPriceDeviationBps = newBps;
+        emit MaxManualPriceDeviationBpsUpdated(oldBps, newBps, msg.sender);
     }
 
     /// @notice Update oracle address. Set to address(0) to disable oracle and use manual pricing.

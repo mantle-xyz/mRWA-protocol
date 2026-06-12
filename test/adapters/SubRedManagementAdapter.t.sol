@@ -340,7 +340,7 @@ contract SubRedManagementAdapterTest is Test {
     }
 
     function test_GetPosTokenPrice_DoesNotFallbackToManualWhenOracleConfigured() public {
-        adapter.setManualPosTokenPrice(4e18);
+        adapter.setManualPosTokenPrice(1.04e18);
         adapter.setPriceOracle(address(oracle));
         oracle.setPrice(0);
 
@@ -348,7 +348,7 @@ contract SubRedManagementAdapterTest is Test {
     }
 
     function test_GetPosTokenPrice_ReturnsZeroWhenOracleNormalizesToZero() public {
-        adapter.setManualPosTokenPrice(4e18);
+        adapter.setManualPosTokenPrice(1.04e18);
         oracle.setDecimals(20);
         oracle.setPrice(1);
         adapter.setPriceOracle(address(oracle));
@@ -364,6 +364,45 @@ contract SubRedManagementAdapterTest is Test {
         adapterWithOracle.setManualPosTokenPrice(5e18);
     }
 
+    function test_SetManualPosTokenPrice_AllowsWithinDefaultDeviation() public {
+        adapter.setManualPosTokenPrice(1.1e18);
+        assertEq(adapter.getPosTokenPrice(), 1.1e18);
+    }
+
+    function test_RevertWhen_SetManualPosTokenPrice_ExceedsDefaultDeviation() public {
+        vm.expectRevert();
+        adapter.setManualPosTokenPrice(1.11e18);
+    }
+
+    function test_RevertWhen_SetManualPosTokenPrice_FractionallyExceedsDefaultDeviation() public {
+        vm.expectRevert();
+        adapter.setManualPosTokenPrice(1.1e18 + 1);
+    }
+
+    function test_RevertWhen_SetManualPosTokenPrice_Zero() public {
+        vm.expectRevert();
+        adapter.setManualPosTokenPrice(0);
+    }
+
+    function test_SetMaxManualPriceDeviationBps_AllowsAdminToRelaxWithinCeiling() public {
+        adapter.setMaxManualPriceDeviationBps(3000);
+        assertEq(adapter.maxManualPriceDeviationBps(), 3000);
+
+        adapter.setManualPosTokenPrice(1.3e18);
+        assertEq(adapter.getPosTokenPrice(), 1.3e18);
+    }
+
+    function test_RevertWhen_SetMaxManualPriceDeviationBps_ExceedsCeiling() public {
+        vm.expectRevert();
+        adapter.setMaxManualPriceDeviationBps(3001);
+    }
+
+    function test_RevertWhen_SetMaxManualPriceDeviationBps_ByUnauthorized() public {
+        vm.prank(other);
+        vm.expectRevert();
+        adapter.setMaxManualPriceDeviationBps(3000);
+    }
+
     function test_SetManualPosTokenPrice_AfterDisablingOracle() public {
         adapterWithOracle.setPriceOracle(address(0));
         adapterWithOracle.setManualPosTokenPrice(4e18);
@@ -371,8 +410,8 @@ contract SubRedManagementAdapterTest is Test {
     }
 
     function test_GetPosTokenPrice_UsesManualWhenNoOracleConfigured() public {
-        adapter.setManualPosTokenPrice(4e18);
-        assertEq(adapter.getPosTokenPrice(), 4e18);
+        adapter.setManualPosTokenPrice(1.04e18);
+        assertEq(adapter.getPosTokenPrice(), 1.04e18);
     }
 
     /// @dev Real relay path: AccountantExecutor (not an EOA stand-in) holds

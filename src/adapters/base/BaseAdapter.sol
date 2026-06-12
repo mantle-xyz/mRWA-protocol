@@ -18,19 +18,28 @@ abstract contract BaseAdapter is IStrategyAdapter, AccessControl, ReentrancyGuar
     bytes32 public constant CONTROLLER_ROLE = keccak256("CONTROLLER_ROLE");
     bytes32 public constant ACCOUNTANT_EXECUTOR_ROLE = keccak256("ACCOUNTANT_EXECUTOR_ROLE");
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
+    uint16 public constant DEFAULT_MAX_MANUAL_PRICE_DEVIATION_BPS = 1000; // 10%
+    uint16 public constant MAX_MANUAL_PRICE_DEVIATION_CEILING = 3000; // 30%
 
     IERC20 public immutable ASSET;
     address public immutable VAULT;
     address public priceOracle;
     uint256 public manualPosTokenPrice;
+    uint16 public maxManualPriceDeviationBps;
 
     error Adapter__InvalidAmount();
     error Adapter__InvalidAddress();
     error Adapter__Unsupported();
     error Adapter__SweepProtectedToken(address token);
     error Adapter__InvalidToken(address token);
+    error Adapter__InvalidManualPrice();
+    error Adapter__InvalidManualPriceDeviation(uint256 bps);
+    error Adapter__ManualPriceDeviationExceeded(
+        uint256 oldPriceE18, uint256 newPriceE18, uint256 deviationBps, uint256 maxDeviationBps
+    );
 
     event ManualPosTokenPriceUpdated(uint256 oldPriceE18, uint256 newPriceE18, address indexed updater);
+    event MaxManualPriceDeviationBpsUpdated(uint16 oldBps, uint16 newBps, address indexed updater);
     event PriceOracleUpdated(address indexed oldOracle, address indexed newOracle, address indexed updater);
 
     modifier onlyAdmin() {
@@ -64,6 +73,7 @@ abstract contract BaseAdapter is IStrategyAdapter, AccessControl, ReentrancyGuar
         VAULT = vault_;
         ASSET = IERC20(IMantleYieldVault(vault_).asset());
         priceOracle = priceOracle_;
+        maxManualPriceDeviationBps = DEFAULT_MAX_MANUAL_PRICE_DEVIATION_BPS;
         if (address(ASSET) == address(0)) {
             revert Adapter__InvalidAddress();
         }
@@ -173,14 +183,36 @@ abstract contract BaseAdapter is IStrategyAdapter, AccessControl, ReentrancyGuar
         emit AdapterPaused(address(this), paused_);
     }
 
-    /// @notice Set manual position-token price (1e18 precision). Set to 0 to clear manual override.
+    /// @notice Set manual position-token price (1e18 precision).
+    /// @dev The first nonzero price initializes manual pricing; later updates are bounded by maxManualPriceDeviationBps.
     function setManualPosTokenPrice(uint256 priceE18) external virtual onlyAccountantExecutor {
-        if (priceOracle != address(0)) {
-            revert Adapter__Unsupported();
-        }
+        if (priceOracle != address(0)) revert Adapter__Unsupported();
+        if (priceE18 == 0) revert Adapter__InvalidManualPrice();
+
         uint256 oldPrice = manualPosTokenPrice;
+        if (oldPrice > 0) {
+            uint256 delta = priceE18 > oldPrice ? priceE18 - oldPrice : oldPrice - priceE18;
+            uint256 deviationBps = Math.mulDiv(delta, 10_000, oldPrice, Math.Rounding.Ceil);
+            if (deviationBps > maxManualPriceDeviationBps) {
+                revert Adapter__ManualPriceDeviationExceeded(
+                    oldPrice, priceE18, deviationBps, maxManualPriceDeviationBps
+                );
+            }
+        }
+
         manualPosTokenPrice = priceE18;
         emit ManualPosTokenPriceUpdated(oldPrice, priceE18, msg.sender);
+    }
+
+    /// @notice Update the max allowed per-call manual price deviation.
+    function setMaxManualPriceDeviationBps(uint16 newBps) external onlyAdmin {
+        if (newBps == 0 || newBps > MAX_MANUAL_PRICE_DEVIATION_CEILING) {
+            revert Adapter__InvalidManualPriceDeviation(newBps);
+        }
+
+        uint16 oldBps = maxManualPriceDeviationBps;
+        maxManualPriceDeviationBps = newBps;
+        emit MaxManualPriceDeviationBpsUpdated(oldBps, newBps, msg.sender);
     }
 
     /// @notice Update oracle address. Set to address(0) to disable oracle and use manual pricing.

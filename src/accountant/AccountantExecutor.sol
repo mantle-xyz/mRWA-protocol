@@ -81,7 +81,7 @@ contract AccountantExecutor is AccessControlUpgradeable, UUPSUpgradeable {
     /// @dev Relay for adapters running in manual-price mode (no oracle configured).
     ///      The adapter itself rejects the call when an oracle is set.
     /// @param adapter_ The adapter contract to call
-    /// @param priceE18 New manual price in 1e18 precision; 0 clears the manual override
+    /// @param priceE18 New nonzero manual price in 1e18 precision
     function executeSetManualPosTokenPrice(address adapter_, uint256 priceE18) external onlyRole(BOT_ROLE) {
         if (adapter_ == address(0)) revert AccountantExecutor__ZeroAddress();
         IStrategyAdapterCore(adapter_).setManualPosTokenPrice(priceE18);
