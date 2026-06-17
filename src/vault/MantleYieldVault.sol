@@ -147,9 +147,7 @@ contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultA
     }
 
     function previewWithdraw(uint256 assets) public view override(ERC4626Upgradeable, IERC4626) returns (uint256) {
-        if (redemptionFeeBps >= FEE_BASIS) return type(uint256).max;
-        uint256 grossAssets = assets.mulDiv(FEE_BASIS, FEE_BASIS - redemptionFeeBps, Math.Rounding.Ceil);
-        return _convertToShares(grossAssets, Math.Rounding.Ceil);
+        revert Vault__NotAuthorized();
     }
 
     function maxDeposit(address) public view override(ERC4626Upgradeable, IERC4626) returns (uint256) {
