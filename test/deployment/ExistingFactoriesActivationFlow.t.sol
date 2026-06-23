@@ -123,6 +123,13 @@ contract ExistingFactoriesActivationFlowTest is Test {
         assertTrue(controller.hasRole(controller.PAUSER_ROLE(), pauser));
         assertTrue(vault.hasRole(vault.CAP_MANAGER_ROLE(), capManager));
         assertEq(adapter.vault(), vaultProxy);
+        assertEq(adapter.maxManualPriceDeviationBps(), 1000);
+
+        vm.prank(accountantExecutor);
+        adapter.setManualPosTokenPrice(1e18);
+        vm.expectRevert();
+        vm.prank(accountantExecutor);
+        adapter.setManualPosTokenPrice(2e18);
     }
 
     function test_RequireNonZeroReportsEnvName() public {

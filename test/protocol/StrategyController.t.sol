@@ -130,6 +130,8 @@ contract MockStrategyAdapter is IStrategyAdapter {
         return 0;
     }
 
+    function setManualPosTokenPrice(uint256) external {}
+
     function estimatePosAmount(uint256 assetAmount) external view returns (uint256 positionAmount) {
         if (failEstimate) revert("ESTIMATE_FAIL");
         if (returnZeroEstimate) return 0;
