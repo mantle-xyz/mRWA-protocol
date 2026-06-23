@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import {IAccountant} from "../interfaces/accountant/IAccountant.sol";
 import {IStrategyAdapter} from "../interfaces/adapters/IStrategyAdapter.sol";
 import {IStrategyControllerExecutor} from "../interfaces/strategy/IStrategyControllerExecutor.sol";
 import {IMantleYieldVault} from "../interfaces/vault/IMantleYieldVault.sol";
@@ -53,6 +54,11 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
 
     modifier onlyOperatorExecutor() {
         _checkRole(OPERATOR_EXECUTOR_ROLE, msg.sender);
+        _;
+    }
+
+    modifier whenAccountantNotPaused() {
+        _requireAccountantNotPaused();
         _;
     }
 
@@ -132,6 +138,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     error Controller__StrategyHasInFlight(address adapter, uint256 pendingInvestTokens, uint256 pendingRedeemStable);
     error Controller__RetryOnlyAsyncStrategy(address adapter);
     error Controller__InvalidRetryAmount();
+    error Controller__AccountantPaused();
 
     constructor() {
         _disableInitializers();
@@ -228,6 +235,10 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
      * @dev Returns NONE during cooldown without further computation.
      */
     function previewRebalance() external view returns (bool shouldRebalance, uint8 action, uint256 amount) {
+        if (_isAccountantPaused()) {
+            return (false, REBALANCE_ACTION_NONE, 0);
+        }
+
         if (block.timestamp < uint256(lastRebalance) + uint256(rebalanceCooldown)) {
             return (false, REBALANCE_ACTION_NONE, 0);
         }
@@ -575,7 +586,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
      * @dev Invests when idealCash > targetCash + threshold; divests when idealCash + threshold < targetCash.
      *      Reverts if cooldown has not elapsed. Divest is blocked while pending redeem requests exist.
      */
-    function rebalance() external onlyOperatorExecutor nonReentrant {
+    function rebalance() external onlyOperatorExecutor nonReentrant whenAccountantNotPaused {
         if (block.timestamp < uint256(lastRebalance) + uint256(rebalanceCooldown)) {
             revert Controller__CooldownNotElapsed();
         }
@@ -610,7 +621,12 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
      *      Reverts with DivestInsufficient only when adapter pool (step-aligned) is strictly below
      *      shortfall; partial fills due to step residual or below-min are tolerated.
      */
-    function processRedeemBatch(uint256[] calldata ids) external onlyOperatorExecutor nonReentrant {
+    function processRedeemBatch(uint256[] calldata ids)
+        external
+        onlyOperatorExecutor
+        nonReentrant
+        whenAccountantNotPaused
+    {
         _validateSortedIds(ids);
 
         uint256 batchTotalAsset = _batchTotalBySharesAndRate(ids);
@@ -659,6 +675,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         external
         onlyOperatorExecutor
         nonReentrant
+        whenAccountantNotPaused
     {
         _validateSortedIds(ids);
         _markBatchReady(ids, settledAssets);
@@ -711,7 +728,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         address adapter,
         IStrategyControllerExecutor.InvestSettlementInput calldata invest,
         IStrategyControllerExecutor.RedeemSettlementInput calldata redeem
-    ) external onlyOperatorExecutor nonReentrant {
+    ) external onlyOperatorExecutor nonReentrant whenAccountantNotPaused {
         _settleAdapterInternal(adapter, invest, redeem);
     }
 
@@ -726,7 +743,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         address[] calldata adapters,
         IStrategyControllerExecutor.InvestSettlementInput[] calldata investBatch,
         IStrategyControllerExecutor.RedeemSettlementInput[] calldata redeemBatch
-    ) external onlyOperatorExecutor nonReentrant {
+    ) external onlyOperatorExecutor nonReentrant whenAccountantNotPaused {
         if (adapters.length != investBatch.length || adapters.length != redeemBatch.length) {
             revert Controller__SettleAmountsLengthMismatch();
         }
@@ -740,6 +757,16 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     // =============================================================
     // Business Helpers
     // =============================================================
+
+    function _requireAccountantNotPaused() internal view {
+        if (_isAccountantPaused()) {
+            revert Controller__AccountantPaused();
+        }
+    }
+
+    function _isAccountantPaused() internal view returns (bool) {
+        return IAccountant(vault.accountant()).paused();
+    }
 
     function _readRebalanceState()
         internal

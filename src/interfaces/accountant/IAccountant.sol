@@ -23,5 +23,6 @@ interface IAccountant {
     function getRate() external view returns (uint256);
     function getRateSafe() external view returns (uint256);
     function managementFeeRate() external view returns (uint32);
+    function paused() external view returns (bool);
     function pause() external;
 }
