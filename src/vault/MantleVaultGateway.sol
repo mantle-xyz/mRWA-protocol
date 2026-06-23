@@ -49,6 +49,8 @@ contract MantleVaultGateway is
         sanctionsOracle = params.sanctionsOracle;
         sanctionSafe = params.sanctionSafe;
         syncRedeemDisabled = params.syncRedeemDisabled;
+        whitelistEnabled = params.whitelistEnabled;
+        if (params.whitelistEnabled) emit WhitelistEnabledUpdated(true);
     }
 
     function deposit(uint256 assets) external nonReentrant returns (uint256 shares) {
@@ -112,6 +114,7 @@ contract MantleVaultGateway is
     }
 
     function isWhitelisted(address account) public view override returns (bool) {
+        if (!whitelistEnabled) return true;
         return sanctionsOracle.isWhitelisted(account);
     }
 
@@ -144,6 +147,7 @@ contract MantleVaultGateway is
     }
 
     function maxRedeem(address owner) external view override returns (uint256) {
+        if (syncRedeemDisabled) return 0;
         if (_isSubscribeRedeemPaused() || isSanctioned(owner)) return 0;
         if (whitelistEnabled && !isWhitelisted(owner)) return 0;
         return vault.maxRedeem(owner);

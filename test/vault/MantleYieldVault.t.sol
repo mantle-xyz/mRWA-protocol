@@ -126,6 +126,10 @@ contract MockStrategyAdapter is IStrategyAdapter {
         mockPrice = price;
     }
 
+    function setManualPosTokenPrice(uint256 priceE18) external override {
+        mockPrice = priceE18;
+    }
+
     function estimatePosAmount(uint256 assetAmount) external pure override returns (uint256) {
         return assetAmount;
     }
@@ -277,7 +281,8 @@ abstract contract VaultTestBase is Test {
                 sanctionsOracle: ISanctionsOracle(address(oracle)),
                 sanctionSafe: treasuryAddr,
                 admin: admin,
-                syncRedeemDisabled: false
+                syncRedeemDisabled: false,
+                whitelistEnabled: false
             })
         );
 
@@ -1203,6 +1208,25 @@ contract SanctionsTest is VaultTestBase {
         assertEq(gateway.maxRedeem(alice), 0);
     }
 
+    /// @dev When whitelist is disabled, isWhitelisted returns true unconditionally (encapsulates the toggle).
+    ///      When enabled, defers to the oracle.
+    function test_gatewayIsWhitelistedRespectsToggle() public {
+        // baseline: whitelist disabled, oracle says alice not whitelisted → returns true
+        assertFalse(gateway.whitelistEnabled());
+        assertFalse(oracle.isWhitelisted(alice));
+        assertTrue(gateway.isWhitelisted(alice), "isWhitelisted must return true when whitelist disabled");
+
+        // enable whitelist, alice still not whitelisted → returns false (defers to oracle)
+        vm.prank(admin);
+        gateway.setWhitelistEnabled(true);
+        assertFalse(gateway.isWhitelisted(alice), "isWhitelisted must defer to oracle when enabled");
+
+        // whitelist alice via oracle → returns true
+        oracle.setWhitelisted(alice, true);
+
+        assertTrue(gateway.isWhitelisted(alice));
+    }
+
     /// @dev resolveRedemptionReceiver: sanctioned owner routes to sanctionSafe with flag=true.
     function test_resolveReceiver_routesSanctionedOwnerToSafe() public {
         oracle.setSanctioned(alice, true);
@@ -1255,6 +1279,30 @@ contract SanctionsTest is VaultTestBase {
 
     /// @dev When whitelistEnabled is false (default), max-views must not gate on whitelist status.
     ///      Otherwise ERC-4626 integrators get false negatives even though deposit/redeem would succeed.
+    /// @dev `whitelistEnabled` can be set via gateway InitParams at deployment, ensuring
+    ///      whitelist enforcement is active from block one with no follow-up setter call.
+    function test_gatewayInitializesWhitelistEnabledTrue() public {
+        // Deploy a fresh uninitialized gateway via the factory.
+        address freshGatewayAddr = gatewayFactory.deployGateway();
+        MantleVaultGateway freshGateway = MantleVaultGateway(freshGatewayAddr);
+
+        vm.prank(admin);
+        vm.expectEmit(false, false, false, true, freshGatewayAddr);
+        emit IMantleVaultGateway.WhitelistEnabledUpdated(true);
+        freshGateway.initialize(
+            IMantleVaultGateway.InitParams({
+                vault: address(vault),
+                sanctionsOracle: ISanctionsOracle(address(oracle)),
+                sanctionSafe: treasuryAddr,
+                admin: admin,
+                syncRedeemDisabled: false,
+                whitelistEnabled: true
+            })
+        );
+
+        assertTrue(freshGateway.whitelistEnabled());
+    }
+
     function test_gatewayMaxIgnoresWhitelistWhenDisabled() public view {
         // whitelistEnabled is false by default; alice is not whitelisted.
         assertFalse(gateway.whitelistEnabled());
@@ -1925,8 +1973,34 @@ contract SyncRedeemDisabledTest is VaultTestBase {
         assertGt(vault.maxRedeem(alice), 0);
     }
 
-    // Note: vault.maxWithdraw always returns 0 regardless of syncRedeemDisabled; see
-    // test_maxWithdrawAlwaysZero. The toggle is enforced at gateway.redeem level.
+    /// @dev ERC-4626 compliance: gateway.maxRedeem must return 0 when redeem would revert,
+    ///      including the syncRedeemDisabled toggle.
+    function test_gatewayMaxRedeemReturnsZeroWhenSyncDisabled() public {
+        // Sanity: before disabling, gateway.maxRedeem mirrors vault.maxRedeem.
+        assertGt(gateway.maxRedeem(alice), 0);
+
+        vm.prank(admin);
+        gateway.setSyncRedeemDisabled(true);
+
+        assertEq(gateway.maxRedeem(alice), 0, "gateway.maxRedeem must return 0 when syncRedeemDisabled");
+    }
+
+    function test_gatewayMaxRedeemRecoversWhenSyncReenabled() public {
+        vm.prank(admin);
+        gateway.setSyncRedeemDisabled(true);
+        assertEq(gateway.maxRedeem(alice), 0);
+
+        vm.prank(admin);
+        gateway.setSyncRedeemDisabled(false);
+        assertGt(gateway.maxRedeem(alice), 0);
+    }
+
+    function test_maxWithdrawNotAffectedWhenSyncDisabled() public {
+        vm.prank(admin);
+        gateway.setSyncRedeemDisabled(true);
+
+        assertGt(vault.maxWithdraw(alice), 0);
+    }
 
     function test_requestRedeemStillWorksWhenSyncDisabled() public {
         vm.prank(admin);

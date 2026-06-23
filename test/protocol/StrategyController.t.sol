@@ -21,6 +21,14 @@ contract MockAsset is ERC20 {
     }
 }
 
+contract MockAccountantPause {
+    bool public paused;
+
+    function setPaused(bool paused_) external {
+        paused = paused_;
+    }
+}
+
 contract MockStrategyAdapter is IStrategyAdapter {
     address public immutable ASSET;
     address public immutable POS_TOKEN;
@@ -32,9 +40,12 @@ contract MockStrategyAdapter is IStrategyAdapter {
     bool public failAsync;
     bool public failRetry;
     bool public failEstimate;
+    bool public returnZeroEstimate;
     bool public failDepositCustomError;
     bool public failAsyncCustomError;
     bool public depositReturnZero;
+    bool public failPreviewDeposit;
+    bool public failPreviewRedeem;
 
     uint256 public depositCount;
     uint256 public withdrawCount;
@@ -69,6 +80,10 @@ contract MockStrategyAdapter is IStrategyAdapter {
         failEstimate = e;
     }
 
+    function setReturnZeroEstimate(bool z) external {
+        returnZeroEstimate = z;
+    }
+
     function setFailRetry(bool r) external {
         failRetry = r;
     }
@@ -83,6 +98,14 @@ contract MockStrategyAdapter is IStrategyAdapter {
 
     function setDepositReturnZero(bool z) external {
         depositReturnZero = z;
+    }
+
+    function setFailPreviewDeposit(bool f) external {
+        failPreviewDeposit = f;
+    }
+
+    function setFailPreviewRedeem(bool f) external {
+        failPreviewRedeem = f;
     }
 
     function setSweepReturnAmount(uint256 amount_) external {
@@ -117,24 +140,29 @@ contract MockStrategyAdapter is IStrategyAdapter {
         return 0;
     }
 
+    function setManualPosTokenPrice(uint256) external {}
+
     function estimatePosAmount(uint256 assetAmount) external view returns (uint256 positionAmount) {
         if (failEstimate) revert("ESTIMATE_FAIL");
+        if (returnZeroEstimate) return 0;
         return assetAmount;
     }
 
     function previewDeposit(uint256 assetAmount)
         external
-        pure
+        view
         returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
     {
+        if (failPreviewDeposit) revert("PREVIEW_DEPOSIT_FAIL");
         return (assetAmount > 0, assetAmount, 0);
     }
 
     function previewRedeem(uint256 assetAmount)
         external
-        pure
+        view
         returns (bool ok, uint256 executableAssetAmount, uint256 expectedPosAmount)
     {
+        if (failPreviewRedeem) revert("PREVIEW_REDEEM_FAIL");
         return (assetAmount > 0, assetAmount, 0);
     }
 
@@ -192,6 +220,7 @@ contract MockStrategyAdapter is IStrategyAdapter {
 
 contract MockControllerVault {
     ERC20 public immutable token;
+    address public accountant;
     uint256 public mockedExchangeRate = 1e18;
 
     uint256 public locked;
@@ -233,6 +262,10 @@ contract MockControllerVault {
 
     function asset() external view returns (address) {
         return address(token);
+    }
+
+    function setAccountant(address accountant_) external {
+        accountant = accountant_;
     }
 
     function setLocked(uint256 v) external {
@@ -399,7 +432,13 @@ contract MockControllerVault {
         }
     }
 
-    function confirmInFlight(uint256 inFlightId, uint256 actualAmount, bool) external {
+    /// @dev Records the explicit isAbnormal flag forwarded by the controller, keyed by in-flight id.
+    mapping(uint256 => bool) public confirmedIsAbnormal;
+
+    function confirmInFlight(uint256 inFlightId, uint256 actualAmount, bool isAbnormal) external {
+        // Mirror the real vault guard: a zero settlement is only allowed when explicitly marked abnormal.
+        if (actualAmount == 0 && !isAbnormal) revert IMantleYieldVault.Vault__ZeroAmount();
+        confirmedIsAbnormal[inFlightId] = isAbnormal;
         InFlight storage f = flights[inFlightId];
         f.settledAmount = actualAmount;
         f.status = IMantleYieldVault.InFlightStatus.CONFIRMED;
@@ -471,6 +510,7 @@ contract StrategyControllerUnitTest is Test {
     MockAsset internal posToken;
     MockAsset internal asyncPosToken;
     MockControllerVault internal vault;
+    MockAccountantPause internal accountant;
     StrategyController internal controller;
     DummyExecutor internal executorGateway;
 
@@ -488,6 +528,8 @@ contract StrategyControllerUnitTest is Test {
         posToken = new MockAsset();
         asyncPosToken = new MockAsset();
         vault = new MockControllerVault(address(asset));
+        accountant = new MockAccountantPause();
+        vault.setAccountant(address(accountant));
         executorGateway = new DummyExecutor();
 
         StrategyController implementation = new StrategyController();
@@ -539,8 +581,21 @@ contract StrategyControllerUnitTest is Test {
         uint256[] memory settledPosAmounts,
         uint256[] memory refundAssetAmounts
     ) internal pure returns (IStrategyControllerExecutor.InvestSettlementInput memory invest) {
+        // Default: every settlement is normal (isAbnormal=false), length-aligned with inFlightIds.
+        invest = _investSettlement(inFlightIds, settledPosAmounts, refundAssetAmounts, new bool[](inFlightIds.length));
+    }
+
+    function _investSettlement(
+        uint256[] memory inFlightIds,
+        uint256[] memory settledPosAmounts,
+        uint256[] memory refundAssetAmounts,
+        bool[] memory isAbnormal
+    ) internal pure returns (IStrategyControllerExecutor.InvestSettlementInput memory invest) {
         invest = IStrategyControllerExecutor.InvestSettlementInput({
-            inFlightIds: inFlightIds, settledPosAmounts: settledPosAmounts, refundAssetAmounts: refundAssetAmounts
+            inFlightIds: inFlightIds,
+            settledPosAmounts: settledPosAmounts,
+            refundAssetAmounts: refundAssetAmounts,
+            isAbnormal: isAbnormal
         });
     }
 
@@ -549,9 +604,23 @@ contract StrategyControllerUnitTest is Test {
         pure
         returns (IStrategyControllerExecutor.RedeemSettlementInput memory redeem)
     {
+        // Default: every settlement is normal (isAbnormal=false), length-aligned with inFlightIds.
+        redeem = _redeemSettlement(inFlightIds, settledAssetAmounts, new bool[](inFlightIds.length));
+    }
+
+    function _redeemSettlement(
+        uint256[] memory inFlightIds,
+        uint256[] memory settledAssetAmounts,
+        bool[] memory isAbnormal
+    ) internal pure returns (IStrategyControllerExecutor.RedeemSettlementInput memory redeem) {
         redeem = IStrategyControllerExecutor.RedeemSettlementInput({
-            inFlightIds: inFlightIds, settledAssetAmounts: settledAssetAmounts
+            inFlightIds: inFlightIds, settledAssetAmounts: settledAssetAmounts, isAbnormal: isAbnormal
         });
+    }
+
+    function _toSingletonBool(bool value) internal pure returns (bool[] memory values) {
+        values = new bool[](1);
+        values[0] = value;
     }
 
     function _toSingletonArray(uint256 value) internal pure returns (uint256[] memory values) {
@@ -561,6 +630,10 @@ contract StrategyControllerUnitTest is Test {
 
     function _errorData(string memory reason) internal pure returns (bytes memory) {
         return abi.encodeWithSelector(bytes4(keccak256("Error(string)")), reason);
+    }
+
+    function _accountantPausedError() internal pure returns (bytes4) {
+        return bytes4(keccak256("Controller__AccountantPaused()"));
     }
 
     function _customErrorData(bytes4 selector, uint256 value) internal pure returns (bytes memory) {
@@ -983,6 +1056,18 @@ contract StrategyControllerUnitTest is Test {
         assertEq(amount, 900e18);
     }
 
+    function test_PreviewRebalance_ReturnsNoneWhenAccountantPaused() public {
+        asset.mint(address(vault), 1_000e18);
+        accountant.setPaused(true);
+
+        vm.warp(2 hours);
+        (bool shouldRebalance, uint8 action, uint256 amount) = controller.previewRebalance();
+
+        assertFalse(shouldRebalance);
+        assertEq(action, controller.REBALANCE_ACTION_NONE());
+        assertEq(amount, 0);
+    }
+
     function test_PreviewRebalance_InvestAmountCapsToFreeCash() public {
         // Invest uses idealCash = freeCash + totalRedeemInFlight for surplus detection,
         // but caps the actual invest amount to freeCash (in-flight hasn't arrived yet).
@@ -1280,6 +1365,64 @@ contract StrategyControllerUnitTest is Test {
         controller.processRedeemBatch(ids);
     }
 
+    // ---------------------------------------------------------------------
+    // Issue #51: a reverting previewDeposit/previewRedeem must not DoS the
+    // rebalancer or redemption processing. A reverting preview is isolated
+    // exactly like the state-changing adapter calls: the adapter is skipped
+    // (DivestSkipped/InvestSkipped with revert data) and the loop continues.
+    // ---------------------------------------------------------------------
+
+    function test_RebalanceInvest_EmitsInvestSkipped_OnPreviewDepositRevert() public {
+        // Without the fix the unguarded previewDeposit reverts the whole
+        // rebalance(); with it, the adapter is skipped and rebalance completes.
+        _registerSingleSyncStrategy();
+        asset.mint(address(vault), 1_000e18);
+        syncAdapter.setFailPreviewDeposit(true);
+
+        vm.recordLogs();
+        vm.warp(2 hours);
+        vm.prank(address(executorGateway));
+        controller.rebalance();
+
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        _assertSkippedLog(
+            logs, INVEST_SKIPPED_EVENT_SIG, address(syncAdapter), 900e18, _errorData("PREVIEW_DEPOSIT_FAIL")
+        );
+        // Reverting adapter did not deposit, and rebalance did not revert.
+        assertEq(syncAdapter.depositCount(), 0);
+    }
+
+    function test_ProcessRedeemBatch_PreviewRedeemRevert_SkipsAndHealsViaNextAdapter() public {
+        // sync (priority 1, first in order) reverts in previewRedeem; async
+        // (priority 2) is healthy and covers the full shortfall. Without the
+        // fix sync's revert bubbles up and DoSes the whole batch before async
+        // is ever reached. With it, sync is skipped and async clears the batch.
+        _registerTwoStrategies();
+        syncAdapter.setTotalValue(700e18);
+        asyncAdapter.setTotalValue(1_000e18);
+        syncAdapter.setFailPreviewRedeem(true);
+
+        uint256[] memory ids = new uint256[](1);
+        ids[0] = 1;
+        vault.setRequest(1, 700e18, 0, IMantleYieldVault.RequestStatus.PENDING);
+        vault.setLocked(700e18); // cashDeficit = shortfall = 700
+
+        vm.recordLogs();
+        vm.prank(address(executorGateway));
+        controller.processRedeemBatch(ids);
+
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        _assertSkippedLog(
+            logs, DIVEST_SKIPPED_EVENT_SIG, address(syncAdapter), 700e18, _errorData("PREVIEW_REDEEM_FAIL")
+        );
+        // Failing adapter skipped, healthy adapter cleared the shortfall.
+        assertEq(syncAdapter.withdrawCount(), 0);
+        assertEq(asyncAdapter.asyncCount(), 1);
+        // Request advanced to PROCESSING (batch was not DoS'd).
+        (,,,,,,, IMantleYieldVault.RequestStatus status) = vault.requests(1);
+        assertEq(uint8(status), uint8(IMantleYieldVault.RequestStatus.PROCESSING));
+    }
+
     function test_RevertWhen_ProcessRedeemBatchIdsNotSorted() public {
         _registerTwoStrategies();
         uint256[] memory ids = new uint256[](2);
@@ -1479,7 +1622,10 @@ contract StrategyControllerUnitTest is Test {
         vm.prank(address(executorGateway));
         controller.settleAdapter(
             address(asyncAdapter),
-            _investSettlement(investInFlightIds, investSettledPosAmounts, investRefundAssetAmounts),
+            // No tokens and no refund settled to the adapter: explicitly an abnormal settlement.
+            _investSettlement(
+                investInFlightIds, investSettledPosAmounts, investRefundAssetAmounts, _toSingletonBool(true)
+            ),
             _redeemSettlement(new uint256[](0), new uint256[](0))
         );
 
@@ -1606,7 +1752,10 @@ contract StrategyControllerUnitTest is Test {
         vm.prank(address(executorGateway));
         controller.settleAdapter(
             address(asyncAdapter),
-            _investSettlement(investInFlightIds, investSettledPosAmounts, investRefundAssetAmounts),
+            // Zero position tokens, fully refunded: an abnormal settlement.
+            _investSettlement(
+                investInFlightIds, investSettledPosAmounts, investRefundAssetAmounts, _toSingletonBool(true)
+            ),
             _redeemSettlement(new uint256[](0), new uint256[](0))
         );
 
@@ -1694,6 +1843,21 @@ contract StrategyControllerUnitTest is Test {
         assertEq(asyncAdapter.depositCount(), 1);
         assertEq(vault.inFlightIdCursor(), 2);
         assertEq(vault.investInFlightTotal(), 1_483_000_000);
+    }
+
+    function test_RebalanceInvestAsync_SkipsWhenPendingExistsAndEstimateReturnsZero() public {
+        _registerSingleAsyncStrategy();
+        vault.createInFlight(address(asyncAdapter), address(posToken), 400e18, 400e18, true);
+        asyncAdapter.setReturnZeroEstimate(true);
+        asset.mint(address(vault), 1_000e18);
+
+        vm.warp(2 hours);
+        vm.prank(address(executorGateway));
+        controller.rebalance();
+
+        assertEq(asyncAdapter.depositCount(), 0);
+        assertEq(vault.inFlightIdCursor(), 1);
+        assertEq(vault.investInFlightTotal(), 400e18);
     }
 
     function test_RebalanceInvestSync_StillInvestsWhenPendingDoesNotCoverFullShortfall() public {
@@ -2253,7 +2417,10 @@ contract StrategyControllerUnitTest is Test {
         vm.prank(address(executorGateway));
         controller.settleAdapter(
             address(asyncAdapter),
-            _investSettlement(investInFlightIds, investSettledPosAmounts, investRefundAssetAmounts),
+            // Full refund (zero position tokens) is an abnormal settlement.
+            _investSettlement(
+                investInFlightIds, investSettledPosAmounts, investRefundAssetAmounts, _toSingletonBool(true)
+            ),
             _redeemSettlement(new uint256[](0), new uint256[](0))
         );
 
@@ -2289,6 +2456,105 @@ contract StrategyControllerUnitTest is Test {
         );
     }
 
+    // =============================================================
+    // Explicit isAbnormal settlement signal
+    // =============================================================
+
+    /// @dev A zero invest settlement that is NOT explicitly marked abnormal must be rejected,
+    ///      not silently cleared (regression guard against deriving isAbnormal from amount == 0).
+    function test_RevertWhen_SettleAdapterInvestZeroSettledNotAbnormal() public {
+        _registerSingleAsyncStrategy();
+        uint256 inFlightId = vault.createInFlight(address(asyncAdapter), address(posToken), 100e18, 100e18, true);
+
+        vm.prank(address(executorGateway));
+        vm.expectRevert(IMantleYieldVault.Vault__ZeroAmount.selector);
+        controller.settleAdapter(
+            address(asyncAdapter),
+            _investSettlement(
+                _toSingletonArray(inFlightId), _toSingletonArray(0), _toSingletonArray(0), _toSingletonBool(false)
+            ),
+            _redeemSettlement(new uint256[](0), new uint256[](0))
+        );
+    }
+
+    /// @dev A zero redeem settlement that is NOT explicitly marked abnormal must be rejected.
+    function test_RevertWhen_SettleAdapterRedeemZeroSettledNotAbnormal() public {
+        _registerSingleAsyncStrategy();
+        uint256 redeemInFlightId = vault.createInFlight(address(asyncAdapter), address(posToken), 50e18, 100e18, false);
+
+        vm.prank(address(executorGateway));
+        vm.expectRevert(IMantleYieldVault.Vault__ZeroAmount.selector);
+        controller.settleAdapter(
+            address(asyncAdapter),
+            _investSettlement(new uint256[](0), new uint256[](0), new uint256[](0)),
+            _redeemSettlement(_toSingletonArray(redeemInFlightId), _toSingletonArray(0), _toSingletonBool(false))
+        );
+    }
+
+    /// @dev The controller forwards the explicit abnormal flag for invest verbatim,
+    ///      independent of the settled amount (here a non-zero amount is still marked abnormal).
+    function test_SettleAdapter_ForwardsExplicitAbnormalFlagForInvest() public {
+        _registerSingleAsyncStrategy();
+        uint256 inFlightId = vault.createInFlight(address(asyncAdapter), address(posToken), 100e18, 100e18, true);
+
+        vm.prank(address(executorGateway));
+        controller.settleAdapter(
+            address(asyncAdapter),
+            _investSettlement(
+                _toSingletonArray(inFlightId), _toSingletonArray(100e18), _toSingletonArray(0), _toSingletonBool(true)
+            ),
+            _redeemSettlement(new uint256[](0), new uint256[](0))
+        );
+
+        assertTrue(vault.confirmedIsAbnormal(inFlightId));
+    }
+
+    /// @dev The controller forwards the explicit abnormal flag for redeem verbatim,
+    ///      independent of the settled amount.
+    function test_SettleAdapter_ForwardsExplicitAbnormalFlagForRedeem() public {
+        _registerSingleAsyncStrategy();
+        uint256 redeemInFlightId = vault.createInFlight(address(asyncAdapter), address(posToken), 50e18, 100e18, false);
+
+        vm.prank(address(executorGateway));
+        controller.settleAdapter(
+            address(asyncAdapter),
+            _investSettlement(new uint256[](0), new uint256[](0), new uint256[](0)),
+            _redeemSettlement(_toSingletonArray(redeemInFlightId), _toSingletonArray(100e18), _toSingletonBool(true))
+        );
+
+        assertTrue(vault.confirmedIsAbnormal(redeemInFlightId));
+    }
+
+    /// @dev isAbnormal array must be length-aligned with the invest in-flight ids.
+    function test_RevertWhen_SettleAdapterInvestIsAbnormalLengthMismatch() public {
+        _registerSingleAsyncStrategy();
+        uint256 inFlightId = vault.createInFlight(address(asyncAdapter), address(posToken), 100e18, 100e18, true);
+
+        vm.prank(address(executorGateway));
+        vm.expectRevert(StrategyController.Controller__SettleAmountsLengthMismatch.selector);
+        controller.settleAdapter(
+            address(asyncAdapter),
+            _investSettlement(
+                _toSingletonArray(inFlightId), _toSingletonArray(100e18), _toSingletonArray(0), new bool[](0)
+            ),
+            _redeemSettlement(new uint256[](0), new uint256[](0))
+        );
+    }
+
+    /// @dev isAbnormal array must be length-aligned with the redeem in-flight ids.
+    function test_RevertWhen_SettleAdapterRedeemIsAbnormalLengthMismatch() public {
+        _registerSingleAsyncStrategy();
+        uint256 redeemInFlightId = vault.createInFlight(address(asyncAdapter), address(posToken), 50e18, 100e18, false);
+
+        vm.prank(address(executorGateway));
+        vm.expectRevert(StrategyController.Controller__SettleAmountsLengthMismatch.selector);
+        controller.settleAdapter(
+            address(asyncAdapter),
+            _investSettlement(new uint256[](0), new uint256[](0), new uint256[](0)),
+            _redeemSettlement(_toSingletonArray(redeemInFlightId), _toSingletonArray(100e18), new bool[](0))
+        );
+    }
+
     function test_RetryRedeemInFlight_Success_ForAsyncPendingRedeem() public {
         _registerSingleAsyncStrategy();
         uint256 inFlightId = vault.createInFlight(address(asyncAdapter), address(posToken), 50e18, 100e18, false);
@@ -2303,6 +2569,71 @@ contract StrategyControllerUnitTest is Test {
         (,,,,,, bool isInvest,, IMantleYieldVault.InFlightStatus status) = vault.inFlightRecords(inFlightId);
         assertFalse(isInvest);
         assertEq(uint8(status), uint8(IMantleYieldVault.InFlightStatus.PENDING));
+    }
+
+    function test_accountantPaused_rebalance_reverts() public {
+        accountant.setPaused(true);
+
+        vm.prank(address(executorGateway));
+        vm.expectRevert(_accountantPausedError());
+        controller.rebalance();
+    }
+
+    function test_accountantPaused_processRedeemBatch_reverts() public {
+        accountant.setPaused(true);
+
+        vm.prank(address(executorGateway));
+        vm.expectRevert(_accountantPausedError());
+        controller.processRedeemBatch(_toSingletonArray(1));
+    }
+
+    function test_accountantPaused_finalizeRedeemBatch_reverts() public {
+        accountant.setPaused(true);
+
+        vm.prank(address(executorGateway));
+        vm.expectRevert(_accountantPausedError());
+        controller.finalizeRedeemBatch(_toSingletonArray(1), _toSingletonArray(1));
+    }
+
+    function test_accountantPaused_settleAdapter_reverts() public {
+        accountant.setPaused(true);
+
+        vm.prank(address(executorGateway));
+        vm.expectRevert(_accountantPausedError());
+        controller.settleAdapter(
+            address(asyncAdapter),
+            _investSettlement(new uint256[](0), new uint256[](0), new uint256[](0)),
+            _redeemSettlement(new uint256[](0), new uint256[](0))
+        );
+    }
+
+    function test_accountantPaused_settleAdapters_reverts() public {
+        accountant.setPaused(true);
+
+        address[] memory adapters = new address[](1);
+        adapters[0] = address(asyncAdapter);
+        IStrategyControllerExecutor.InvestSettlementInput[] memory investBatch =
+            new IStrategyControllerExecutor.InvestSettlementInput[](1);
+        investBatch[0] = _investSettlement(new uint256[](0), new uint256[](0), new uint256[](0));
+        IStrategyControllerExecutor.RedeemSettlementInput[] memory redeemBatch =
+            new IStrategyControllerExecutor.RedeemSettlementInput[](1);
+        redeemBatch[0] = _redeemSettlement(new uint256[](0), new uint256[](0));
+
+        vm.prank(address(executorGateway));
+        vm.expectRevert(_accountantPausedError());
+        controller.settleAdapters(adapters, investBatch, redeemBatch);
+    }
+
+    function test_retryRedeemInFlight_notBlockedByAccountantPaused() public {
+        _registerSingleAsyncStrategy();
+        uint256 inFlightId = vault.createInFlight(address(asyncAdapter), address(posToken), 50e18, 100e18, false);
+        accountant.setPaused(true);
+
+        vm.prank(manager);
+        controller.retryRedeemInFlight(address(asyncAdapter), inFlightId, 30e18);
+
+        assertEq(asyncAdapter.retryCount(), 1);
+        assertEq(asyncAdapter.lastRetryPosAmount(), 30e18);
     }
 
     function test_RevertWhen_RetryRedeemInFlight_PosAmountExceedsOriginalTokenAmount() public {

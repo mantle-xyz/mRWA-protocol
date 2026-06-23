@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import {IAccountant} from "../interfaces/accountant/IAccountant.sol";
 import {IStrategyAdapter} from "../interfaces/adapters/IStrategyAdapter.sol";
 import {IStrategyControllerExecutor} from "../interfaces/strategy/IStrategyControllerExecutor.sol";
 import {IMantleYieldVault} from "../interfaces/vault/IMantleYieldVault.sol";
@@ -53,6 +54,11 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
 
     modifier onlyOperatorExecutor() {
         _checkRole(OPERATOR_EXECUTOR_ROLE, msg.sender);
+        _;
+    }
+
+    modifier whenAccountantNotPaused() {
+        _requireAccountantNotPaused();
         _;
     }
 
@@ -132,6 +138,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     error Controller__StrategyHasInFlight(address adapter, uint256 pendingInvestTokens, uint256 pendingRedeemStable);
     error Controller__RetryOnlyAsyncStrategy(address adapter);
     error Controller__InvalidRetryAmount();
+    error Controller__AccountantPaused();
 
     constructor() {
         _disableInitializers();
@@ -228,6 +235,10 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
      * @dev Returns NONE during cooldown without further computation.
      */
     function previewRebalance() external view returns (bool shouldRebalance, uint8 action, uint256 amount) {
+        if (_isAccountantPaused()) {
+            return (false, REBALANCE_ACTION_NONE, 0);
+        }
+
         if (block.timestamp < uint256(lastRebalance) + uint256(rebalanceCooldown)) {
             return (false, REBALANCE_ACTION_NONE, 0);
         }
@@ -575,7 +586,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
      * @dev Invests when idealCash > targetCash + threshold; divests when idealCash + threshold < targetCash.
      *      Reverts if cooldown has not elapsed. Divest is blocked while pending redeem requests exist.
      */
-    function rebalance() external onlyOperatorExecutor nonReentrant {
+    function rebalance() external onlyOperatorExecutor nonReentrant whenAccountantNotPaused {
         if (block.timestamp < uint256(lastRebalance) + uint256(rebalanceCooldown)) {
             revert Controller__CooldownNotElapsed();
         }
@@ -610,7 +621,12 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
      *      Reverts with DivestInsufficient only when adapter pool (step-aligned) is strictly below
      *      shortfall; partial fills due to step residual or below-min are tolerated.
      */
-    function processRedeemBatch(uint256[] calldata ids) external onlyOperatorExecutor nonReentrant {
+    function processRedeemBatch(uint256[] calldata ids)
+        external
+        onlyOperatorExecutor
+        nonReentrant
+        whenAccountantNotPaused
+    {
         _validateSortedIds(ids);
 
         uint256 batchTotalAsset = _batchTotalBySharesAndRate(ids);
@@ -659,6 +675,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         external
         onlyOperatorExecutor
         nonReentrant
+        whenAccountantNotPaused
     {
         _validateSortedIds(ids);
         _markBatchReady(ids, settledAssets);
@@ -711,7 +728,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         address adapter,
         IStrategyControllerExecutor.InvestSettlementInput calldata invest,
         IStrategyControllerExecutor.RedeemSettlementInput calldata redeem
-    ) external onlyOperatorExecutor nonReentrant {
+    ) external onlyOperatorExecutor nonReentrant whenAccountantNotPaused {
         _settleAdapterInternal(adapter, invest, redeem);
     }
 
@@ -726,7 +743,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         address[] calldata adapters,
         IStrategyControllerExecutor.InvestSettlementInput[] calldata investBatch,
         IStrategyControllerExecutor.RedeemSettlementInput[] calldata redeemBatch
-    ) external onlyOperatorExecutor nonReentrant {
+    ) external onlyOperatorExecutor nonReentrant whenAccountantNotPaused {
         if (adapters.length != investBatch.length || adapters.length != redeemBatch.length) {
             revert Controller__SettleAmountsLengthMismatch();
         }
@@ -740,6 +757,16 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     // =============================================================
     // Business Helpers
     // =============================================================
+
+    function _requireAccountantNotPaused() internal view {
+        if (_isAccountantPaused()) {
+            revert Controller__AccountantPaused();
+        }
+    }
+
+    function _isAccountantPaused() internal view returns (bool) {
+        return IAccountant(vault.accountant()).paused();
+    }
 
     function _readRebalanceState()
         internal
@@ -868,26 +895,41 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
 
             if (pendingInvestPos > 0) {
                 // Compare pending coverage against the adapter's full shortfall, not this round's capped alloc.
-                // If estimation fails (returns 0 via fallback), skip deduction to avoid asset/pos unit mismatch.
                 uint256 estimatedPosForShortfall = _estimatePosAmount(adapter, shortfall, 0);
-                if (estimatedPosForShortfall > 0) {
-                    if (pendingInvestPos >= estimatedPosForShortfall) {
-                        emit InvestSkipped(adapter, originalAlloc, "");
-                        continue;
-                    }
+                if (estimatedPosForShortfall == 0) {
+                    emit InvestSkipped(adapter, originalAlloc, "");
+                    continue;
+                }
 
-                    // uncoveredShortfall = shortfall * (estimatedPos - pendingPos) / estimatedPos
-                    uint256 uncoveredShortfall =
-                        Math.mulDiv(shortfall, estimatedPosForShortfall - pendingInvestPos, estimatedPosForShortfall);
-                    alloc = uncoveredShortfall < remaining ? uncoveredShortfall : remaining;
-                    if (alloc == 0) {
-                        emit InvestSkipped(adapter, originalAlloc, "");
-                        continue;
-                    }
+                if (pendingInvestPos >= estimatedPosForShortfall) {
+                    emit InvestSkipped(adapter, originalAlloc, "");
+                    continue;
+                }
+
+                // uncoveredShortfall = shortfall * (estimatedPos - pendingPos) / estimatedPos
+                uint256 uncoveredShortfall =
+                    Math.mulDiv(shortfall, estimatedPosForShortfall - pendingInvestPos, estimatedPosForShortfall);
+                alloc = uncoveredShortfall < remaining ? uncoveredShortfall : remaining;
+                if (alloc == 0) {
+                    emit InvestSkipped(adapter, originalAlloc, "");
+                    continue;
                 }
             }
 
-            (bool ok, uint256 executableAsset, uint256 expectedPos) = IStrategyAdapter(adapter).previewDeposit(alloc);
+            // Isolate the preview view-call like every other adapter interaction:
+            // a reverting adapter (oracle/decimals revert, malicious override) is
+            // skipped instead of reverting the whole rebalance(). See issue #51.
+            bool ok;
+            uint256 executableAsset;
+            uint256 expectedPos;
+            try IStrategyAdapter(adapter).previewDeposit(alloc) returns (bool ok_, uint256 exec_, uint256 pos_) {
+                ok = ok_;
+                executableAsset = exec_;
+                expectedPos = pos_;
+            } catch (bytes memory revertData) {
+                emit InvestSkipped(adapter, alloc, revertData);
+                continue;
+            }
             if (!ok || executableAsset == 0) {
                 emit InvestSkipped(adapter, alloc, "");
                 continue;
@@ -928,8 +970,20 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
             }
 
             // Preview validates step constraints and returns adjusted amounts.
-            (bool redeemOk, uint256 executableRedeem, uint256 redeemPosAmount) =
-                IStrategyAdapter(adapter).previewRedeem(requestAsset);
+            // Isolate the preview view-call like every other adapter interaction:
+            // a reverting adapter (oracle/decimals revert, malicious override) is
+            // skipped instead of reverting rebalance()/processRedeemBatch(). See issue #51.
+            bool redeemOk;
+            uint256 executableRedeem;
+            uint256 redeemPosAmount;
+            try IStrategyAdapter(adapter).previewRedeem(requestAsset) returns (bool ok_, uint256 exec_, uint256 pos_) {
+                redeemOk = ok_;
+                executableRedeem = exec_;
+                redeemPosAmount = pos_;
+            } catch (bytes memory revertData) {
+                emit DivestSkipped(adapter, requestAsset, revertData);
+                continue;
+            }
             if (!redeemOk || executableRedeem == 0) {
                 emit DivestSkipped(adapter, requestAsset, "");
                 continue;
@@ -1015,7 +1069,9 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     ) internal {
         uint256 len = redeem.inFlightIds.length;
         for (uint256 i = 0; i < len; i++) {
-            _confirmSingleRedeemInFlight(expectedAdapter, redeem.inFlightIds[i], redeem.settledAssetAmounts[i]);
+            _confirmSingleRedeemInFlight(
+                expectedAdapter, redeem.inFlightIds[i], redeem.settledAssetAmounts[i], redeem.isAbnormal[i]
+            );
         }
     }
 
@@ -1036,7 +1092,11 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         uint256 len = invest.inFlightIds.length;
         for (uint256 i = 0; i < len; i++) {
             _confirmSingleInvestInFlight(
-                adapter, invest.inFlightIds[i], invest.settledPosAmounts[i], invest.refundAssetAmounts[i]
+                adapter,
+                invest.inFlightIds[i],
+                invest.settledPosAmounts[i],
+                invest.refundAssetAmounts[i],
+                invest.isAbnormal[i]
             );
         }
     }
@@ -1060,25 +1120,31 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         }
     }
 
-    function _confirmSingleRedeemInFlight(address expectedAdapter, uint256 inFlightId, uint256 settledAmount) internal {
+    function _confirmSingleRedeemInFlight(
+        address expectedAdapter,
+        uint256 inFlightId,
+        uint256 settledAmount,
+        bool isAbnormal
+    ) internal {
         (, address recordAdapter,,,,, bool isInvest,,) = vault.inFlightRecords(inFlightId);
         if (recordAdapter != expectedAdapter || isInvest) {
             revert Controller__InvalidRedeemInFlight(inFlightId);
         }
-        vault.confirmInFlight(inFlightId, settledAmount, settledAmount == 0);
+        vault.confirmInFlight(inFlightId, settledAmount, isAbnormal);
     }
 
     function _confirmSingleInvestInFlight(
         address adapter,
         uint256 inFlightId,
         uint256 settledPosAmount,
-        uint256 refundAssetAmount
+        uint256 refundAssetAmount,
+        bool isAbnormal
     ) internal {
         (, address recordAdapter,,,,, bool isInvest,,) = vault.inFlightRecords(inFlightId);
         if (recordAdapter != adapter || !isInvest) {
             revert Controller__InvalidInvestInFlight(inFlightId);
         }
-        vault.confirmInFlight(inFlightId, settledPosAmount, settledPosAmount == 0);
+        vault.confirmInFlight(inFlightId, settledPosAmount, isAbnormal);
         emit InvestSettlementRecorded(inFlightId, adapter, settledPosAmount, refundAssetAmount);
     }
 
@@ -1144,7 +1210,9 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         if (
             invest.inFlightIds.length != invest.settledPosAmounts.length
                 || invest.inFlightIds.length != invest.refundAssetAmounts.length
+                || invest.inFlightIds.length != invest.isAbnormal.length
                 || redeem.inFlightIds.length != redeem.settledAssetAmounts.length
+                || redeem.inFlightIds.length != redeem.isAbnormal.length
         ) {
             revert Controller__SettleAmountsLengthMismatch();
         }

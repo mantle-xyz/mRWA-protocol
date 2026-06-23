@@ -20,6 +20,9 @@ deployments/
 # Docs
 docs/
 
+# Ops
+ops/
+
 # Dotenv file
 .env
 
