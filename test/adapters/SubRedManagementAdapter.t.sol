@@ -435,4 +435,49 @@ contract SubRedManagementAdapterTest is Test {
         vm.expectRevert();
         adapterWithOracle.requestRedeemAsync(3_003e18 + 8e17, receiver);
     }
+
+    // =============================================================
+    // Deadline-window setter bound (audit follow-up)
+    // =============================================================
+
+    function test_SetSubscribeDeadlineWindow_AcceptsWithinBound() public {
+        adapter.setSubscribeDeadlineWindow(1 hours);
+        assertEq(adapter.subscribeDeadlineWindow(), 1 hours);
+        adapter.setSubscribeDeadlineWindow(adapter.MAX_DEADLINE_WINDOW());
+        assertEq(adapter.subscribeDeadlineWindow(), adapter.MAX_DEADLINE_WINDOW());
+    }
+
+    function test_RevertWhen_SetSubscribeDeadlineWindowZero() public {
+        vm.expectRevert(abi.encodeWithSignature("Adapter__InvalidDeadlineWindow(uint64)", uint64(0)));
+        adapter.setSubscribeDeadlineWindow(0);
+    }
+
+    function test_RevertWhen_SetSubscribeDeadlineWindowAboveMax() public {
+        uint64 tooLarge = adapter.MAX_DEADLINE_WINDOW() + 1;
+        vm.expectRevert(abi.encodeWithSignature("Adapter__InvalidDeadlineWindow(uint64)", tooLarge));
+        adapter.setSubscribeDeadlineWindow(tooLarge);
+    }
+
+    function test_RevertWhen_SetSubscribeDeadlineWindowUint64Max() public {
+        vm.expectRevert(abi.encodeWithSignature("Adapter__InvalidDeadlineWindow(uint64)", type(uint64).max));
+        adapter.setSubscribeDeadlineWindow(type(uint64).max);
+    }
+
+    function test_SetRedeemDeadlineWindow_AcceptsWithinBound() public {
+        adapter.setRedeemDeadlineWindow(2 hours);
+        assertEq(adapter.redeemDeadlineWindow(), 2 hours);
+        adapter.setRedeemDeadlineWindow(adapter.MAX_DEADLINE_WINDOW());
+        assertEq(adapter.redeemDeadlineWindow(), adapter.MAX_DEADLINE_WINDOW());
+    }
+
+    function test_RevertWhen_SetRedeemDeadlineWindowZero() public {
+        vm.expectRevert(abi.encodeWithSignature("Adapter__InvalidDeadlineWindow(uint64)", uint64(0)));
+        adapter.setRedeemDeadlineWindow(0);
+    }
+
+    function test_RevertWhen_SetRedeemDeadlineWindowAboveMax() public {
+        uint64 tooLarge = adapter.MAX_DEADLINE_WINDOW() + 1;
+        vm.expectRevert(abi.encodeWithSignature("Adapter__InvalidDeadlineWindow(uint64)", tooLarge));
+        adapter.setRedeemDeadlineWindow(tooLarge);
+    }
 }

@@ -1224,7 +1224,58 @@ contract SanctionsTest is VaultTestBase {
 
         // whitelist alice via oracle → returns true
         oracle.setWhitelisted(alice, true);
+
         assertTrue(gateway.isWhitelisted(alice));
+    }
+
+    /// @dev resolveRedemptionReceiver: sanctioned owner routes to sanctionSafe with flag=true.
+    function test_resolveReceiver_routesSanctionedOwnerToSafe() public {
+        oracle.setSanctioned(alice, true);
+
+        vm.prank(address(vault));
+        (address receiver, bool sanctioned) = gateway.resolveRedemptionReceiver(alice);
+
+        assertEq(receiver, treasuryAddr, "sanctioned must route to sanctionSafe");
+        assertTrue(sanctioned);
+    }
+
+    /// @dev resolveRedemptionReceiver: clean owner with whitelist disabled returns owner.
+    function test_resolveReceiver_returnsOwnerWhenWhitelistDisabled() public {
+        // whitelistEnabled = false by default, alice not whitelisted
+        vm.prank(address(vault));
+        (address receiver, bool sanctioned) = gateway.resolveRedemptionReceiver(alice);
+
+        assertEq(receiver, alice);
+        assertFalse(sanctioned);
+    }
+
+    /// @dev resolveRedemptionReceiver: when whitelist is enabled and the owner is NOT whitelisted,
+    ///      the payout is rerouted to sanctionSafe with `sanctioned = true`, so the vault emits the
+    ///      compliance-routing event rather than a normal RedemptionDone.
+    function test_resolveReceiver_routesDeWhitelistedOwnerToSafe() public {
+        vm.prank(admin);
+        gateway.setWhitelistEnabled(true);
+        // alice not in the whitelist set
+
+        vm.prank(address(vault));
+        (address receiver, bool sanctioned) = gateway.resolveRedemptionReceiver(alice);
+
+        assertEq(receiver, treasuryAddr, "de-whitelisted must route to sanctionSafe");
+        assertTrue(sanctioned, "compliance reroute flag must be set");
+    }
+
+    /// @dev resolveRedemptionReceiver: whitelist enabled + owner whitelisted + not sanctioned
+    ///      returns the owner unchanged.
+    function test_resolveReceiver_returnsOwnerWhenWhitelistedAndClean() public {
+        vm.prank(admin);
+        gateway.setWhitelistEnabled(true);
+        oracle.setWhitelisted(alice, true);
+
+        vm.prank(address(vault));
+        (address receiver, bool sanctioned) = gateway.resolveRedemptionReceiver(alice);
+
+        assertEq(receiver, alice);
+        assertFalse(sanctioned);
     }
 
     /// @dev When whitelistEnabled is false (default), max-views must not gate on whitelist status.

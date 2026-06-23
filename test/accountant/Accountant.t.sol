@@ -6,6 +6,7 @@ import {AccountantExecutor} from "../../src/accountant/AccountantExecutor.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {BeaconProxy} from "@openzeppelin/contracts/proxy/beacon/BeaconProxy.sol";
 import {UpgradeableBeacon} from "@openzeppelin/contracts/proxy/beacon/UpgradeableBeacon.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {Test} from "forge-std/Test.sol";
 
 // =============================================================
@@ -650,6 +651,70 @@ contract AccountantTest is Test {
         assertGt(secondFee, 0);
 
         assertEq(vault.totalFeeMintCalls(), 2);
+    }
+
+    /// @dev Minting fee shares dilutes per-share NAV. The Accountant must scale
+    ///      lastExchangeRate down by the exact dilution factor so deposits and
+    ///      redemptions executed before the next off-chain rate push transact at
+    ///      the post-fee value.
+    function test_settleManagementFee_adjustsExchangeRateForDilution() public {
+        uint256 totalShares = 1_000_000e18;
+        vault.setTotalSupply(totalShares);
+
+        skip(1);
+        _settleFee(); // prime
+
+        skip(20 hours);
+        uint256 elapsed = block.timestamp - accountant.lastFeeSettleTimestamp();
+        uint256 expectedShares = (totalShares * MANAGEMENT_FEE_BPS * elapsed) / (10_000 * 365 days);
+        assertGt(expectedShares, 0);
+
+        uint256 rateBefore = accountant.lastExchangeRate();
+        uint256 expectedRate = Math.mulDiv(rateBefore, totalShares, totalShares + expectedShares, Math.Rounding.Floor);
+
+        vm.expectEmit(false, false, false, true);
+        emit Accountant.ExchangeRateUpdated(rateBefore, expectedRate, block.timestamp);
+        _settleFee();
+
+        assertEq(accountant.lastExchangeRate(), expectedRate, "rate scaled by dilution factor");
+        assertLt(accountant.lastExchangeRate(), rateBefore, "rate strictly decreases on fee mint");
+    }
+
+    /// @dev When the primed snapshot is zero (no mint), the rate is untouched.
+    function test_settleManagementFee_doesNotAdjustRateOnPrime() public {
+        vault.setTotalSupply(100_000e18);
+        uint256 rateBefore = accountant.lastExchangeRate();
+
+        skip(1);
+        _settleFee(); // prime, no mint
+
+        assertEq(accountant.lastExchangeRate(), rateBefore, "rate unchanged when no fee minted");
+    }
+
+    /// @dev Rate adjustment preserves NAV-per-share: postRate * postSupply <= preRate * preSupply
+    ///      (within integer-division rounding).
+    function testFuzz_settleManagementFee_rateAdjustmentPreservesNAV(uint256 supply, uint64 elapsed) public {
+        supply = bound(supply, 1e18, 1e30);
+        elapsed = uint64(bound(elapsed, 1 hours, 365 days));
+
+        vault.setTotalSupply(supply);
+        skip(1);
+        _settleFee(); // prime
+
+        skip(elapsed);
+        uint256 rateBefore = accountant.lastExchangeRate();
+        uint256 preNAV = rateBefore * supply;
+
+        _settleFee();
+
+        uint256 minted = vault.lastFeeShares();
+        if (minted == 0) {
+            assertEq(accountant.lastExchangeRate(), rateBefore);
+            return;
+        }
+        uint256 postNAV = accountant.lastExchangeRate() * (supply + minted);
+        assertLe(postNAV, preNAV, "post-mint NAV never exceeds pre-mint NAV");
+        assertLe(preNAV - postNAV, supply + minted, "rounding bounded by post-supply");
     }
 
     function test_settleManagementFee_revertsWhenNotExecutor() public {

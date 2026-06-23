@@ -9,8 +9,10 @@ import {Initializable} from "@openzeppelin/contracts/proxy/utils/Initializable.s
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 
 contract StrategyController is Initializable, AccessControlUpgradeable, ReentrancyGuard {
+    using SafeCast for uint256;
     bytes32 public constant OPERATOR_EXECUTOR_ROLE = keccak256("OPERATOR_EXECUTOR_ROLE");
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
 
@@ -452,6 +454,9 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
             return;
         }
 
+        // Invariant: strategyOrder only contains active adapters.
+        // Enforced by deactivateStrategy (rejects deactivation while in order) and
+        // _setStrategyOrder (rejects submission of any inactive adapter).
         uint256 totalActiveWeight;
         uint16 lastPriority;
         for (uint256 i = 0; i < len; i++) {
@@ -459,9 +464,6 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
             StrategyInfo memory info = strategyInfo[adapter];
             if (!info.exists) {
                 revert Controller__InvalidStrategy(adapter);
-            }
-            if (!info.isActive) {
-                revert Controller__StrategyInactive(adapter);
             }
             if (i > 0 && info.priority < lastPriority) {
                 revert Controller__InvalidPriorityOrder(adapter);
@@ -597,7 +599,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
             _divest(amount);
         }
 
-        lastRebalance = uint64(block.timestamp);
+        lastRebalance = block.timestamp.toUint64();
     }
 
     /**
@@ -780,11 +782,12 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     /// @dev Uses adapter.previewRedeem(totalValue) to get the step-aligned effective amount,
     ///      so a dust residual below the smallest step is correctly excluded from the pool.
     /// @dev Used to distinguish "true insufficient" (pool is not enough) vs "step residual" in processRedeemBatch.
+    /// @dev Iterates strategyOrder, which by invariant contains only active adapters
+    ///      (enforced by deactivateStrategy / _setStrategyOrder).
     function _adapterPoolValue() internal view returns (uint256 total) {
         uint256 len = strategyOrder.length;
         for (uint256 i = 0; i < len; i++) {
             address adapter = strategyOrder[i];
-            if (!strategyInfo[adapter].isActive) continue;
 
             uint256 adapterValue;
             try IStrategyAdapter(adapter).totalValue() returns (uint256 v) {
@@ -843,9 +846,6 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
 
             address adapter = strategyOrder[i];
             StrategyInfo memory info = strategyInfo[adapter];
-            if (!info.isActive) {
-                continue;
-            }
 
             uint256 targetBalance = (totalAssets * info.targetWeightBps) / BPS_DENOMINATOR;
             uint256 currentBalance;
@@ -921,9 +921,6 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
 
             address adapter = strategyOrder[i];
             StrategyInfo memory info = strategyInfo[adapter];
-            if (!info.isActive) {
-                continue;
-            }
 
             uint256 requestAsset = _readDivestCoverage(adapter, remaining);
             if (requestAsset == 0) {
