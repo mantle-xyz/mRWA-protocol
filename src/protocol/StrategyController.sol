@@ -1017,7 +1017,9 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
     ) internal {
         uint256 len = redeem.inFlightIds.length;
         for (uint256 i = 0; i < len; i++) {
-            _confirmSingleRedeemInFlight(expectedAdapter, redeem.inFlightIds[i], redeem.settledAssetAmounts[i]);
+            _confirmSingleRedeemInFlight(
+                expectedAdapter, redeem.inFlightIds[i], redeem.settledAssetAmounts[i], redeem.isAbnormal[i]
+            );
         }
     }
 
@@ -1038,7 +1040,11 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         uint256 len = invest.inFlightIds.length;
         for (uint256 i = 0; i < len; i++) {
             _confirmSingleInvestInFlight(
-                adapter, invest.inFlightIds[i], invest.settledPosAmounts[i], invest.refundAssetAmounts[i]
+                adapter,
+                invest.inFlightIds[i],
+                invest.settledPosAmounts[i],
+                invest.refundAssetAmounts[i],
+                invest.isAbnormal[i]
             );
         }
     }
@@ -1062,25 +1068,31 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         }
     }
 
-    function _confirmSingleRedeemInFlight(address expectedAdapter, uint256 inFlightId, uint256 settledAmount) internal {
+    function _confirmSingleRedeemInFlight(
+        address expectedAdapter,
+        uint256 inFlightId,
+        uint256 settledAmount,
+        bool isAbnormal
+    ) internal {
         (, address recordAdapter,,,,, bool isInvest,,) = vault.inFlightRecords(inFlightId);
         if (recordAdapter != expectedAdapter || isInvest) {
             revert Controller__InvalidRedeemInFlight(inFlightId);
         }
-        vault.confirmInFlight(inFlightId, settledAmount, settledAmount == 0);
+        vault.confirmInFlight(inFlightId, settledAmount, isAbnormal);
     }
 
     function _confirmSingleInvestInFlight(
         address adapter,
         uint256 inFlightId,
         uint256 settledPosAmount,
-        uint256 refundAssetAmount
+        uint256 refundAssetAmount,
+        bool isAbnormal
     ) internal {
         (, address recordAdapter,,,,, bool isInvest,,) = vault.inFlightRecords(inFlightId);
         if (recordAdapter != adapter || !isInvest) {
             revert Controller__InvalidInvestInFlight(inFlightId);
         }
-        vault.confirmInFlight(inFlightId, settledPosAmount, settledPosAmount == 0);
+        vault.confirmInFlight(inFlightId, settledPosAmount, isAbnormal);
         emit InvestSettlementRecorded(inFlightId, adapter, settledPosAmount, refundAssetAmount);
     }
 
@@ -1146,7 +1158,9 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
         if (
             invest.inFlightIds.length != invest.settledPosAmounts.length
                 || invest.inFlightIds.length != invest.refundAssetAmounts.length
+                || invest.inFlightIds.length != invest.isAbnormal.length
                 || redeem.inFlightIds.length != redeem.settledAssetAmounts.length
+                || redeem.inFlightIds.length != redeem.isAbnormal.length
         ) {
             revert Controller__SettleAmountsLengthMismatch();
         }

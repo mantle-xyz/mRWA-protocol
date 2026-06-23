@@ -412,10 +412,12 @@ contract StrategyFlowTest is Test {
         adapters[1] = address(adapterUMINT);
         IStrategyControllerExecutor.InvestSettlementInput[] memory investBatch =
             new IStrategyControllerExecutor.InvestSettlementInput[](2);
-        investBatch[0] =
-            IStrategyControllerExecutor.InvestSettlementInput(new uint256[](0), new uint256[](0), new uint256[](0));
-        investBatch[1] =
-            IStrategyControllerExecutor.InvestSettlementInput(new uint256[](0), new uint256[](0), new uint256[](0));
+        investBatch[0] = IStrategyControllerExecutor.InvestSettlementInput(
+            new uint256[](0), new uint256[](0), new uint256[](0), new bool[](0)
+        );
+        investBatch[1] = IStrategyControllerExecutor.InvestSettlementInput(
+            new uint256[](0), new uint256[](0), new uint256[](0), new bool[](0)
+        );
         uint256[] memory redeemCountByAdapter = new uint256[](2);
         for (uint256 i = 0; i < redeemInFlightCount; i++) {
             (, address adapter,,,,,,,) = vault.inFlightRecords(inFlightIds[i]);
@@ -427,10 +429,14 @@ contract StrategyFlowTest is Test {
         IStrategyControllerExecutor.RedeemSettlementInput[] memory redeemBatch =
             new IStrategyControllerExecutor.RedeemSettlementInput[](2);
         redeemBatch[0] = IStrategyControllerExecutor.RedeemSettlementInput(
-            new uint256[](redeemCountByAdapter[0]), new uint256[](redeemCountByAdapter[0])
+            new uint256[](redeemCountByAdapter[0]),
+            new uint256[](redeemCountByAdapter[0]),
+            new bool[](redeemCountByAdapter[0])
         );
         redeemBatch[1] = IStrategyControllerExecutor.RedeemSettlementInput(
-            new uint256[](redeemCountByAdapter[1]), new uint256[](redeemCountByAdapter[1])
+            new uint256[](redeemCountByAdapter[1]),
+            new uint256[](redeemCountByAdapter[1]),
+            new bool[](redeemCountByAdapter[1])
         );
 
         uint256[] memory writeIdx = new uint256[](2);

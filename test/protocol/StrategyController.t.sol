@@ -405,7 +405,13 @@ contract MockControllerVault {
         }
     }
 
-    function confirmInFlight(uint256 inFlightId, uint256 actualAmount, bool) external {
+    /// @dev Records the explicit isAbnormal flag forwarded by the controller, keyed by in-flight id.
+    mapping(uint256 => bool) public confirmedIsAbnormal;
+
+    function confirmInFlight(uint256 inFlightId, uint256 actualAmount, bool isAbnormal) external {
+        // Mirror the real vault guard: a zero settlement is only allowed when explicitly marked abnormal.
+        if (actualAmount == 0 && !isAbnormal) revert IMantleYieldVault.Vault__ZeroAmount();
+        confirmedIsAbnormal[inFlightId] = isAbnormal;
         InFlight storage f = flights[inFlightId];
         f.settledAmount = actualAmount;
         f.status = IMantleYieldVault.InFlightStatus.CONFIRMED;
@@ -545,8 +551,21 @@ contract StrategyControllerUnitTest is Test {
         uint256[] memory settledPosAmounts,
         uint256[] memory refundAssetAmounts
     ) internal pure returns (IStrategyControllerExecutor.InvestSettlementInput memory invest) {
+        // Default: every settlement is normal (isAbnormal=false), length-aligned with inFlightIds.
+        invest = _investSettlement(inFlightIds, settledPosAmounts, refundAssetAmounts, new bool[](inFlightIds.length));
+    }
+
+    function _investSettlement(
+        uint256[] memory inFlightIds,
+        uint256[] memory settledPosAmounts,
+        uint256[] memory refundAssetAmounts,
+        bool[] memory isAbnormal
+    ) internal pure returns (IStrategyControllerExecutor.InvestSettlementInput memory invest) {
         invest = IStrategyControllerExecutor.InvestSettlementInput({
-            inFlightIds: inFlightIds, settledPosAmounts: settledPosAmounts, refundAssetAmounts: refundAssetAmounts
+            inFlightIds: inFlightIds,
+            settledPosAmounts: settledPosAmounts,
+            refundAssetAmounts: refundAssetAmounts,
+            isAbnormal: isAbnormal
         });
     }
 
@@ -555,9 +574,23 @@ contract StrategyControllerUnitTest is Test {
         pure
         returns (IStrategyControllerExecutor.RedeemSettlementInput memory redeem)
     {
+        // Default: every settlement is normal (isAbnormal=false), length-aligned with inFlightIds.
+        redeem = _redeemSettlement(inFlightIds, settledAssetAmounts, new bool[](inFlightIds.length));
+    }
+
+    function _redeemSettlement(
+        uint256[] memory inFlightIds,
+        uint256[] memory settledAssetAmounts,
+        bool[] memory isAbnormal
+    ) internal pure returns (IStrategyControllerExecutor.RedeemSettlementInput memory redeem) {
         redeem = IStrategyControllerExecutor.RedeemSettlementInput({
-            inFlightIds: inFlightIds, settledAssetAmounts: settledAssetAmounts
+            inFlightIds: inFlightIds, settledAssetAmounts: settledAssetAmounts, isAbnormal: isAbnormal
         });
+    }
+
+    function _toSingletonBool(bool value) internal pure returns (bool[] memory values) {
+        values = new bool[](1);
+        values[0] = value;
     }
 
     function _toSingletonArray(uint256 value) internal pure returns (uint256[] memory values) {
@@ -1485,7 +1518,10 @@ contract StrategyControllerUnitTest is Test {
         vm.prank(address(executorGateway));
         controller.settleAdapter(
             address(asyncAdapter),
-            _investSettlement(investInFlightIds, investSettledPosAmounts, investRefundAssetAmounts),
+            // No tokens and no refund settled to the adapter: explicitly an abnormal settlement.
+            _investSettlement(
+                investInFlightIds, investSettledPosAmounts, investRefundAssetAmounts, _toSingletonBool(true)
+            ),
             _redeemSettlement(new uint256[](0), new uint256[](0))
         );
 
@@ -1612,7 +1648,10 @@ contract StrategyControllerUnitTest is Test {
         vm.prank(address(executorGateway));
         controller.settleAdapter(
             address(asyncAdapter),
-            _investSettlement(investInFlightIds, investSettledPosAmounts, investRefundAssetAmounts),
+            // Zero position tokens, fully refunded: an abnormal settlement.
+            _investSettlement(
+                investInFlightIds, investSettledPosAmounts, investRefundAssetAmounts, _toSingletonBool(true)
+            ),
             _redeemSettlement(new uint256[](0), new uint256[](0))
         );
 
@@ -2274,7 +2313,10 @@ contract StrategyControllerUnitTest is Test {
         vm.prank(address(executorGateway));
         controller.settleAdapter(
             address(asyncAdapter),
-            _investSettlement(investInFlightIds, investSettledPosAmounts, investRefundAssetAmounts),
+            // Full refund (zero position tokens) is an abnormal settlement.
+            _investSettlement(
+                investInFlightIds, investSettledPosAmounts, investRefundAssetAmounts, _toSingletonBool(true)
+            ),
             _redeemSettlement(new uint256[](0), new uint256[](0))
         );
 
@@ -2307,6 +2349,105 @@ contract StrategyControllerUnitTest is Test {
             address(asyncAdapter),
             _investSettlement(investInFlightIds, investSettledPosAmounts, investRefundAssetAmounts),
             _redeemSettlement(new uint256[](0), new uint256[](0))
+        );
+    }
+
+    // =============================================================
+    // Explicit isAbnormal settlement signal
+    // =============================================================
+
+    /// @dev A zero invest settlement that is NOT explicitly marked abnormal must be rejected,
+    ///      not silently cleared (regression guard against deriving isAbnormal from amount == 0).
+    function test_RevertWhen_SettleAdapterInvestZeroSettledNotAbnormal() public {
+        _registerSingleAsyncStrategy();
+        uint256 inFlightId = vault.createInFlight(address(asyncAdapter), address(posToken), 100e18, 100e18, true);
+
+        vm.prank(address(executorGateway));
+        vm.expectRevert(IMantleYieldVault.Vault__ZeroAmount.selector);
+        controller.settleAdapter(
+            address(asyncAdapter),
+            _investSettlement(
+                _toSingletonArray(inFlightId), _toSingletonArray(0), _toSingletonArray(0), _toSingletonBool(false)
+            ),
+            _redeemSettlement(new uint256[](0), new uint256[](0))
+        );
+    }
+
+    /// @dev A zero redeem settlement that is NOT explicitly marked abnormal must be rejected.
+    function test_RevertWhen_SettleAdapterRedeemZeroSettledNotAbnormal() public {
+        _registerSingleAsyncStrategy();
+        uint256 redeemInFlightId = vault.createInFlight(address(asyncAdapter), address(posToken), 50e18, 100e18, false);
+
+        vm.prank(address(executorGateway));
+        vm.expectRevert(IMantleYieldVault.Vault__ZeroAmount.selector);
+        controller.settleAdapter(
+            address(asyncAdapter),
+            _investSettlement(new uint256[](0), new uint256[](0), new uint256[](0)),
+            _redeemSettlement(_toSingletonArray(redeemInFlightId), _toSingletonArray(0), _toSingletonBool(false))
+        );
+    }
+
+    /// @dev The controller forwards the explicit abnormal flag for invest verbatim,
+    ///      independent of the settled amount (here a non-zero amount is still marked abnormal).
+    function test_SettleAdapter_ForwardsExplicitAbnormalFlagForInvest() public {
+        _registerSingleAsyncStrategy();
+        uint256 inFlightId = vault.createInFlight(address(asyncAdapter), address(posToken), 100e18, 100e18, true);
+
+        vm.prank(address(executorGateway));
+        controller.settleAdapter(
+            address(asyncAdapter),
+            _investSettlement(
+                _toSingletonArray(inFlightId), _toSingletonArray(100e18), _toSingletonArray(0), _toSingletonBool(true)
+            ),
+            _redeemSettlement(new uint256[](0), new uint256[](0))
+        );
+
+        assertTrue(vault.confirmedIsAbnormal(inFlightId));
+    }
+
+    /// @dev The controller forwards the explicit abnormal flag for redeem verbatim,
+    ///      independent of the settled amount.
+    function test_SettleAdapter_ForwardsExplicitAbnormalFlagForRedeem() public {
+        _registerSingleAsyncStrategy();
+        uint256 redeemInFlightId = vault.createInFlight(address(asyncAdapter), address(posToken), 50e18, 100e18, false);
+
+        vm.prank(address(executorGateway));
+        controller.settleAdapter(
+            address(asyncAdapter),
+            _investSettlement(new uint256[](0), new uint256[](0), new uint256[](0)),
+            _redeemSettlement(_toSingletonArray(redeemInFlightId), _toSingletonArray(100e18), _toSingletonBool(true))
+        );
+
+        assertTrue(vault.confirmedIsAbnormal(redeemInFlightId));
+    }
+
+    /// @dev isAbnormal array must be length-aligned with the invest in-flight ids.
+    function test_RevertWhen_SettleAdapterInvestIsAbnormalLengthMismatch() public {
+        _registerSingleAsyncStrategy();
+        uint256 inFlightId = vault.createInFlight(address(asyncAdapter), address(posToken), 100e18, 100e18, true);
+
+        vm.prank(address(executorGateway));
+        vm.expectRevert(StrategyController.Controller__SettleAmountsLengthMismatch.selector);
+        controller.settleAdapter(
+            address(asyncAdapter),
+            _investSettlement(
+                _toSingletonArray(inFlightId), _toSingletonArray(100e18), _toSingletonArray(0), new bool[](0)
+            ),
+            _redeemSettlement(new uint256[](0), new uint256[](0))
+        );
+    }
+
+    /// @dev isAbnormal array must be length-aligned with the redeem in-flight ids.
+    function test_RevertWhen_SettleAdapterRedeemIsAbnormalLengthMismatch() public {
+        _registerSingleAsyncStrategy();
+        uint256 redeemInFlightId = vault.createInFlight(address(asyncAdapter), address(posToken), 50e18, 100e18, false);
+
+        vm.prank(address(executorGateway));
+        vm.expectRevert(StrategyController.Controller__SettleAmountsLengthMismatch.selector);
+        controller.settleAdapter(
+            address(asyncAdapter),
+            _investSettlement(new uint256[](0), new uint256[](0), new uint256[](0)),
+            _redeemSettlement(_toSingletonArray(redeemInFlightId), _toSingletonArray(100e18), new bool[](0))
         );
     }
 
