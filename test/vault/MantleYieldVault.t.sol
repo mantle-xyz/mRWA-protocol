@@ -1996,10 +1996,14 @@ contract SyncRedeemDisabledTest is VaultTestBase {
     }
 
     function test_maxWithdrawNotAffectedWhenSyncDisabled() public {
+        // maxWithdraw is permanently 0 (withdraw-by-assets path disabled);
+        // flipping syncRedeemDisabled must not change that invariant.
+        assertEq(vault.maxWithdraw(alice), 0);
+
         vm.prank(admin);
         gateway.setSyncRedeemDisabled(true);
 
-        assertGt(vault.maxWithdraw(alice), 0);
+        assertEq(vault.maxWithdraw(alice), 0);
     }
 
     function test_requestRedeemStillWorksWhenSyncDisabled() public {
