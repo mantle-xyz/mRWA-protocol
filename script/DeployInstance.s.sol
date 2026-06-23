@@ -49,6 +49,7 @@ import {Script, console2} from "forge-std/Script.sol";
 ///   F_OPERATOR_EXECUTOR          – existing OperatorExecutor proxy (reused)
 ///   F_ACCOUNTANT_EXECUTOR        – existing AccountantExecutor proxy (reused)
 ///   F_TREASURY_ADDRESS
+///   F_SANCTION_SAFE_ADDRESS      – Gateway sanctionSafe init param (compliance escrow address)
 ///   F_PAUSER_ADDRESS
 ///   F_CAP_MANAGER_ADDRESS
 ///   F_INITIAL_RATE
@@ -102,6 +103,7 @@ contract DeployInstance is Script {
         address stable = vm.envAddress("F_STABLE_ADDRESS");
         address complianceBot = vm.envAddress("F_COMPLIANCE_BOT_ADDRESS");
         address treasury = vm.envAddress("F_TREASURY_ADDRESS");
+        address sanctionSafe = vm.envAddress("F_SANCTION_SAFE_ADDRESS");
         address pauser = vm.envAddress("F_PAUSER_ADDRESS");
         address capManager = vm.envAddress("F_CAP_MANAGER_ADDRESS");
         uint64 initialRate = uint64(vm.envUint("F_INITIAL_RATE"));
@@ -121,6 +123,8 @@ contract DeployInstance is Script {
         console2.log("ControllerFactory  :", address(controllerFactory));
         console2.log("Beacon impl (vault):", vaultFactory.implementation());
         console2.log("Admin              :", admin);
+        console2.log("Treasury           :", treasury);
+        console2.log("SanctionSafe       :", sanctionSafe);
 
         vm.startBroadcast();
 
@@ -190,7 +194,7 @@ contract DeployInstance is Script {
                 IMantleVaultGateway.InitParams({
                     vault: vaultAddr,
                     sanctionsOracle: ISanctionsOracle(oracleAddr),
-                    sanctionSafe: admin,
+                    sanctionSafe: sanctionSafe,
                     admin: admin,
                     syncRedeemDisabled: vm.envBool("F_SYNC_REDEEM_DISABLED")
                 })
