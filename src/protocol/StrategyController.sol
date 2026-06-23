@@ -9,8 +9,10 @@ import {Initializable} from "@openzeppelin/contracts/proxy/utils/Initializable.s
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 
 contract StrategyController is Initializable, AccessControlUpgradeable, ReentrancyGuard {
+    using SafeCast for uint256;
     bytes32 public constant OPERATOR_EXECUTOR_ROLE = keccak256("OPERATOR_EXECUTOR_ROLE");
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
 
@@ -597,7 +599,7 @@ contract StrategyController is Initializable, AccessControlUpgradeable, Reentran
             _divest(amount);
         }
 
-        lastRebalance = uint64(block.timestamp);
+        lastRebalance = block.timestamp.toUint64();
     }
 
     /**
