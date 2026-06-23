@@ -68,7 +68,7 @@ import {Script, console2} from "forge-std/Script.sol";
 ///   F_FEE_SETTLER_ADDRESS        – AccountantExecutor FEE_SETTLER_ROLE
 ///   F_SIGNER_ADDRESS             – OperatorExecutor BOT_ROLE (initial bot, legacy env name)
 ///   F_TREASURY_ADDRESS           – fee share recipient
-///   (also used as gateway sanctionSafe init)
+///   F_SANCTION_SAFE_ADDRESS      – Gateway sanctionSafe init param (compliance escrow address)
 ///   F_PAUSER_ADDRESS             – Vault PAUSER_ROLE
 ///   F_CAP_MANAGER_ADDRESS        – Vault CAP_MANAGER_ROLE
 ///   F_INITIAL_RATE               – Accountant starting exchange rate (e.g. 1e18)
@@ -124,6 +124,7 @@ contract DeployAll is Script {
         address feeSettler = vm.envAddress("F_FEE_SETTLER_ADDRESS");
         address signer = vm.envAddress("F_SIGNER_ADDRESS");
         address treasury = vm.envAddress("F_TREASURY_ADDRESS");
+        address sanctionSafe = vm.envAddress("F_SANCTION_SAFE_ADDRESS");
         address pauser = vm.envAddress("F_PAUSER_ADDRESS");
         address capManager = vm.envAddress("F_CAP_MANAGER_ADDRESS");
         uint64 initialRate = uint64(vm.envUint("F_INITIAL_RATE"));
@@ -138,6 +139,7 @@ contract DeployAll is Script {
         console2.log("=== DeployAll: Full mRWA Protocol ===");
         console2.log("Admin          :", admin);
         console2.log("Treasury       :", treasury);
+        console2.log("SanctionSafe   :", sanctionSafe);
 
         vm.startBroadcast();
 
@@ -289,7 +291,7 @@ contract DeployAll is Script {
                 IMantleVaultGateway.InitParams({
                     vault: vaultAddr,
                     sanctionsOracle: ISanctionsOracle(oracleAddr),
-                    sanctionSafe: admin,
+                    sanctionSafe: sanctionSafe,
                     admin: admin,
                     syncRedeemDisabled: vm.envBool("F_SYNC_REDEEM_DISABLED")
                 })

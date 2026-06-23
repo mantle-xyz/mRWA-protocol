@@ -19,7 +19,8 @@ envs:
   F_BOT_ADDRESS: "" # AccountantExecutor BOT_ROLE
   F_FEE_SETTLER_ADDRESS: "" # AccountantExecutor FEE_SETTLER_ROLE
   F_SIGNER_ADDRESS: "" # OperatorExecutor SIGNER_ROLE
-  F_TREASURY_ADDRESS: "" # Vault fee share recipient / sanction safe
+  F_TREASURY_ADDRESS: "" # Vault fee share recipient
+  F_SANCTION_SAFE_ADDRESS: "" # Gateway sanctionSafe (compliance escrow address)
   F_PAUSER_ADDRESS: "" # Vault + StrategyController PAUSER_ROLE
   F_CAP_MANAGER_ADDRESS: "" # Vault CAP_MANAGER_ROLE
 

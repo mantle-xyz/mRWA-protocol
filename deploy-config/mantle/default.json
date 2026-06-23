@@ -16,6 +16,7 @@
     "F_BOT_ADDRESS": "",
     "F_SIGNER_ADDRESS": "",
     "F_TREASURY_ADDRESS": "",
+    "F_SANCTION_SAFE_ADDRESS": "",
     "F_PAUSER_ADDRESS": "",
     "F_CAP_MANAGER_ADDRESS": "",
     "F_ACCOUNTANT_FACTORY": "",

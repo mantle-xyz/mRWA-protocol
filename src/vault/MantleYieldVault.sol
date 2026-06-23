@@ -121,9 +121,8 @@ contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultA
         if (shares > maxShares) {
             revert ERC4626ExceededMaxRedeem(owner, shares, maxShares);
         }
-        if (redeemDailyRemaining < shares) {
-            revert Vault__RedeemDailyCapExceeded(shares, redeemDailyRemaining);
-        }
+        // maxRedeem already caps the return value to min(cashLimited, redeemDailyRemaining),
+        // so `shares <= maxShares <= redeemDailyRemaining` is guaranteed at this point.
         redeemDailyRemaining -= shares;
         uint256 treasuryShare = shares.mulDiv(redemptionFeeBps, FEE_BASIS, Math.Rounding.Ceil);
         uint256 netShares = shares - treasuryShare;

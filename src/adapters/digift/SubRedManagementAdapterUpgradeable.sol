@@ -7,6 +7,7 @@ import {BaseAsync7540AdapterUpgradeable} from "../base/capabilities/BaseAsync754
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {IERC20, SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 
 /// @title SubRedManagementAdapter (Upgradeable)
 /// @notice Async-first adapter for Digift SubRed subscribe/redeem flow.
@@ -14,6 +15,12 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 /// @dev Controller drives unified adapter methods. Uses ERC-7201 namespaced storage.
 contract SubRedManagementAdapter is BaseAsync7540AdapterUpgradeable {
     using SafeERC20 for IERC20;
+    using SafeCast for uint256;
+
+    /// @notice Upper bound for subscribe/redeem deadline windows.
+    uint64 public constant MAX_DEADLINE_WINDOW = 30 days;
+
+    error Adapter__InvalidDeadlineWindow(uint64 window);
 
     // =============================================================
     //                  ERC-7201 NAMESPACED STORAGE
@@ -278,6 +285,9 @@ contract SubRedManagementAdapter is BaseAsync7540AdapterUpgradeable {
      * @dev Only callable by DEFAULT_ADMIN_ROLE.
      */
     function setSubscribeDeadlineWindow(uint64 newWindow) external onlyAdmin {
+        if (newWindow == 0 || newWindow > MAX_DEADLINE_WINDOW) {
+            revert Adapter__InvalidDeadlineWindow(newWindow);
+        }
         _getSubRedAdapterStorage().subscribeDeadlineWindow = newWindow;
         emit SubscribeDeadlineWindowUpdated(newWindow);
     }
@@ -288,6 +298,9 @@ contract SubRedManagementAdapter is BaseAsync7540AdapterUpgradeable {
      * @dev Only callable by DEFAULT_ADMIN_ROLE.
      */
     function setRedeemDeadlineWindow(uint64 newWindow) external onlyAdmin {
+        if (newWindow == 0 || newWindow > MAX_DEADLINE_WINDOW) {
+            revert Adapter__InvalidDeadlineWindow(newWindow);
+        }
         _getSubRedAdapterStorage().redeemDeadlineWindow = newWindow;
         emit RedeemDeadlineWindowUpdated(newWindow);
     }
@@ -341,7 +354,7 @@ contract SubRedManagementAdapter is BaseAsync7540AdapterUpgradeable {
         }
         // Controller already validated via previewDeposit(); no redundant checks here.
         _asset().safeTransferFrom(_vault(), address(this), amountAsset);
-        _subscribe(amountAsset, uint64(block.timestamp + _getSubRedAdapterStorage().subscribeDeadlineWindow));
+        _subscribe(amountAsset, (block.timestamp + _getSubRedAdapterStorage().subscribeDeadlineWindow).toUint64());
         _emitAdapterDeposit(amountAsset, receiver, previewPosAmount);
         return previewPosAmount;
     }
@@ -362,7 +375,7 @@ contract SubRedManagementAdapter is BaseAsync7540AdapterUpgradeable {
     {
         SubRedAdapterStorage storage s = _getSubRedAdapterStorage();
         IERC20(s.stToken).safeTransferFrom(_vault(), address(this), posAmount);
-        _redeem(posAmount, uint64(block.timestamp + s.redeemDeadlineWindow));
+        _redeem(posAmount, (block.timestamp + s.redeemDeadlineWindow).toUint64());
         _registerAsyncRedeem(posAmount, receiver);
     }
 
@@ -387,7 +400,7 @@ contract SubRedManagementAdapter is BaseAsync7540AdapterUpgradeable {
             revert InvalidAmount();
         }
 
-        _redeem(retryPosAmount, uint64(block.timestamp + s.redeemDeadlineWindow));
+        _redeem(retryPosAmount, (block.timestamp + s.redeemDeadlineWindow).toUint64());
         _registerAsyncRedeem(retryPosAmount, receiver);
     }
 
