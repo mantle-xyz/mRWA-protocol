@@ -495,15 +495,9 @@ contract SyncRedeemTest is VaultTestBase {
         assertEq(vault.balanceOf(alice), INITIAL_DEPOSIT - shares);
     }
 
-    function test_previewWithdrawCanBeSatisfiedViaRedeem() public {
-        uint256 wantAssets = 99e6;
-        uint256 neededShares = vault.previewWithdraw(wantAssets);
-
-        vm.prank(alice);
-        uint256 assetsOut = gateway.redeem(neededShares);
-
-        assertGe(assetsOut, wantAssets);
-        assertEq(vault.balanceOf(alice), INITIAL_DEPOSIT - neededShares);
+    function test_previewWithdraw_revertsNotAuthorized() public {
+        vm.expectRevert(IMantleYieldVault.Vault__NotAuthorized.selector);
+        vault.previewWithdraw(99e6);
     }
 
     function test_redeemRevertsZeroShares() public {
