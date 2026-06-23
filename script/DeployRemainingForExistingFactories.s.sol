@@ -44,7 +44,8 @@ import {Script, console2} from "forge-std/Script.sol";
 ///   F_BOT_ADDRESS                – AccountantExecutor BOT_ROLE
 ///   F_FEE_SETTLER_ADDRESS        – AccountantExecutor FEE_SETTLER_ROLE
 ///   F_SIGNER_ADDRESS             – OperatorExecutor BOT_ROLE (initial bot, legacy env name)
-///   F_TREASURY_ADDRESS           – Gateway sanctionSafe init param (also Vault treasury in Phase B)
+///   F_TREASURY_ADDRESS           – Vault treasury (fee share recipient) consumed in Phase B
+///   F_SANCTION_SAFE_ADDRESS      – Gateway sanctionSafe init param (compliance escrow address)
 ///   F_SYNC_REDEEM_DISABLED       – Gateway syncRedeemDisabled init param (true/false)
 ///   F_WHITELIST_ENABLED          – Gateway whitelist enforcement flag (true/false; default false)
 ///   EXISTING_VAULT_PROXY         – the uninit Vault BeaconProxy already on-chain
@@ -78,6 +79,7 @@ contract DeployRemainingForExistingFactories is Script {
         address feeSettler = vm.envAddress("F_FEE_SETTLER_ADDRESS");
         address signer = vm.envAddress("F_SIGNER_ADDRESS");
         address treasury = vm.envAddress("F_TREASURY_ADDRESS");
+        address sanctionSafe = vm.envAddress("F_SANCTION_SAFE_ADDRESS");
         address vaultProxy = vm.envAddress("EXISTING_VAULT_PROXY");
         bool syncRedeemDisabled = vm.envBool("F_SYNC_REDEEM_DISABLED");
         bool whitelistEnabled = vm.envOr("F_WHITELIST_ENABLED", false);
@@ -94,6 +96,7 @@ contract DeployRemainingForExistingFactories is Script {
         console2.log("Fee settler        :", feeSettler);
         console2.log("Op signer          :", signer);
         console2.log("Treasury           :", treasury);
+        console2.log("SanctionSafe       :", sanctionSafe);
         console2.log("Sync redeem disabled:", syncRedeemDisabled);
         console2.log("Whitelist enabled  :", whitelistEnabled);
 
@@ -146,15 +149,13 @@ contract DeployRemainingForExistingFactories is Script {
                 IMantleVaultGateway.InitParams({
                     vault: vaultProxy,
                     sanctionsOracle: ISanctionsOracle(oracleAddr),
-                    sanctionSafe: treasury,
+                    sanctionSafe: sanctionSafe,
                     admin: admin,
-                    syncRedeemDisabled: syncRedeemDisabled
+                    syncRedeemDisabled: syncRedeemDisabled,
+                    whitelistEnabled: whitelistEnabled
                 })
             );
         d.gateway = MantleVaultGateway(gatewayAddr);
-        if (whitelistEnabled) {
-            d.gateway.setWhitelistEnabled(true);
-        }
         console2.log("[6/6] Gateway          :", gatewayAddr);
 
         vm.stopBroadcast();

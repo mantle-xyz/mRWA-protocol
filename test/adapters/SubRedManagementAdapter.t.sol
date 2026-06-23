@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import {AccountantExecutor} from "../../src/accountant/AccountantExecutor.sol";
 import {SubRedManagementAdapter} from "../../src/adapters/digift/SubRedManagementAdapter.sol";
 import {ISubRedManagement} from "../../src/interfaces/adapters/digift/ISubRedManagement.sol";
 import {MockDFeedPriceOracle} from "../../src/mocks/strategy/MockDFeedPriceOracle.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {Test} from "forge-std/Test.sol";
 import {Vm} from "forge-std/Vm.sol";
@@ -338,7 +340,7 @@ contract SubRedManagementAdapterTest is Test {
     }
 
     function test_GetPosTokenPrice_DoesNotFallbackToManualWhenOracleConfigured() public {
-        adapter.setManualPosTokenPrice(4e18);
+        adapter.setManualPosTokenPrice(1.04e18);
         adapter.setPriceOracle(address(oracle));
         oracle.setPrice(0);
 
@@ -346,7 +348,7 @@ contract SubRedManagementAdapterTest is Test {
     }
 
     function test_GetPosTokenPrice_ReturnsZeroWhenOracleNormalizesToZero() public {
-        adapter.setManualPosTokenPrice(4e18);
+        adapter.setManualPosTokenPrice(1.04e18);
         oracle.setDecimals(20);
         oracle.setPrice(1);
         adapter.setPriceOracle(address(oracle));
@@ -362,6 +364,45 @@ contract SubRedManagementAdapterTest is Test {
         adapterWithOracle.setManualPosTokenPrice(5e18);
     }
 
+    function test_SetManualPosTokenPrice_AllowsWithinDefaultDeviation() public {
+        adapter.setManualPosTokenPrice(1.1e18);
+        assertEq(adapter.getPosTokenPrice(), 1.1e18);
+    }
+
+    function test_RevertWhen_SetManualPosTokenPrice_ExceedsDefaultDeviation() public {
+        vm.expectRevert();
+        adapter.setManualPosTokenPrice(1.11e18);
+    }
+
+    function test_RevertWhen_SetManualPosTokenPrice_FractionallyExceedsDefaultDeviation() public {
+        vm.expectRevert();
+        adapter.setManualPosTokenPrice(1.1e18 + 1);
+    }
+
+    function test_RevertWhen_SetManualPosTokenPrice_Zero() public {
+        vm.expectRevert();
+        adapter.setManualPosTokenPrice(0);
+    }
+
+    function test_SetMaxManualPriceDeviationBps_AllowsAdminToRelaxWithinCeiling() public {
+        adapter.setMaxManualPriceDeviationBps(3000);
+        assertEq(adapter.maxManualPriceDeviationBps(), 3000);
+
+        adapter.setManualPosTokenPrice(1.3e18);
+        assertEq(adapter.getPosTokenPrice(), 1.3e18);
+    }
+
+    function test_RevertWhen_SetMaxManualPriceDeviationBps_ExceedsCeiling() public {
+        vm.expectRevert();
+        adapter.setMaxManualPriceDeviationBps(3001);
+    }
+
+    function test_RevertWhen_SetMaxManualPriceDeviationBps_ByUnauthorized() public {
+        vm.prank(other);
+        vm.expectRevert();
+        adapter.setMaxManualPriceDeviationBps(3000);
+    }
+
     function test_SetManualPosTokenPrice_AfterDisablingOracle() public {
         adapterWithOracle.setPriceOracle(address(0));
         adapterWithOracle.setManualPosTokenPrice(4e18);
@@ -369,8 +410,37 @@ contract SubRedManagementAdapterTest is Test {
     }
 
     function test_GetPosTokenPrice_UsesManualWhenNoOracleConfigured() public {
-        adapter.setManualPosTokenPrice(4e18);
-        assertEq(adapter.getPosTokenPrice(), 4e18);
+        adapter.setManualPosTokenPrice(1.04e18);
+        assertEq(adapter.getPosTokenPrice(), 1.04e18);
+    }
+
+    /// @dev Real relay path: AccountantExecutor (not an EOA stand-in) holds
+    ///      ACCOUNTANT_EXECUTOR_ROLE on the adapter and must be able to update
+    ///      the manual price via executeSetManualPosTokenPrice.
+    function test_SetManualPosTokenPrice_ViaRealAccountantExecutor() public {
+        address admin = makeAddr("admin");
+        address bot = makeAddr("bot");
+
+        AccountantExecutor execImpl = new AccountantExecutor();
+        AccountantExecutor executor = AccountantExecutor(
+            address(new ERC1967Proxy(address(execImpl), abi.encodeCall(AccountantExecutor.initialize, (admin))))
+        );
+        bytes32 botRole = executor.BOT_ROLE();
+        vm.prank(admin);
+        executor.grantRole(botRole, bot);
+
+        SubRedManagementAdapter realWiredAdapter = new SubRedManagementAdapter(
+            address(vault), address(subRed), address(stToken), admin, admin, address(executor), address(0)
+        );
+
+        vm.prank(bot);
+        executor.executeSetManualPosTokenPrice(address(realWiredAdapter), 4e18);
+        assertEq(realWiredAdapter.getPosTokenPrice(), 4e18);
+
+        // Direct call from admin must still fail: only the executor holds the role.
+        vm.expectRevert();
+        vm.prank(admin);
+        realWiredAdapter.setManualPosTokenPrice(5e18);
     }
 
     function test_PreviewDeposit_FloorsToIncrement() public {
@@ -434,5 +504,50 @@ contract SubRedManagementAdapterTest is Test {
 
         vm.expectRevert();
         adapterWithOracle.requestRedeemAsync(3_003e18 + 8e17, receiver);
+    }
+
+    // =============================================================
+    // Deadline-window setter bound (audit follow-up)
+    // =============================================================
+
+    function test_SetSubscribeDeadlineWindow_AcceptsWithinBound() public {
+        adapter.setSubscribeDeadlineWindow(1 hours);
+        assertEq(adapter.subscribeDeadlineWindow(), 1 hours);
+        adapter.setSubscribeDeadlineWindow(adapter.MAX_DEADLINE_WINDOW());
+        assertEq(adapter.subscribeDeadlineWindow(), adapter.MAX_DEADLINE_WINDOW());
+    }
+
+    function test_RevertWhen_SetSubscribeDeadlineWindowZero() public {
+        vm.expectRevert(abi.encodeWithSignature("Adapter__InvalidDeadlineWindow(uint64)", uint64(0)));
+        adapter.setSubscribeDeadlineWindow(0);
+    }
+
+    function test_RevertWhen_SetSubscribeDeadlineWindowAboveMax() public {
+        uint64 tooLarge = adapter.MAX_DEADLINE_WINDOW() + 1;
+        vm.expectRevert(abi.encodeWithSignature("Adapter__InvalidDeadlineWindow(uint64)", tooLarge));
+        adapter.setSubscribeDeadlineWindow(tooLarge);
+    }
+
+    function test_RevertWhen_SetSubscribeDeadlineWindowUint64Max() public {
+        vm.expectRevert(abi.encodeWithSignature("Adapter__InvalidDeadlineWindow(uint64)", type(uint64).max));
+        adapter.setSubscribeDeadlineWindow(type(uint64).max);
+    }
+
+    function test_SetRedeemDeadlineWindow_AcceptsWithinBound() public {
+        adapter.setRedeemDeadlineWindow(2 hours);
+        assertEq(adapter.redeemDeadlineWindow(), 2 hours);
+        adapter.setRedeemDeadlineWindow(adapter.MAX_DEADLINE_WINDOW());
+        assertEq(adapter.redeemDeadlineWindow(), adapter.MAX_DEADLINE_WINDOW());
+    }
+
+    function test_RevertWhen_SetRedeemDeadlineWindowZero() public {
+        vm.expectRevert(abi.encodeWithSignature("Adapter__InvalidDeadlineWindow(uint64)", uint64(0)));
+        adapter.setRedeemDeadlineWindow(0);
+    }
+
+    function test_RevertWhen_SetRedeemDeadlineWindowAboveMax() public {
+        uint64 tooLarge = adapter.MAX_DEADLINE_WINDOW() + 1;
+        vm.expectRevert(abi.encodeWithSignature("Adapter__InvalidDeadlineWindow(uint64)", tooLarge));
+        adapter.setRedeemDeadlineWindow(tooLarge);
     }
 }

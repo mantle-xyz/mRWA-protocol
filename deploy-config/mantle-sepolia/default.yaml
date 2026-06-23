@@ -2,167 +2,116 @@ chainId: 5003
 
 envs:
   # ── Wallet / RPC ──────────────────────────────────────────────
-  F_WALLET_TYPE: PRIVATE_KEY # options: AWS_KMS, PRIVATE_KEY, LEDGER, TREZOR, MNEMONIC
-  # 0x65Cf61678Cf120a8F40c2F3aEDCb50BBA0e85c78 is driven by mnemonic index 1
-  F_PRIVATE_KEY: "0x31e261ca732cabd3e3cdc349e45a0af87187c798d021d84b6e55b5abe9de4ea3"
-  F_MNEMONIC: "suggest tuition hint exclude shove leave liquid since famous bid mention raise"
+  F_WALLET_TYPE: LEDGER 
+  F_MNEMONIC: ""
   F_MNEMONIC_INDEX: 0 # also used by LEDGER/TREZOR; default 0 when omitted
   F_HARDWARE_DERIVATION_PATH: "" # optional for LEDGER/TREZOR, e.g. m/44'/60'/0'/0/0
   F_AWS_KMS_KEY_ID: ""
-  F_SENDER: "0x65Cf61678Cf120a8F40c2F3aEDCb50BBA0e85c78"
+  F_SENDER: "0x207E804758e28F2b3fD6E4219671B327100b82f8"
   F_VERBOSE: true
-  F_RPC_URL: "https://rpc-moon.sepolia.mantle.xyz/v1/OTEyYjhkZmJlZGFjOGFkMGUxZDNmMDYz"
+  F_RPC_URL: "https://rpc.sepolia.mantle.xyz"
   F_VERIFY: "true" # set to "true" to verify on broadcast; use VerifyXxx tasks to verify post-deploy
 
-  # ── Addresses (roles) ────────────────────────────────────────
-  F_ADMIN_ADDRESS: "0x65Cf61678Cf120a8F40c2F3aEDCb50BBA0e85c78"
-  # 0x3C8af6063c934dc25F7dB727bBB6c7DeEBE21Bb2 is driven by mnemonic index 1
-  F_COMPLIANCE_BOT_ADDRESS: "0x026C0fA47A4D10cb83bB580DaD884c10986115c0" # SanctionsOracle COMPLIANCE_ROLE
-  F_BOT_ADDRESS: "0x026C0fA47A4D10cb83bB580DaD884c10986115c0" # AccountantExecutor BOT_ROLE
-  F_FEE_SETTLER_ADDRESS: "0x3C8af6063c934dc25F7dB727bBB6c7DeEBE21Bb2" # AccountantExecutor FEE_SETTLER_ROLE
-  F_SIGNER_ADDRESS: "0x026C0fA47A4D10cb83bB580DaD884c10986115c0" # OperatorExecutor SIGNER_ROLE
-  F_STRATEGY_MANAGER_ADDRESS: "0x3C8af6063c934dc25F7dB727bBB6c7DeEBE21Bb2" # StrategyController STRATEGY_MANAGER_ROLE
-  F_TREASURY_ADDRESS: "0x3C8af6063c934dc25F7dB727bBB6c7DeEBE21Bb2" # Vault fee share recipient
-  F_PAUSER_ADDRESS: "0x3C8af6063c934dc25F7dB727bBB6c7DeEBE21Bb2" # Vault PAUSER_ROLE
-  F_CAP_MANAGER_ADDRESS: "0x3C8af6063c934dc25F7dB727bBB6c7DeEBE21Bb2" # Vault CAP_MANAGER_ROLE
+  
+  # ── Phase A/B temporary admin ─────────────────────────────────
+  F_ADMIN_ADDRESS: "0x207E804758e28F2b3fD6E4219671B327100b82f8"
+  F_COMPLIANCE_BOT_ADDRESS: "0x34519209dEb4e5B12De0c2E167dd688179ef922e" # SanctionsOracle COMPLIANCE_ROLE
+  F_BOT_ADDRESS: "0x8a12ECf88815E0494d73DbfF16Fa782d1ECf88D1" # AccountantExecutor BOT_ROLE
+  F_FEE_SETTLER_ADDRESS: "0x91beFc7bDaACc68851410bB7F5782751F0EA0E65" # AccountantExecutor FEE_SETTLER_ROLE
+  F_SIGNER_ADDRESS: "0x90046c68F72D36693A39689CDE21Fe451d3A6D2C" # OperatorExecutor SIGNER_ROLE
+  F_TREASURY_ADDRESS: "0x2948f9C120d0DD9264d28790ffF05e80d1259E61" # Vault fee share recipient
+  F_SANCTION_SAFE_ADDRESS: "0x2948f9C120d0DD9264d28790ffF05e80d1259E61" # Gateway sanctionSafe (compliance escrow address)
+  F_PAUSER_ADDRESS: "0x2948f9C120d0DD9264d28790ffF05e80d1259E61" # Vault + StrategyController PAUSER_ROLE
+  F_CAP_MANAGER_ADDRESS: "0x1F34C731D870C7Ba2dE99D3650D7A1C73E7a94C6" # Vault CAP_MANAGER_ROLE
 
-  # -- Factory addresses ────────────────────────────────────────
-  F_ACCOUNTANT_FACTORY: ""
-  F_SANCTIONS_ORACLE_FACTORY: ""
-  F_SANCTIONS_ORACLE: ""
-  F_VAULT_FACTORY: ""
-  EXISTING_VAULT_PROXY: ""
-  F_GATEWAY_FACTORY: ""
-  F_GATEWAY: ""
-  F_ACCOUNTANT: ""
-  F_ACCOUNTANT_EXECUTOR: ""
-  F_OPERATOR_EXECUTOR: ""
-
-  # ── Accountant params ────────────────────────────────────────
-  F_INITIAL_RATE: "1000000000000000000" # 1e18
-  F_MANAGEMENT_FEE_BPS: "50" # 0.5%
-  F_MAX_ALLOWED_DEVIATION_BPS: "100" # 1% circuit-breaker (≤MAX_DEVIATION_CEILING=1000)
-  F_MIN_UPDATE_INTERVAL_SECONDS: "72000" # 20 hours
-  F_MAX_COMPUTE_AGE_SECONDS: "300" # 5 minutes (≤MAX_COMPUTE_AGE_CEILING=86400)
-
-  # ── StrategyController params ────────────────────────────────
-  F_BUFFER_TARGET_BPS: "1" # 0%
-  F_REBALANCE_THRESHOLD_BPS: "10" # 0.1%
-  F_REBALANCE_COOLDOWN: "3600" # 1 hour
-
-  # ── RegisterStrategy params ──────────────────────────────────
-  F_CONTROLLER_ADDRESS: "" # StrategyController proxy
-  F_STRATEGY_ADAPTER_ADDRESS: ""
-  F_TARGET_WEIGHT_BPS: "10000" # 100%
-  F_PRIORITY: "0" # execution priority (lower = higher)
-  F_IS_ASYNC: "true" # true for ERC-7540, false for ERC-4626
-  F_SET_ORDER: "true" # update strategyOrder after registration
-
-  # ── SubRedManagementAdapterFactory (shared across scripts) ───
-  # Used by: DeploySubRedManagementAdapterUpgradeable, DeployInstance (optional Phase 7),
-  #          UpgradeSubRedManagementAdapter, UpgradeAll
-  ADAPTER_FACTORY: "0x23147E582b265138783D4059756E66D6F6498208"
-  F_SUBRED_ADAPTER_FACTORY: "0x23147E582b265138783D4059756E66D6F6498208"
-  ADAPTER_FACTORY_BEACON_OWNER: "0x65Cf61678Cf120a8F40c2F3aEDCb50BBA0e85c78"
-
-  # ── DeploySubRedManagementAdapter params ─────────────────────
-  ADAPTER_VAULT: "0xCAEaf89990190153EA4F24B43022266966A039c8"
-  ADAPTER_SUBRED_MANAGEMENT: "0xee8fd912a7635b76ecd3a8c76912b8f449035e9b"
-  ADAPTER_ST_TOKEN: "0x2633d46912428c8ad02a130ac7d47a31771d9858"
-  ADAPTER_ADMIN: "0x65Cf61678Cf120a8F40c2F3aEDCb50BBA0e85c78"
-  ADAPTER_CONTROLLER: "0x9235E6f6E78ad8FB28996FE027F72d0c91cC6188"
-  ADAPTER_ACCOUNTANT: "0xF637f98e4ee72e5F4a0F466c99556121a851D487"
-  ADAPTER_PRICE_ORACLE: "0xC0D6c66610783a72b4bf88E0d8474cCcD64856F8" # optional, default: address(0)
-  ADAPTER_MANUAL_POS_TOKEN_PRICE: "0" # optional, default: 0; only set non-zero when ADAPTER_PRICE_ORACLE is address(0)
-  # Venue step sizes & minimums (raw units). 0 = "no constraint".
-  # DigiFt stToken has 2-decimal granularity on their side: step = 0.01 stToken = 1e16 raw units
-  ADAPTER_SUBSCRIBE_STEP_ASSET: "10000" # STABLE 6 decimals; 0 = no step alignment
-  ADAPTER_REDEEM_STEP_POS: "1000000000000000000" # 1e16 = 0.01 stToken (DigiFt's 2-decimal granularity)
-  ADAPTER_MIN_SUBSCRIBE_ASSET: "20000000000" # STABLE 6 decimals; update once DigiFt min known
-  ADAPTER_MIN_REDEEM_POS: "1500000000000000000000" # stToken 18 decimals; update once DigiFt min known
-
-  # ── ReplaceStrategyAdapter params ───────────────────────────
-  # Set these just before running `task ReplaceStrategyAdapter`.
-  TARGET_CONTROLLER_ADDRESS: "0x9235E6f6E78ad8FB28996FE027F72d0c91cC6188"
-  REPLACE_OLD_ADAPTER: "0xD0F1b8CfF08AD52eC444fdF72FdCd4d6A302FC31" # adapter to retire (must have 0 in-flight)
-  REPLACE_NEW_ADAPTER: "0x372Bc0a03eD1cF3566d1B6EcA483492d7e72e450" # new adapter (already deployed via DeploySubRedManagementAdapter)
-  REPLACE_SETTLE_MS: "5000" # ms to sleep between steps for Mantle Sepolia RPC state sync (0 = disable)
-  # Optional overrides — leave unset to inherit OLD's config:
-  # REPLACE_WEIGHT_BPS: ""
-  # REPLACE_PRIORITY: ""
-  # REPLACE_IS_ASYNC: ""
+  # ── Protocol params ────────────────────────
   F_STABLE_ADDRESS: "0xcb89f5acc8f21a115192a0649fdf6b5d75880289"
-
-  F_STRATEGY_CONTROLLER_FACTORY: ""
-
-  # ── DeployAll / DeployInstance optional adapter params ────────
-  # These F_ADAPTER_* vars are read by DeployAll (Phase 5) and DeployInstance (Phase 7).
-  # Omit F_ADAPTER_SUBRED_MANAGEMENT to skip adapter deployment entirely.
-  F_ADAPTER_SUBRED_MANAGEMENT: "0xee8fd912a7635b76ecd3a8c76912b8f449035e9b"
-  F_ADAPTER_ST_TOKEN: "0x2633d46912428c8ad02a130ac7d47a31771d9858"
-  F_ADAPTER_PRICE_ORACLE: "0xC0D6c66610783a72b4bf88E0d8474cCcD64856F8"
-  F_ADAPTER_MANUAL_POS_TOKEN_PRICE: "0"
-  F_ADAPTER_SUBSCRIBE_STEP_ASSET: "10000"
-  F_ADAPTER_REDEEM_STEP_POS: "1000000000000000000"
-  F_ADAPTER_MIN_SUBSCRIBE_ASSET: "20000000000"
-  F_ADAPTER_MIN_REDEEM_POS: "1500000000000000000000"
-
-  # ── Vault params ─────────────────────────────────────────────
-  F_MAX_REDEMPTION_FEE_BPS: "500" # 5% cap
-  F_MAX_RATE_CHANGE_BPS: "500" # 5% cap
-  F_REDEMPTION_FEE_BPS: "10" # 0.1%
-  F_MIN_REDEEM_AMOUNT: "20200000000" # 20200 STABLE (6 decimals)
-  F_MIN_DEPOSIT_AMOUNT: "20200000000" # 20200 STABLE (6 decimals)
+  # ── Accountant params ───────────────────────
+  F_INITIAL_RATE: "1000000000000000000" # 1e18 
+  F_MANAGEMENT_FEE_BPS: "0" # 0.5%
+  F_MAX_ALLOWED_DEVIATION_BPS: "100" # 1% circuit-breaker (≤MAX_DEVIATION_CEILING=1000)
+  F_MIN_UPDATE_INTERVAL_SECONDS: "240" # 4 minutes
+  F_MAX_COMPUTE_AGE_SECONDS: "240" # 4 minutes
+  # ── StrategyController params ──────────────────
+  F_BUFFER_TARGET_BPS: "100" # 1% buffer
+  F_REBALANCE_THRESHOLD_BPS: "10" # 0.1% rebalance tolerance
+  F_REBALANCE_COOLDOWN: "500" # 9 minutes cooldown
+  # ── Vault params ──────────────────────────
+  F_MAX_REDEMPTION_FEE_BPS: "0" # Maximum allowed redemption fee rate
+  F_REDEMPTION_FEE_BPS: "0" # 0.1% redemption fee rate
+  F_MIN_REDEEM_AMOUNT: "260000000000" # 1 share (6 decimals)
+  F_MIN_DEPOSIT_AMOUNT: "260000000000" # 1 USDC (6 decimals)
   F_MAX_SETTLEMENT_DEVIATION_BPS: "1000" # 10% absolute cap
-  # Daily caps (initial values). type(uint256).max = unlimited; 0 = blocked. CAP_MANAGER_ROLE 后续可调。
-  F_DEPOSIT_DAILY_REMAINING: "115792089237316195423570985008687907853269984665640564039457584007913129639935" # uint256 max = unlimited (STABLE units)
-  F_REDEEM_DAILY_REMAINING: "115792089237316195423570985008687907853269984665640564039457584007913129639935" # uint256 max = unlimited (share units)
-  F_SYNC_REDEEM_DISABLED: "false"
-  F_WHITELIST_ENABLED: "false" # Gateway whitelist enforcement; admin can flip via setWhitelistEnabled
-
-  # ── Task: DeployEmptyVaultAndAdapterFactories ────────────────
-  DEPLOY_EMPTY_FACTORIES_BEACON_OWNER: "0x65Cf61678Cf120a8F40c2F3aEDCb50BBA0e85c78"
-
-  # ── Task: UpgradeAndInitVaultAndAdapter ──────────────────────
+  F_DEPOSIT_DAILY_REMAINING: "0" # Deposit Daily caps (initial value) USDT
+  F_REDEEM_DAILY_REMAINING: "0" # Redeem Daily caps (initial value) share
+  F_SYNC_REDEEM_DISABLED: "true"
+  F_WHITELIST_ENABLED: "true"
+  
+  
+  # ── Existing Empty deployment ───────────────────
+  DEPLOY_EMPTY_FACTORIES_BEACON_OWNER: "0x207E804758e28F2b3fD6E4219671B327100b82f8"
+  EXISTING_VAULT_PROXY: ""
   UPGRADE_INIT_VAULT_FACTORY: ""
   UPGRADE_INIT_SUBRED_ADAPTER_FACTORY: ""
   UPGRADE_INIT_VAULT_PROXY: ""
   UPGRADE_INIT_ADAPTER_PROXY: ""
-  UPGRADE_INIT_ADMIN: "0x65Cf61678Cf120a8F40c2F3aEDCb50BBA0e85c78"
+  
+  # ── Phase A output: backfill after DeployRemainingForExistingFactories ──
+  F_SANCTIONS_ORACLE_FACTORY: ""
+  F_SANCTIONS_ORACLE: ""
+  F_ACCOUNTANT_FACTORY: ""
+  F_ACCOUNTANT: ""
+  F_ACCOUNTANT_EXECUTOR: ""
+  F_OPERATOR_EXECUTOR: ""
+  F_STRATEGY_CONTROLLER_FACTORY: ""
+  F_CONTROLLER_ADDRESS: ""
+  F_GATEWAY_FACTORY: ""
+  F_GATEWAY: ""
+  
+  # ── Phase B input: UpgradeAndInitVaultAndAdapter ──────────────
+  UPGRADE_INIT_ADMIN: "0x207E804758e28F2b3fD6E4219671B327100b82f8"
   UPGRADE_INIT_STABLE: "0xcb89f5acc8f21a115192a0649fdf6b5d75880289"
   UPGRADE_INIT_GATEWAY: ""
   UPGRADE_INIT_CONTROLLER: ""
   UPGRADE_INIT_ACCOUNTANT: ""
   UPGRADE_INIT_ACCOUNTANT_EXECUTOR: ""
   UPGRADE_INIT_OPERATOR_EXECUTOR: ""
-  UPGRADE_INIT_TREASURY: "0x3C8af6063c934dc25F7dB727bBB6c7DeEBE21Bb2"
-  UPGRADE_INIT_PAUSER: "0x3C8af6063c934dc25F7dB727bBB6c7DeEBE21Bb2"
-  UPGRADE_INIT_CAP_MANAGER: "0x3C8af6063c934dc25F7dB727bBB6c7DeEBE21Bb2"
-  UPGRADE_INIT_VAULT_NAME: "Mantle RWA Vault"
-  UPGRADE_INIT_VAULT_SYMBOL: "mRWA"
-  UPGRADE_INIT_MAX_REDEMPTION_FEE_BPS: "500"
-  UPGRADE_INIT_REDEMPTION_FEE_BPS: "10"
-  UPGRADE_INIT_MIN_REDEEM_AMOUNT: "1000000"
-  UPGRADE_INIT_MIN_DEPOSIT_AMOUNT: "1000000"
+  UPGRADE_INIT_TREASURY: "0x2948f9C120d0DD9264d28790ffF05e80d1259E61" # Copy F_TREASURY_ADDRESS before Phase B
+  UPGRADE_INIT_PAUSER: "0x2948f9C120d0DD9264d28790ffF05e80d1259E61"
+  UPGRADE_INIT_CAP_MANAGER: "0x1F34C731D870C7Ba2dE99D3650D7A1C73E7a94C6" # Copy F_CAP_MANAGER_ADDRESS before Phase B, or specify this role address
+  UPGRADE_INIT_VAULT_NAME: "Mantle DYNA"
+  UPGRADE_INIT_VAULT_SYMBOL: "mDYNA"
+  UPGRADE_INIT_MAX_REDEMPTION_FEE_BPS: "0"
+  UPGRADE_INIT_REDEMPTION_FEE_BPS: "0"
+  UPGRADE_INIT_MIN_REDEEM_AMOUNT: "260000000000"
+  UPGRADE_INIT_MIN_DEPOSIT_AMOUNT: "260000000000"
   UPGRADE_INIT_MAX_SETTLEMENT_DEVIATION_BPS: "1000" # 10% absolute cap
-  # Daily caps (initial values). type(uint256).max = unlimited; 0 = blocked. CAP_MANAGER_ROLE 后续可调。
-  UPGRADE_INIT_DEPOSIT_DAILY_REMAINING: "115792089237316195423570985008687907853269984665640564039457584007913129639935" # uint256 max = unlimited
-  UPGRADE_INIT_REDEEM_DAILY_REMAINING: "115792089237316195423570985008687907853269984665640564039457584007913129639935" # uint256 max = unlimited
-  UPGRADE_INIT_ADAPTER_SUBRED_MANAGEMENT: "0xee8fd912a7635b76ecd3a8c76912b8f449035e9b"
-  UPGRADE_INIT_ADAPTER_ST_TOKEN: "0x2633d46912428c8ad02a130ac7d47a31771d9858"
-  UPGRADE_INIT_ADAPTER_ADMIN: "0x65Cf61678Cf120a8F40c2F3aEDCb50BBA0e85c78"
+  UPGRADE_INIT_DEPOSIT_DAILY_REMAINING: "0" # Deposit Daily caps (initial value) $50k
+  UPGRADE_INIT_REDEEM_DAILY_REMAINING: "0" # Redeem Daily caps (initial value) $50k
+  UPGRADE_INIT_ADAPTER_SUBRED_MANAGEMENT: "0xee8fd912a7635b76ecd3a8c76912b8f449035e9b" # Fill in before Phase B: DigiFt SubRedManagement
+  UPGRADE_INIT_ADAPTER_ST_TOKEN: "0x2633d46912428c8ad02a130ac7d47a31771d9858" # Fill in before Phase B: DigiFt stToken
+  UPGRADE_INIT_ADAPTER_ADMIN: "0x207E804758e28F2b3fD6E4219671B327100b82f8"
   UPGRADE_INIT_ADAPTER_CONTROLLER: ""
   UPGRADE_INIT_ADAPTER_ACCOUNTANT: ""
-  UPGRADE_INIT_ADAPTER_PRICE_ORACLE: "0xC0D6c66610783a72b4bf88E0d8474cCcD64856F8"
-  UPGRADE_INIT_ADAPTER_MANUAL_POS_TOKEN_PRICE: "0"
-  UPGRADE_INIT_ADAPTER_SUBSCRIBE_STEP_ASSET: "10000"
-  UPGRADE_INIT_ADAPTER_REDEEM_STEP_POS: "1000000000000000000"
-  UPGRADE_INIT_ADAPTER_MIN_SUBSCRIBE_ASSET: "20000000000"
-  UPGRADE_INIT_ADAPTER_MIN_REDEEM_POS: "1500000000000000000000"
+  UPGRADE_INIT_ADAPTER_PRICE_ORACLE: "0xC0D6c66610783a72b4bf88E0d8474cCcD64856F8" # Fill in before Phase B: Dyan price oracle
+  UPGRADE_INIT_ADAPTER_MANUAL_POS_TOKEN_PRICE: "0" # 0 = no manual price set; must be 0 when PRICE_ORACLE is non-zero
+  UPGRADE_INIT_ADAPTER_SUBSCRIBE_STEP_ASSET: "10000" # USDC raw units; 10000 = 0.01 USDC subscription step
+  UPGRADE_INIT_ADAPTER_REDEEM_STEP_POS: "1000000000000000000" # redeem step 1e18 = 1 stToken, 1e16 = 0.01 stToken
+  UPGRADE_INIT_ADAPTER_MIN_SUBSCRIBE_ASSET: "12000000000"  # Minimum subscription $12000
+  UPGRADE_INIT_ADAPTER_MIN_REDEEM_POS: "1000000000000000000000" # Minimum redemption 1000 stToken
   UPGRADE_INIT_SETTLE_MS: "5000"
-
-  # ── Task: TransferProtocolOwnership ──────────────────────────
-  TRANSFER_OLD_ADMIN: "0x65Cf61678Cf120a8F40c2F3aEDCb50BBA0e85c78"
-  TRANSFER_NEW_ADMIN: "0x3C8af6063c934dc25F7dB727bBB6c7DeEBE21Bb2"
-  TRANSFER_NEW_BEACON_OWNER: "0x3C8af6063c934dc25F7dB727bBB6c7DeEBE21Bb2"
-  TRANSFER_RENOUNCE_OLD_ADMIN: "false"
+  
+  
+  # ── Phase C: backfill / confirm before RegisterStrategy ─────────────────────
+  F_STRATEGY_ADAPTER_ADDRESS: ""
+  F_TARGET_WEIGHT_BPS: "10000"
+  F_PRIORITY: "0"
+  F_IS_ASYNC: "true"
+  F_SET_ORDER: "true"
+  
+  # ── Phase C: TransferProtocolOwnership, execute after all checks complete ─────
+  TRANSFER_OLD_ADMIN: "0x207E804758e28F2b3fD6E4219671B327100b82f8"
+  TRANSFER_NEW_ADMIN: "0xa48f3f5a97d1162EA2f1bDCffFa7f2a8876e0e2E" # Final SecurityCouncil Safe / timelock
+  TRANSFER_NEW_BEACON_OWNER: "0xa48f3f5a97d1162EA2f1bDCffFa7f2a8876e0e2E" # Final SecurityCouncil Safe / timelock
+  TRANSFER_ACCEPT_DEFAULT_ADMIN: "false" # false on first run; set to true only after new admin/owner is verified
+  TRANSFER_RENOUNCE_OLD_ADMIN: "false" # false on first run; set to true only after authorization/owner verification

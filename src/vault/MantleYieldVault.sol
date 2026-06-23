@@ -121,9 +121,8 @@ contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultA
         if (shares > maxShares) {
             revert ERC4626ExceededMaxRedeem(owner, shares, maxShares);
         }
-        if (redeemDailyRemaining < shares) {
-            revert Vault__RedeemDailyCapExceeded(shares, redeemDailyRemaining);
-        }
+        // maxRedeem already caps the return value to min(cashLimited, redeemDailyRemaining),
+        // so `shares <= maxShares <= redeemDailyRemaining` is guaranteed at this point.
         redeemDailyRemaining -= shares;
         uint256 treasuryShare = shares.mulDiv(redemptionFeeBps, FEE_BASIS, Math.Rounding.Ceil);
         uint256 netShares = shares - treasuryShare;
@@ -147,9 +146,7 @@ contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultA
     }
 
     function previewWithdraw(uint256 assets) public view override(ERC4626Upgradeable, IERC4626) returns (uint256) {
-        if (redemptionFeeBps >= FEE_BASIS) return type(uint256).max;
-        uint256 grossAssets = assets.mulDiv(FEE_BASIS, FEE_BASIS - redemptionFeeBps, Math.Rounding.Ceil);
-        return _convertToShares(grossAssets, Math.Rounding.Ceil);
+        revert Vault__NotAuthorized();
     }
 
     function maxDeposit(address) public view override(ERC4626Upgradeable, IERC4626) returns (uint256) {
@@ -158,11 +155,9 @@ contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultA
         return depositDailyRemaining;
     }
 
-    function maxMint(address owner) public view override(ERC4626Upgradeable, IERC4626) returns (uint256) {
-        uint256 maxAssets = maxDeposit(owner);
-        if (maxAssets >= type(uint256).max) return type(uint256).max;
-        if (maxAssets == 0) return 0;
-        return _convertToShares(maxAssets, Math.Rounding.Floor);
+    /// @notice ERC-4626 maxMint is permanently 0 because `mint` is disabled (gateway-only `deposit`).
+    function maxMint(address) public pure override(ERC4626Upgradeable, IERC4626) returns (uint256) {
+        return 0;
     }
 
     function maxRedeem(address owner) public view override(ERC4626Upgradeable, IERC4626) returns (uint256) {
@@ -188,16 +183,9 @@ contract MantleYieldVault is MantleYieldVaultControllerModule, MantleYieldVaultA
         return result;
     }
 
-    function maxWithdraw(address owner) public view override(ERC4626Upgradeable, IERC4626) returns (uint256) {
-        if (paused()) return 0;
-        uint256 redeemable = previewRedeem(balanceOf(owner));
-        uint256 freeCash = getFreeCash();
-        uint256 ceiling = redeemable < freeCash ? redeemable : freeCash;
-        if (redeemDailyRemaining < type(uint256).max) {
-            uint256 capAssets = previewRedeem(redeemDailyRemaining);
-            if (capAssets < ceiling) ceiling = capAssets;
-        }
-        return ceiling;
+    /// @notice ERC-4626 maxWithdraw is permanently 0 because `withdraw` is disabled (use `redeem`/`requestRedeem` via gateway).
+    function maxWithdraw(address) public pure override(ERC4626Upgradeable, IERC4626) returns (uint256) {
+        return 0;
     }
 
     // =============================================================

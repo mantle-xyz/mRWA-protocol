@@ -25,7 +25,7 @@ import {Script, console2} from "forge-std/Script.sol";
 ///   F_CONTROLLER_ADDRESS      – StrategyController proxy address
 ///   F_ACCOUNTANT_ADDRESS      – Accountant proxy address
 ///   F_TREASURY_ADDRESS        – treasury address for fee shares
-///                              (also used as gateway.sanctionSafe init)
+///   F_SANCTION_SAFE_ADDRESS   – gateway sanctionSafe init param (compliance escrow address)
 ///   F_PAUSER_ADDRESS          – address to receive PAUSER_ROLE
 ///   F_CAP_MANAGER_ADDRESS     – address to receive CAP_MANAGER_ROLE
 ///   F_MAX_REDEMPTION_FEE_BPS  – max redemption fee cap in bps
@@ -43,6 +43,7 @@ contract DeployVault is Script {
         address pauser = vm.envAddress("F_PAUSER_ADDRESS");
         address capManager = vm.envAddress("F_CAP_MANAGER_ADDRESS");
         address treasury = vm.envAddress("F_TREASURY_ADDRESS");
+        address sanctionSafe = vm.envAddress("F_SANCTION_SAFE_ADDRESS");
         address sanctionsOracle = vm.envAddress("F_SANCTIONS_ORACLE");
 
         IMantleYieldVault.InitParams memory params = IMantleYieldVault.InitParams({
@@ -70,6 +71,7 @@ contract DeployVault is Script {
         console2.log("Controller         :", params.controller);
         console2.log("Accountant         :", params.accountant);
         console2.log("Treasury           :", params.treasury);
+        console2.log("SanctionSafe       :", sanctionSafe);
         console2.log("Pauser             :", pauser);
         console2.log("CapManager         :", capManager);
         console2.log("MaxRedemptionFee   :", params.maxRedemptionFeeBps);
@@ -106,14 +108,12 @@ contract DeployVault is Script {
             IMantleVaultGateway.InitParams({
                 vault: vaultAddr,
                 sanctionsOracle: ISanctionsOracle(sanctionsOracle),
-                sanctionSafe: treasury,
+                sanctionSafe: sanctionSafe,
                 admin: admin,
-                syncRedeemDisabled: vm.envBool("F_SYNC_REDEEM_DISABLED")
+                syncRedeemDisabled: vm.envBool("F_SYNC_REDEEM_DISABLED"),
+                whitelistEnabled: vm.envOr("F_WHITELIST_ENABLED", false)
             })
         );
-        if (vm.envOr("F_WHITELIST_ENABLED", false)) {
-            gateway.setWhitelistEnabled(true);
-        }
         console2.log("[4/5] Vault Gateway      :", params.gateway);
         console2.log("       Whitelist enabled :", gateway.whitelistEnabled());
 

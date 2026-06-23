@@ -49,6 +49,8 @@ contract MantleVaultGateway is
         sanctionsOracle = params.sanctionsOracle;
         sanctionSafe = params.sanctionSafe;
         syncRedeemDisabled = params.syncRedeemDisabled;
+        whitelistEnabled = params.whitelistEnabled;
+        if (params.whitelistEnabled) emit WhitelistEnabledUpdated(true);
     }
 
     function deposit(uint256 assets) external nonReentrant returns (uint256 shares) {
@@ -112,6 +114,7 @@ contract MantleVaultGateway is
     }
 
     function isWhitelisted(address account) public view override returns (bool) {
+        if (!whitelistEnabled) return true;
         return sanctionsOracle.isWhitelisted(account);
     }
 
@@ -121,6 +124,11 @@ contract MantleVaultGateway is
         _requireNotSanctioned(to);
     }
 
+    /// @notice Resolve the redemption payout receiver for a given owner.
+    /// @dev The returned `sanctioned` flag signals "the payout was rerouted for compliance reasons":
+    ///      `true` whenever the owner is sanctioned OR (whitelist is enabled AND the owner is no longer whitelisted).
+    ///      In both cases the receiver is `sanctionSafe` so the payout does not reach a non-compliant address,
+    ///      while the batch can still finalize without reverting (the vault emits `SanctionSafeIn` on this branch).
     function resolveRedemptionReceiver(address owner)
         external
         view
@@ -128,11 +136,18 @@ contract MantleVaultGateway is
         returns (address receiver, bool sanctioned)
     {
         _onlyVault();
-        sanctioned = isSanctioned(owner);
-        receiver = sanctioned ? sanctionSafe : owner;
+        bool sanctionedFlag = isSanctioned(owner);
+        bool deWhitelisted = whitelistEnabled && !sanctionsOracle.isWhitelisted(owner);
+        if (sanctionedFlag || deWhitelisted) {
+            sanctioned = true;
+            receiver = sanctionSafe;
+        } else {
+            receiver = owner;
+        }
     }
 
     function maxRedeem(address owner) external view override returns (uint256) {
+        if (syncRedeemDisabled) return 0;
         if (_isSubscribeRedeemPaused() || isSanctioned(owner)) return 0;
         if (whitelistEnabled && !isWhitelisted(owner)) return 0;
         return vault.maxRedeem(owner);
