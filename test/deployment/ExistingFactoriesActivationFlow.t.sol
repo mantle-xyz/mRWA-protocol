@@ -77,7 +77,8 @@ contract ExistingFactoriesActivationFlowTest is Test {
                 sanctionsOracle: ISanctionsOracle(oracle),
                 sanctionSafe: treasury,
                 admin: admin,
-                syncRedeemDisabled: false
+                syncRedeemDisabled: false,
+                whitelistEnabled: false
             })
         );
 
