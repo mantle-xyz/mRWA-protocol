@@ -500,15 +500,9 @@ contract SyncRedeemTest is VaultTestBase {
         assertEq(vault.balanceOf(alice), INITIAL_DEPOSIT - shares);
     }
 
-    function test_previewWithdrawCanBeSatisfiedViaRedeem() public {
-        uint256 wantAssets = 99e6;
-        uint256 neededShares = vault.previewWithdraw(wantAssets);
-
-        vm.prank(alice);
-        uint256 assetsOut = gateway.redeem(neededShares);
-
-        assertGe(assetsOut, wantAssets);
-        assertEq(vault.balanceOf(alice), INITIAL_DEPOSIT - neededShares);
+    function test_previewWithdraw_revertsNotAuthorized() public {
+        vm.expectRevert(IMantleYieldVault.Vault__NotAuthorized.selector);
+        vault.previewWithdraw(99e6);
     }
 
     function test_redeemRevertsZeroShares() public {
@@ -1538,14 +1532,31 @@ contract MaxRedeemWithdrawTest is VaultTestBase {
         assertLe(vault.previewRedeem(maxR), vault.getFreeCash());
     }
 
-    function test_maxWithdrawLimitedByFreeCash() public {
-        uint256 half = INITIAL_DEPOSIT / 2;
+    /// @dev ERC-4626 invariant: maxWithdraw must return 0 because withdraw() is permanently disabled.
+    function test_maxWithdrawAlwaysZero() public {
+        // baseline (positive balance, free cash, unpaused)
+        assertEq(vault.maxWithdraw(alice), 0);
 
+        // even after partial redeem request (reduces free cash) — still 0
         vm.prank(alice);
-        gateway.requestRedeem(half);
+        gateway.requestRedeem(INITIAL_DEPOSIT / 2);
+        assertEq(vault.maxWithdraw(alice), 0);
 
-        uint256 maxW = vault.maxWithdraw(alice);
-        assertLe(maxW, vault.getFreeCash());
+        // and when paused
+        vm.prank(pauser);
+        vault.pause();
+        assertEq(vault.maxWithdraw(alice), 0);
+    }
+
+    /// @dev ERC-4626 invariant: maxMint must return 0 because mint() is permanently disabled.
+    function test_maxMintAlwaysZero() public {
+        assertEq(vault.maxMint(alice), 0);
+        assertEq(vault.maxMint(bob), 0);
+
+        // and when paused
+        vm.prank(pauser);
+        vault.pause();
+        assertEq(vault.maxMint(alice), 0);
     }
 }
 
@@ -1985,10 +1996,14 @@ contract SyncRedeemDisabledTest is VaultTestBase {
     }
 
     function test_maxWithdrawNotAffectedWhenSyncDisabled() public {
+        // maxWithdraw is permanently 0 (withdraw-by-assets path disabled);
+        // flipping syncRedeemDisabled must not change that invariant.
+        assertEq(vault.maxWithdraw(alice), 0);
+
         vm.prank(admin);
         gateway.setSyncRedeemDisabled(true);
 
-        assertGt(vault.maxWithdraw(alice), 0);
+        assertEq(vault.maxWithdraw(alice), 0);
     }
 
     function test_requestRedeemStillWorksWhenSyncDisabled() public {
@@ -2215,13 +2230,9 @@ contract DailyCapTest is VaultTestBase {
         assertEq(vault.maxDeposit(bob), 1_200e6);
     }
 
-    function test_maxMint_reflectsCap() public {
-        vm.prank(capManager);
-        vault.setDepositDailyRemaining(2_000e6);
-
-        uint256 expectedShares = vault.previewDeposit(2_000e6);
-        assertEq(vault.maxMint(bob), expectedShares);
-    }
+    // Note: vault.maxMint always returns 0 because mint() is disabled (ERC-4626 compliance);
+    // see test_maxMintAlwaysZero for the invariant. Daily-cap behavior is covered by
+    // test_maxDeposit_reflectsCap.
 
     // ---------------------------------------------------------
     // Redeem cap: single user sync redeem
@@ -2367,15 +2378,9 @@ contract DailyCapTest is VaultTestBase {
         assertEq(vault.maxRedeem(alice), 0);
     }
 
-    function test_maxWithdraw_reflectsCap() public {
-        vm.prank(capManager);
-        vault.setRedeemDailyRemaining(300e6);
-
-        uint256 maxW = vault.maxWithdraw(alice);
-        uint256 capAssets = vault.previewRedeem(300e6);
-        // maxWithdraw should not exceed capAssets
-        assertLe(maxW, capAssets);
-    }
+    // Note: vault.maxWithdraw always returns 0 because withdraw() is disabled (ERC-4626 compliance);
+    // see test_maxWithdrawAlwaysZero for the invariant. Daily-cap behavior is covered by
+    // test_maxRedeem_reflectsCap.
 
     // ---------------------------------------------------------
     // Cap reset by capManager (simulates off-chain service)
